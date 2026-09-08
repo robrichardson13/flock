@@ -1,0 +1,74 @@
+/*
+ * The phone's composer: a pill in the chin, and a sheet to write in.
+ *
+ * An inline field pinned to the bottom of the shell works, but the shell is sized to the
+ * visual viewport, so focusing it takes the whole chin — composer and tab bar together —
+ * up with the keyboard, and the pane above it resizes underneath. Tapping a pill to open
+ * the app's own sheet keeps the screen behind exactly where it was: the sheet is the only
+ * thing that rides the keyboard.
+ *
+ * Desktop (>=900px) is untouched by this file: it keeps the inline composers.
+ */
+
+/* ---------- the pill ---------- */
+
+.compose-pill {
+  display: flex; align-items: center; gap: var(--s2); width: 100%;
+  min-height: var(--tap); padding: 0 var(--s2) 0 var(--s3);
+  border: 1px solid var(--line); border-radius: var(--r-full);
+  background: var(--bg); color: var(--muted);
+  font-size: var(--t-body); text-align: left; cursor: pointer;
+}
+.compose-pill-icon, .compose-pill-send { display: inline-flex; flex: none; color: var(--muted); }
+/* The send glyph is the shape of the affordance, not a control: there is nothing to send
+   until the sheet is open, so it stays at the weight of a disabled button. */
+.compose-pill-send { opacity: 0.45; padding: 0 var(--s2); }
+.compose-pill-send.tone-warn { color: var(--ink-mode-ask); }
+.compose-pill-send.tone-ok { color: var(--ink-mode-resolve); }
+.compose-pill-text {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* A draft shows through the pill in the text colour, so a half-written message is visibly
+   still there rather than hidden behind its own placeholder. */
+.compose-pill-text.has-draft { color: var(--text); }
+.compose-pill:active { transform: scale(0.98); }
+
+/* The card page's chin is the pill and nothing else: the mode row moved into the sheet,
+   where the choice is made in the same breath as the writing. */
+.composer-pill-chin { gap: 0; }
+
+/* ---------- the sheet ---------- */
+
+.sheet-compose .sheet-body { gap: var(--s2); }
+.compose-area {
+  resize: none; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  width: 100%; line-height: 24px; padding: var(--s2) var(--s3);
+  /* Six lines and two rows of padding; past that it scrolls. Mirrored by AREA_MAX_PX in
+     Compose.tsx, which sets the height as the content grows. */
+  max-height: 160px; min-height: 40px;
+  border-radius: var(--r-md);
+}
+.compose-actions { display: flex; align-items: center; gap: var(--s2); }
+.compose-actions .grow { flex: 1; }
+.compose-actions .btn.tone-warn { background: var(--attn-fill); color: var(--on-attn-fill); border-color: var(--attn-fill); }
+/* Staged images sit above the text in the sheet, exactly the chips the inline composer had. */
+.sheet-compose .attach-strip { margin-bottom: 0; }
+.sheet-compose .composer-notice { margin-bottom: 0; }
+/* The sheet drags down to dismiss; without this the drag scrolls the pane behind it. */
+.sheet-compose { touch-action: none; }
+.sheet-compose .compose-area, .sheet-compose .mode-row, .sheet-compose .attach-strip { touch-action: auto; }
+
+/* ---------- the shell holds still ---------- */
+
+/* While a compose sheet is open the shell stops following the visual viewport and sizes to
+   the layout viewport, which the keyboard does not shrink. The chin goes behind the
+   keyboard rather than being pushed up by it, and nothing in the pane moves or reflows —
+   which is also what keeps the channel's bottom-pin where it was. */
+@media (max-width: 899px) {
+  html[data-composing] .app { height: var(--lvh, 100dvh); }
+  /* #34: --below-shell is deliberately *not* zeroed here any more. Only the sheet and the
+     image viewer read it, and both sit on the visual viewport's bottom edge: while a keyboard
+     is up that edge is the keyboard's top, with no home indicator under it. Zeroing it made
+     the compose sheet pad 34px for an indicator the keyboard was covering, which the new
+     card and new board sheets never did. */
+}

@@ -1,0 +1,82 @@
+/*
+ * Brand: the mark, the wordmark, and the header lockups they sit in.
+ *
+ * Kept out of styles.css deliberately. The colour tokens are one card's job and the
+ * brand is another's; this file only consumes tokens, it never defines them.
+ */
+
+.mark {
+  flex: none;
+  display: block;
+  /* Every mark is drawn in currentColor, so nothing here sets a colour: the mark takes
+     the ink of the bar, the button, or the tile it is placed in. */
+  color: inherit;
+}
+
+/*
+ * SF Rounded on Apple hardware, and a graceful fall to the system face everywhere else.
+ * Rounded is the point: it is the one typographic move that separates the product's own
+ * voice from the SF the rest of the interface is set in.
+ */
+.wordmark {
+  font-family: ui-rounded, -apple-system, system-ui, sans-serif;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+/* Mark and wordmark locked up. The optical gap is tighter than a space would be. */
+.brand-lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* The lockup replaces a plain text node, so it inherits the size the bar set for it and
+   only trims the leading the flex row would otherwise inherit. */
+.brand-lockup .wordmark { font-size: inherit; }
+
+/*
+ * Board screens: the mark alone is the way back to Home, with the chevron in front of it
+ * exactly where iOS puts one. It keeps the icon button's role, height and label; only the
+ * glyph inside it changed.
+ */
+.icon-btn.brand-back {
+  /* Chevron plus a 28px mark is wider than the 44px square an icon button reserves, so the
+     target grows sideways rather than cropping — the height, and so the tap area, is
+     untouched. */
+  width: auto;
+  min-width: var(--tap);
+  padding: 0 4px 0 2px;
+  gap: 1px;
+  color: var(--accent);
+}
+
+/*
+ * Stacked avatars.
+ *
+ * In a stack the avatars overlap by design, and at that overlap two sets of initials
+ * collide into an unreadable smudge — the letters of the one behind poke out from under
+ * the one in front. Inside a stack an avatar is therefore reduced to what still reads at
+ * that size: its colour, its shape (circle for an agent, rounded square for a person),
+ * and its working dot. The ring separating one from the next is the surface they sit on,
+ * so they stay distinct against any background. A standalone avatar keeps its initials —
+ * nothing overlaps it, and there the letters are the whole point.
+ *
+ * The "+N" overflow chip is the exception: it is a count, not a face, and its number is
+ * the only thing it has.
+ */
+.team-stack .avatar:not(.avatar-overflow),
+.board-avatars .avatar:not(.avatar-overflow) {
+  color: transparent;
+}
+/* The ring is the surface each stack sits on: the board list's rows are cards on --bg-2,
+   the board's large-title row is the screen's own --bg. */
+.team-stack .avatar:not(.avatar-overflow) { box-shadow: 0 0 0 2px var(--bg); }
+.board-avatars .avatar:not(.avatar-overflow) { box-shadow: 0 0 0 2px var(--bg-2); }
+/* Humans keep their inner ring, which the shadows above would otherwise replace. */
+.team-stack .avatar.human:not(.avatar-overflow) {
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.6), 0 0 0 2px var(--bg);
+}
+.board-avatars .avatar.human:not(.avatar-overflow) {
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.6), 0 0 0 2px var(--bg-2);
+}

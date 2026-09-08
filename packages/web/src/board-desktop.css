@@ -1,0 +1,501 @@
+/* ============================================================
+   Desktop-only overrides that pair with BoardView.tsx / CardPage.tsx / ui.tsx changes
+   (critique group B). Imported after styles.css in main.tsx, so it wins the cascade on
+   equal specificity. Every rule here lives inside a min-width media query at 900px or
+   narrower, so mobile is untouched by construction.
+   ============================================================ */
+
+@media (min-width: 900px) {
+  /* The one anchored popover the desktop uses for pick-one menus (ui.tsx's `Menu`): the
+     board's "⋯" and the boards switcher are both this, and phase 2's Move-to / Labels /
+     Blocked-by lists are meant to be too. No backdrop; it closes on an outside click or
+     Escape. */
+  .menu-wrap { position: relative; flex: none; }
+  .menu {
+    position: absolute;
+    top: calc(100% + var(--s1));
+    z-index: 20;
+    min-width: 190px;
+    padding: var(--s1);
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    box-shadow: var(--shadow);
+  }
+  .menu-right { right: 0; }
+  .menu-left { left: 0; }
+  .menu-item {
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    width: 100%;
+    padding: var(--s2) var(--s2);
+    background: none;
+    border: none;
+    border-radius: var(--r-sm);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--t-sub);
+    text-align: left;
+    cursor: pointer;
+  }
+  /* #17 B8: was outside the shared transition layer, so every row highlight flicked on and
+     off rather than easing like every other hover in the app. `.menu-item` is desktop-only
+     (the Menu/AnchoredMenu popover never mounts on the phone), so this needs no width guard
+     of its own beyond the block it already lives in. */
+  @media (prefers-reduced-motion: no-preference) {
+    .menu-item { transition: background-color var(--d-fast) var(--ease-out); }
+  }
+  /* #3: the recipe's two surfaces. `.menu-item` was a plain `:hover`, not gated behind
+     `@media (hover: hover)`, so a touch device that opens this popover (an iPad wide enough
+     to draw the desktop menu) got a hover that stuck after the tap; `:active` carries the
+     press there instead, same as every other surface in the app. */
+  @media (hover: hover) {
+    .menu-item:hover { background: var(--surface-hover); }
+    .menu-item:disabled:hover { background: none; }
+  }
+  .menu-item:active:not(:disabled) { background: var(--surface-press); }
+  .menu-item.tone-danger { color: var(--danger); }
+  .menu-item-label { flex: 1; min-width: 0; }
+  /* Move-to draws the status the card is already on, disabled, so the list is the whole set
+     of states and not a hole where one of them should be. */
+  .menu-item:disabled { color: var(--muted-2); cursor: default; }
+  /* #22/C6/F8: one glyph size (16, set at every call site) in one fixed 16px square slot.
+     Mixed 14/15px icons drifted the optical left edge of every menu — the external-link
+     arrow visibly smaller than the person glyph beside it — so this pins the box CSS sets
+     the size on, not just what each call site happens to pass. */
+  .menu-item svg { width: 16px; height: 16px; color: var(--muted); flex: none; }
+  .menu-item.tone-danger svg { color: inherit; }
+  .menu-divider { height: 1px; margin: var(--s1) 0; background: var(--line); }
+  /* The keyboard legend at the foot of the board menu (#17 B4). Not an item: it is not a
+     stop, it does not highlight, and nothing happens when it is clicked. */
+  .menu-hint {
+    padding: var(--s1) var(--s2) var(--s1);
+    color: var(--muted);
+    font-size: var(--t-cap);
+    white-space: nowrap;
+  }
+  /* The switcher holds the whole boards list, so it is wider than a verb menu and scrolls
+     rather than growing past the viewport. */
+  /* A fixed width, not a min: the items hold whole board titles on one nowrap line and an
+     auto-sized popover would stretch to the longest of them. */
+  .menu-boards { width: 320px; max-height: 60vh; overflow: auto; overscroll-behavior: contain; }
+  /* A Details row's own popover (#23): the row is the trigger, so the menu hangs off the
+     row's trailing edge rather than the drawer's, and it is at least as wide as the labels
+     and card titles it lists. It lives inside `.screen-body`, which scrolls; the cap is what
+     keeps a card with a dozen blockers from making the popover the thing that scrolls the
+     page. */
+  .menu-detail { min-width: 240px; max-width: 340px; max-height: 320px; overflow: auto; overscroll-behavior: contain; }
+  /* The drawer's "⋯" holds one long verb ("Edit title and description"); at the 190px floor
+     it broke over two lines, which reads as two items. */
+  .menu-card { min-width: 240px; }
+  /* The wrapper is only there to be the popover's anchor, so it must not become a row of
+     its own: it draws nothing, and the hairline rule the last row drops still has to find
+     it through the wrap. */
+  .card-details > .menu-wrap { display: block; }
+  .card-details > .menu-wrap:last-child .detail-row { border-bottom: none; }
+
+  /* Popovers arrive (#17's motion spec, B5): --d-fast, --ease-out, a 4px drop and the last
+     4% of scale, growing out of the edge the trigger is on. No backdrop, so this is the only
+     thing that says one opened. It leaves the same way, reversed, over the `D_FAST`
+     `AnchoredMenu` (ui.tsx) now holds it mounted for via its `.closing` class — an exit
+     accelerates away rather than settling, hence `--ease-in`. */
+  .menu { animation: popover-in var(--d-fast) var(--ease-out); transform-origin: top right; }
+  .menu-left { transform-origin: top left; }
+  .menu.closing { animation: popover-out var(--d-fast) var(--ease-in) forwards; pointer-events: none; }
+  @keyframes popover-in {
+    from { opacity: 0; transform: translateY(-4px) scale(0.96); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes popover-out {
+    from { opacity: 1; transform: none; }
+    to { opacity: 0; transform: translateY(-4px) scale(0.96); }
+  }
+  /* Reduced motion (#17 B10): the popover cross-fades rather than popping, same as the
+     drawer and the dialog — never the scale, never the 4px drop. `fade-in`/`fade-out` are
+     styles.css's own keyframes (global, not file-scoped), so this restates no curve of its
+     own. */
+  @media (prefers-reduced-motion: reduce) {
+    .menu { animation: fade-in var(--d-fast) linear !important; }
+    .menu.closing { animation: fade-out var(--d-fast) linear !important; }
+  }
+  /* The trigger shows its own open state (#17 B5): the same tint an icon button wears
+     under a hovering pointer, held for as long as the menu it opened is up. */
+  .icon-btn.is-open { background: var(--surface-hover); }
+
+  /* F2/#12: the repo path rides the same line as the brief's own disclosure rather than
+     taking a line of its own under it. Two stacked quiet lines between the board title and
+     the column heads read as two facts competing; one line reads as the board's address.
+     #22/C4/F11: it used to ride the row's trailing edge (`margin-left: auto`), which — because
+     the preview beside it also grew to fill the row — put 900-940px of nothing between "Brief"
+     and the path at 1440-1920, reading as two unrelated facts rather than one address line.
+     It now sits directly after the preview with a middot, the way the tile's caption line
+     joins its own facts with "·". */
+  .brief-path {
+    flex: 0 1 auto; min-width: 0;
+    font-size: var(--t-cap); color: var(--muted-2);
+  }
+  .brief-path::before { content: "\00B7"; margin-right: var(--s2); }
+
+  /* B3: the brief is a single disclosure row by default (BoardView.tsx's Brief no
+     longer renders a floating corner label or a masked clamp). */
+  .brief-block { padding-top: 0; }
+  .brief-disclosure-block { display: flex; flex-direction: column; gap: var(--s2); }
+  /* #7/4: this one never got the recipe at all — it was in the reduced-motion selector list,
+     which is why it looked done. `padding: 0` and `width: 100%` meant the fill hugged the
+     text top and bottom with nothing to spare and then ran the whole 924px of the column
+     while the line itself was 375px: a bare grey rectangle, square-cornered, the width of the
+     board. It takes the recipe now — --hover-y/--hover-x of padding against a matching
+     negative margin, so the label, the preview, the path and the chevron are all exactly
+     where they were at rest — and it stops stretching: every child is left-packed with no
+     auto margin, so `align-self: flex-start` shrinks the box to the line it holds without
+     moving a single glyph of it. */
+  .brief-disclosure {
+    /* #7/12: at the recipe's default 4px the fill was still a thin band hugging one 20px
+       line of text — narrower than before, but no taller. A single-line control wants the
+       same 44px the app's other bare-text disclosure wears, so the vertical outset is raised
+       on the surface itself, exactly the way the boards row raises the horizontal one. */
+    --hover-y: var(--s3);
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    align-self: flex-start;
+    max-width: calc(100% + 2 * var(--hover-x));
+    background: none;
+    border: none;
+    border-radius: var(--hover-radius);
+    margin: calc(-1 * var(--hover-y)) calc(-1 * var(--hover-x));
+    padding: var(--hover-y) var(--hover-x);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+  /* Touch has no hover, so the press is the only feedback the row can give (the recipe). */
+  .brief-disclosure:active { background: var(--surface-press); }
+  /* #17 B8: the row's own tint (added alongside its :hover, above the label rule below)
+     eases like every other hover in the app instead of snapping. */
+  @media (prefers-reduced-motion: no-preference) {
+    .brief-disclosure { transition: background-color var(--d-fast) var(--ease-out); }
+  }
+  /* The same style a column head wears (#12). "Brief" and "Done" are the same rank of thing —
+     a quiet word naming the group under it — and drawing them one point apart said they were
+     different without saying how. */
+  .brief-disclosure-label {
+    flex: none;
+    font-size: var(--head-size);
+    font-weight: var(--w-head);
+    letter-spacing: 0;
+    text-transform: capitalize;
+    color: var(--muted);
+  }
+  /* flex: 0 1 auto, not 1 — the old `flex: 1` stretched to the row's full width even though
+     the preview is a short phrase, which is what pushed `.brief-path` (F11) to the far
+     trailing edge in the first place. It still shrinks and ellipsises if the row is tight. */
+  .brief-disclosure-preview { flex: 0 1 auto; min-width: 0; color: var(--muted); font-size: var(--t-foot); }
+  .brief-chevron { flex: none; display: flex; color: var(--muted); transform: rotate(90deg); transition: transform var(--d-fast) var(--ease-out); }
+  .brief-chevron-open { transform: rotate(-90deg); }
+  .brief-disclosure-block .brief-open { margin-top: 0; }
+
+  /* B4's fixed 0.8fr/1.4fr/0.8fr/1fr weighting and the 1150-1499 order reweighting both
+     assumed a fixed four-column grid-template-columns. P1.2 replaced that with
+     grid-auto-columns (styles.css's .kanban): columns now come and go with what has cards,
+     so there is no fixed set of tracks left to weight or reorder, and every visible column
+     gets an equal flexible share (floor 320px) of whatever width is left. */
+
+  /* B6's 560px drawer and its lighter scrim are now `--panel-w` and `--scrim` in styles.css,
+     declared once and worn by the actor panel too (#23). This file overrode a width the
+     other file had already declared as 680, so the drawer's size was decided by which
+     stylesheet loaded second; it is a decision now. */
+
+  /* B5: the primary actions move out of the reading flow and into their own bar,
+     pinned directly above the composer instead of sitting mid-page. */
+  .card-actions-bar {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s2);
+    padding: var(--s3) var(--s5) 0;
+    border-top: 1px solid var(--line);
+  }
+  .card-actions-bar .primary-actions { margin: 0; }
+
+  /* ---------- shell chrome (card 6, rebuilt in P1.3) ----------
+     The bar itself is in styles.css with the rest of the shell; what is left here is the
+     identity button it inherited from the sidebar's footer. */
+  .me-btn-inline { width: auto; padding: var(--s1) var(--s2); border-radius: var(--r-sm); max-width: 200px; }
+  .home-db { max-width: 260px; }
+  .home .inbox { max-width: 760px; }
+  .h2-count { font-weight: var(--w-sub); }
+
+  /* ---------- boards index rows (cards 6, 15) ----------
+     The row is the kanban tile (#12) laid out sideways: the title on its own line, then one
+     quiet caption line, and nothing else. It used to be a five-track status table — name ·
+     pill · progress · now · who — with six stacked lines of text in a 60px row, and it said
+     one board's state five times over: the Active/Idle head, the pill, the bar, the legend
+     under the bar and the phrase in the `now` column. Two ranks replace six.
+
+     What survives, and where: the state is in the caption's own words (`2 doing · 5 open`,
+     `34 done`) and in the Active/Idle head above it; "needs you" keeps a real pill, being
+     the one state you must act on; the bar is the switcher's own 3px drawing and only an
+     active board draws it, which is exactly PhoneRow's rule; the last event is its age at
+     rest and its whole sentence on hover, in the repo tail's place; and who is here rides
+     the title's trailing edge, at the measure's right edge, where PhoneRow puts it too.
+
+     PhoneRow never carries `.board-row-desk`, so the phone list is untouched by all of this. */
+  /* #2, the hover recipe (defined and explained at the top of styles.css). The fill the
+     pointer draws holds the title and its caption with 16px of air beside them and 12px above
+     and below, rounded, and it stops 16px short of the page gutter instead of running into it.
+
+     #7/1: horizontally that is the recipe's own margin/padding outset — nothing sits beside a
+     row, so the box may grow sideways freely. Vertically it is the recipe's *paint layer*
+     instead, and it has to be: the rows are a flex column, so a -4px top and a -4px bottom
+     margin do not collapse into one another the way block siblings would. They stack, and
+     every pair of rows overlapped by 8px — `elementFromPoint` inside row 0's own painted band
+     returned row 1, so pointing at a row's bottom breathing room lit the next board's surface
+     and clicking there opened the wrong board. Padding the row at rest instead is the other
+     half of the same trap: 12px of resting padding on both rows puts 24px between a caption
+     and the title under it, and the resting 16px rhythm is approved and may not change.
+
+     So the row's *box* keeps the resting 8px padding and no vertical margin at all — boxes
+     abut at exactly 0 and each row owns precisely its own band — and the surface is painted by
+     `::before`, outset 4px above and below in paint only. Same pixels as before, no hit area
+     borrowed from anybody. Only one row is hovered at a time, so the two bands never draw at
+     once. The horizontal outset stays on the box, so max-width is still a border-box number
+     and still gains 2 * --hover-x.
+
+     The vertical outset cannot grow past --s1 here whatever the row itself would like:
+     `--head-gap` is 0, so the "Active" heading's own line box ends exactly where the first
+     row's band starts, and 4px is all the leading there is to spend before the surface is
+     drawn over the heading's text. */
+  .board-row-desk {
+    --hover-x: var(--s4);
+    display: block;
+    position: relative;
+    margin: 0 calc(-1 * var(--hover-x));
+    /* A measure, not the whole shell. Left to grow, a board title ran to 1319px at 1920, and
+       a column of ragged 1300px lines is unscannable; #12 held its tile title to 294px for
+       the same reason. 100ch is ~945px, which is where the measure stops costing titles: of
+       the ten boards on this database exactly one is wider than it, against five clipped at
+       68ch. It caps the row itself rather than its contents so the hover band and the focus
+       ring frame what is actually there instead of 750px of empty ground beside it. */
+    max-width: calc(100ch + 2 * var(--hover-x));
+    /* No horizontal inset (P1.4/F10 follow-up): the row used to read var(--s4) further in
+       than the shell edge, so a row's title started 16px right of where the board's own
+       title sits in .board-body. Home's rows now flush to the same content edge the board
+       title uses; only the vertical rhythm is padding here. */
+    padding: var(--s2) var(--hover-x);
+    min-height: 56px;
+  }
+  /* The paint layer. `inset` resolves against the row's padding box, so `0` on the sides is
+     the full outset width the box already has and the vertical -4px is the only thing drawn
+     outside it. `pointer-events: none` is the whole point: the band is a picture, not a
+     target. The row's own children are positioned so they paint above it (a positioned
+     ::before otherwise covers non-positioned in-flow content). */
+  /* #12/5: `inset: 0`, not `-4px 0`. The rows abut at exactly 0, so *any* vertical outset on
+     this band is 4px of the neighbour's box: `elementFromPoint` inside the outer 4px of a
+     row's painted surface returned the row next to it, and a hovered row's fill bled into the
+     next row's breathing room. The three numbers cannot all hold — a 12px band inset, the
+     approved 16px caption-to-title rhythm between rows, and a band that owns only its own
+     box — because 12px of band on abutting rows *is* 24px of rhythm. The rhythm is approved
+     and the pitch is approved, so the band gives way: 8px above and below the text instead of
+     12, the same air `a.evt` and `.detail-row` carry, with the horizontal 16 untouched. In
+     exchange the painted band and the hit box are now the same rectangle to the pixel, which
+     is what the paint layer was for. */
+  .board-row-desk::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: var(--hover-radius);
+    pointer-events: none;
+  }
+  .board-row-desk > * { position: relative; }
+  /* What the surface needs from the list around it: `overflow: visible`, because `.list`
+     clips to its own rounded box and the band is drawn outside the row's. The rows are the
+     only thing in the list and they draw no surface at rest, so nothing is unclipped by this
+     except the surface the pointer is drawing. The flex column is what stopped the two -4px
+     margins collapsing into one and creeping the whole list up; #7/1 took those margins off
+     the vertical axis entirely, and it stays a flex column because the rows are still meant
+     to abut exactly rather than inherit any block-layout margin behaviour. */
+  .list:has(> .board-row-desk) { display: flex; flex-direction: column; overflow: visible; }
+  .board-cell-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+
+  /* Rank one. The title owns its line at --row-title/--w-head, the same weight and the same
+     "nothing shares this line" rule the tile's title got in #12. */
+  /* A fixed line box, so a row with live faces on it keeps the same 56px pitch as one
+     without: the avatar's live dot is 2px taller than the title's own line box. */
+  .board-desk-title { display: flex; align-items: center; gap: var(--s2); min-width: 0; min-height: var(--row-title-lh); }
+  /* The face box is exactly the title's line box: an inline-flex span otherwise reserves a
+     descender it has no glyph for, and the one row with a live agent on it sat 1.5px taller
+     than its neighbours. */
+  .board-desk-title .board-avatars { flex: none; margin-left: auto; padding-left: var(--s3); height: var(--row-title-lh); }
+  /* `display: block`, not the phone's two-line -webkit-box: a desktop row is one line and
+     ellipsises, and the title has the whole row width to say itself in. */
+  .board-desk-title .list-title { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .board-desk-title .pill { flex: none; }
+
+  /* Rank two, and the only other rank: one caption line, one size, one colour. */
+  .board-desk-meta {
+    display: flex; align-items: center; gap: var(--s2);
+    min-width: 0; white-space: nowrap; overflow: hidden;
+    font-size: var(--t-cap); line-height: var(--lh-cap); color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  /* Finished boards recede by ink here, not by the phone row's whole-row opacity, which is
+     now scoped to the phone (#19): at 0.7 it put six of Home's nine titles at 3.01:1 light /
+     3.82:1 dark — the primary text of the row, the name of the thing. */
+  .board-row-desk.state-complete .list-title,
+  .board-row-desk.state-complete .board-desk-meta { color: var(--muted-2); }
+  .board-desk-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* The bar is a div, so `span + span` steps over it and no separator lands after it. */
+  .board-desk-meta > span + span::before { content: "\00B7"; margin-right: var(--s2); }
+  .board-desk-meta .board-bar-mini { width: 64px; }
+  .board-desk-fact, .board-desk-age { flex: none; }
+  /* An awaiting board spends its tail on the question instead of the repo, exactly as an
+     awaiting tile does (#12): it is the payload, and it is why the row is asking for you. */
+  .board-desk-q { color: var(--status-await); }
+  .board-desk-last { display: none; }
+
+  /* Focus: on the painted band's own edge rather than the box's, so the keyboard and the
+     pointer describe exactly the same rounded surface (#7/1 — the ring follows the ::before
+     now that the band does). At offset 0 it traces --hover-radius. */
+  .board-row-desk:focus-visible { outline: none; }
+  .board-row-desk:focus-visible::before { outline: 2px solid var(--ink-focus); outline-offset: 0; }
+  /* Press, outside `@media (hover: hover)` on purpose: on a touch screen this is the only
+     feedback the row can give, and it is what shows through when Home is tapped on a phone
+     that is wide enough to be drawing the desktop row. */
+  .board-row-desk:active::before { background: var(--surface-press); }
+  /* The row still carries `.list-row`, and `.list-row:active` (styles.css) fills the *box*.
+     That box is now the tight, square, 8px-padded one, so it has to be sent back to
+     transparent or the press draws a slab inside the band the ::before is drawing. */
+  .board-row-desk:active { background: none; }
+  /* Keyboard gets the same reveal as the pointer, so the last event is never mouse-only. */
+  .board-row-desk:focus-visible .board-desk-where { display: none; }
+  .board-row-desk:focus-visible .board-desk-last { display: block; }
+
+  /* ---------- boards switcher items (card 6's sidebar rows, now in the popover) ----------
+     One two-line item per board in Home's order: dot · title · need-you, then a mini bar and
+     the repo tail. The dot slot is always there so titles align; it is only coloured for the
+     two states worth a glance. */
+  .board-link-rich { flex-direction: column; align-items: stretch; gap: var(--s1); padding: var(--s2); }
+  /* Finished, in ink rather than in opacity (#19): the whole item at 0.7 put its repo tail at
+     3.01:1 in light and 3.82:1 in dark. Same two ranks as Home's own complete row. */
+  .board-link-rich.state-complete .board-link-title,
+  .board-link-rich.state-complete .board-link-where { color: var(--muted-2); }
+  .board-link-top { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+  .board-link-rich .board-dot { display: block; background: transparent; }
+  .board-link-rich .board-dot--awaiting { background: var(--status-await); }
+  .board-link-rich .board-dot--working { background: var(--dot-working); }
+  .board-link-rich .board-link-title { flex: 1; min-width: 0; font-size: var(--t-foot); }
+  .board-link-rich .pill { flex: none; font-size: var(--t-cap); padding: 0 var(--s2); }
+  /* 7px dot + the row's own gap, so the sub-line's text lines up under the title beside it
+     rather than under the dot. */
+  .board-link-sub { display: flex; align-items: center; gap: var(--s2); min-width: 0; padding-left: calc(7px + var(--s2)); }
+  .board-bar-mini { flex: none; width: 48px; height: 3px; }
+  .board-link-where { font-size: var(--t-cap); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .board-link-rich.active .board-link-where { color: var(--muted); }
+  .board-link { justify-content: flex-start; }
+  .board-link-title { flex: 1; min-width: 0; }
+}
+
+@media (hover: hover) {
+  /* The recipe's surface, named rather than inherited from `.list-row:hover`'s --bg-3, so a
+     boards row says out loud which of the two it is drawing. */
+  .board-row-desk:hover::before { background: var(--surface-hover); }
+  /* Same as the press above: `.list-row:hover` in styles.css fills the box, and the box is
+     no longer the surface. */
+  .board-row-desk:hover { background: none; }
+  .board-row-desk:hover .list-title { color: var(--ink-link); }
+  /* The reveal: the repo tail steps aside and the last event says itself in full, at the
+     caption's own size and colour. Same trick as the tile's model tag in #12. */
+  .board-row-desk:hover .board-desk-where { display: none; }
+  .board-row-desk:hover .board-desk-last { display: block; }
+  .board-link-root:hover { color: var(--text); }
+}
+
+/* The band eases like every other surface in the app. It is its own element, so it needs its
+   own transition: `.list-row`'s (styles.css) is on the row's box, which no longer paints.
+   Under reduced motion the blanket `*, *::before, *::after { transition: none !important }`
+   would silence a colour cross-fade that never moved anything, so this restates it at
+   --d-fast/linear exactly as the reduce block in styles.css does for every other surface. */
+@media (prefers-reduced-motion: no-preference) {
+  .board-row-desk::before { transition: background-color var(--d-fast) var(--ease-out); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .board-row-desk::before { transition: background-color var(--d-fast) linear !important; }
+}
+
+/* B7: above 1500px, let the already-scrolling app shell (`.main`) be the one scroll
+   container instead of nesting a second one inside `.board-main`. The right pane keeps
+   its own scroll by sticking in place and holding a definite height, so the channel and
+   roster still scroll independently of a long kanban board. Left untouched below 1500:
+   the 900-1149 (stacked) and 1150-1499 (two-column, two-scroll) bands keep behaving. */
+@media (min-width: 1500px) {
+  .board-main { overflow-y: visible; padding-right: calc(var(--hover-x) + var(--focus-out)); }
+  /* the left column is no longer height-capped, so the view and the body must grow to
+     their content instead of being squeezed into the flex parent's leftover space —
+     otherwise `.board-side` has no travel to stick through. */
+  .board-view { flex: none; }
+  .board-body { align-items: start; flex: none; }
+  .board-side {
+    position: sticky;
+    top: var(--s4);
+    height: calc(100dvh - 2 * var(--s4));
+  }
+}
+
+/* B7 follow-up (card 17): with the page itself scrolling above 1500px, the board's chrome
+   was scrolling away with it. The shell bar is sticky at every desktop width now (styles.css),
+   so all that is left here is telling the side pane how far down to stick. */
+@media (min-width: 1500px) {
+  .board-view { --board-topbar-h: 53px; }
+  .board-side {
+    top: calc(var(--board-topbar-h) + var(--s4) + var(--s2));
+    height: calc(100dvh - var(--board-topbar-h) - var(--s4) - var(--s2) - var(--s4));
+  }
+}
+
+/* The skip link: the board's first tab stop, and invisible until it has focus. It exists
+   because even with the redundant faces demoted, the right column's composer sits after
+   the whole channel in reading order — 89 Tabs from the top bar on a busy board (#17 B4).
+   `/` does the same thing; this is the discoverable half, and what a screen reader meets
+   first. Desktop only: the phone has a tab bar and a composer a thumb away. */
+@media (min-width: 900px) {
+  /* The link is positioned against the board view, which is otherwise static. */
+  .board-view { position: relative; }
+  .skip-link {
+    position: absolute;
+    left: var(--s3);
+    top: var(--s2);
+    z-index: 60;
+    padding: var(--s2) var(--s3);
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    box-shadow: var(--shadow);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--t-sub);
+    cursor: pointer;
+    /* Out of the way without being out of the accessibility tree: `display: none` and
+       `visibility: hidden` would both take it out of the tab order, which is the one thing
+       it is for. */
+    transform: translateY(-200%);
+  }
+  .skip-link:focus-visible { transform: none; }
+  /* #5: the recipe's press/hover step on an already-opaque surface — the link carries its
+     own background and border at rest (it is a floating tag, not a transparent row), so the
+     fill just steps up one shade rather than appearing from nothing. Transition lives with
+     the rest of the recipe's shared surfaces in styles.css. */
+  @media (hover: hover) {
+    .skip-link:hover { background: var(--surface-hover); }
+  }
+  .skip-link:active { background: var(--surface-press); }
+}
+
+/* Reduced motion: a popover still cross-fades — it is the only signal that one opened —
+   but never travels or scales (#17's motion spec, and B10's substitute-don't-kill rule as
+   far as this card's own surfaces go). */
+@media (min-width: 900px) and (prefers-reduced-motion: reduce) {
+  .menu { animation: fade-in var(--d-fast) linear; }
+}

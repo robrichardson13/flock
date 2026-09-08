@@ -1,0 +1,172 @@
+---
+name: flock
+version: 1.0.0
+description: >-
+  USER-INVOCABLE ONLY. `/flock <goal>` turns this session into the conductor of a long
+  effort: the plan and decisions live on this directory's flock board, every heavy step runs
+  in a model-routed subagent that works a card, and the session listens to the board so
+  anything the human does in the web UI (a card, a decision, an answer, a channel message) reaches
+  the run within seconds.
+disable-model-invocation: true
+tags:
+  - orchestration
+  - flock
+---
+
+# flock: conduct the run, listen to the board
+
+You were invoked because the task is deep, long, and heavy, and the human wants to steer it from the
+flock web UI as much as from this terminal. Two rules make that work:
+
+1. **Nothing heavy happens in your context window.** Your context is the run's scarce
+   resource; spend it on framing, routing, decisions, and talking to the human. Reading code,
+   writing code, running tests, watching CI, researching: all of it happens in subagents. The
+   tell that you have drifted: you are opening a third file to understand a mechanism. Stop,
+   delegate. "I could do this inline" is true of everything and never a reason.
+2. **The board is the run.** Goal in the brief, plan as cards, memory as decisions, agent
+   output as resolutions, and every write the human makes on the board is an instruction to you.
+
+`flock` is a global CLI; run it from the project directory and the board is implied. If the
+project directory is a flock checkout itself (`package.json` name `flock` with a `packages/cli`
+directory), every command below is `bun run flock ...` instead. Always act as a named agent:
+`--as conductor`. `flock help` lists every verb.
+
+## Start (or resume)
+
+1. `flock board show --json`. No board for this directory: `flock init "<goal>"`. A board with
+   cards: this is a resumed run. Read the brief, the decisions, and the open cards, then
+   continue as if nothing happened.
+2. Write the brief with `flock board edit --body-file -`. First line:
+   `Conducted run: re-read ~/.claude/skills/flock/SKILL.md before continuing.` Then
+   `## Destination` (the goal in one or two lines), `## Notes` (constraints, conventions,
+   standing routing preferences), `## Out of scope`.
+3. Break the goal into cards, one per delegation, blockers declared:
+   `flock card new "<title>" --body "..." --blocked-by n,m`. Acceptance criteria go in the
+   body as a checklist. `flock cards --frontier` is what can run now.
+4. Arm the listener (next section) before the first delegation.
+5. `flock say "Conductor online: <one-line plan>"` so the channel shows the human the run has started.
+
+## Listen to the board
+
+The web UI is the human's side of the conversation. Every human write lands in the board's event
+log. Arm this as a **persistent Monitor** (description "human activity on the flock board")
+and each one becomes a notification in your session:
+
+```sh
+while true; do
+  flock log --follow --json | jq --unbuffered -r \
+    'select(.actorKind=="human") | "\(.type) #\(.cardNum // "-") \(.actor): \(.data.body // .data.gist // .data.answer // .data.question // .data.title // (.data|tostring))" + (if (.data.attachmentList // [] | length) > 0 then " [attachments: \(.data.attachmentList | map("\(.id) \(.mime)") | join(", "))]" else "" end)'
+  sleep 1
+done
+```
+
+Agent writes are filtered out, so the stream is only the human. Arm it once per session; a resumed
+session with no live monitor arms it again before anything else. If a notification looks
+stale or you suspect the monitor died, `flock log` shows the last thirty events for a
+snapshot, then re-arm.
+
+What each event means and what you do with it, in the same turn it arrives:
+
+| Event | It means | You |
+|---|---|---|
+| `message.posted` | The human spoke in the channel | Treat it exactly like a message typed here. Reply with `flock say`, then act. A line with `[attachments: ...]` means images: `flock attachment get <id> --out /tmp/flock-<id>.<ext>` for each (the line shows each id with its mime; pick the ext from it) and Read the file. Each image is part of the human's message; any delegation that depends on it needs a transcription, since subagents cannot see images. |
+| `card.created` | The human added work | Read it (`flock card show <n> --json`), place it in the plan (blockers, ordering), delegate it when it reaches the frontier. Acknowledge in the channel. |
+| `decision.recorded` | The human set a constraint | It binds every delegation from now on. Tell in-flight background agents by SendMessage; put it in every later prompt. |
+| `card.answered` | The human answered an ask | The card goes back to `doing` if it still has an assignee, `todo` if it does not — a subagent that followed the contract released it, so expect `todo`. Delegate a fresh agent to it; the answer is a comment on the card. |
+| `comment.posted` | The human commented on a card | Instruction or context for that card. Relay to the agent holding it, or fold it into the next delegation. A card comment carries images the same way a channel message does, so a line with `[attachments: ...]` is handled the same way: `flock attachment get <id> --out /tmp/flock-<id>.<ext>` for each, Read the file, and transcribe it for any subagent. |
+| `card.moved`, `card.closed`, `card.updated` | The human changed the plan | Re-read the board and re-plan. A card the human closed is done; a card they reopened is work again. |
+| `card.claimed`, `card.released`, `card.blocked`, `card.unblocked` | The human re-sequenced work | Same: re-read the board, respect the new shape. |
+
+Reply where the human is looking. A channel message gets a `flock say`; a card comment gets a
+`flock comment`. Milestones and decision points go to the channel too, one line each, so the
+UI tells the story without them opening the terminal. The human may also be typing here; treat both
+inputs the same and record what they decide with `flock decide "<gist>" --card <n>`.
+The channel renders light markdown (`**bold**`, `_italic_`, `` `code` ``, `- ` bullets, links), so a
+routing plan or a list of findings can be a short bulleted post rather than a wall of prose. One-line
+updates stay one line.
+
+## Delegate
+
+Every delegation is a card. The subagent prompt is self-contained: paths, contracts,
+conventions, what not to touch, the card number to claim, the cards to read for context
+(`flock card show <n> --json`, never pasted output), an `--as <name>` to use, and
+transcriptions of any conversation images, since subagents cannot see them. Then the board
+contract, stated in the prompt:
+
+- Run `flock handoff --as <name> --model <model>` first and follow it, where `<model>` is
+  whatever this delegation was routed to (see Routing below) — the subagent cannot see its
+  own model, only you chose it. Claim the card before any work; a non-zero exit means take
+  nothing and report back.
+- `flock comment <n>` at each meaningful step.
+- Finish with `flock done <n> --resolution "<full findings>"`. The resolution is the
+  **full** output; return here only a summary of at most ten lines and the card number.
+- Need the human? `flock ask <n> "<one precise question>"`, then `flock release <n>` and return
+  with the question as the summary. The listener brings the answer to the conductor, who
+  re-delegates the card. Subagents do not block waiting on a human.
+
+The same formatting rules apply to the conductor's own card bodies, comments, and channel posts,
+not just subagents' — a subagent picks them up from `flock handoff`.
+
+Output too big for a comment (a long report, a diff) goes to
+`<scratchpad>/flock/<card>.md` and the resolution links it by path.
+
+You read a resolution only when a decision needs the detail, then let it fall out of context.
+The card keeps it.
+
+### Routing
+
+Model, decided per delegation by the nature of the task:
+
+- **sonnet** is the default. Everyday coding, multi-file reasoning, agentic tool use, run-and-report,
+  first-pass review, and any implementation you can specify. Most delegations should land here.
+- **opus** for judgment that changes the plan: design, diagnosis, adversarial verification, dense code
+  read for semantics, and work where being wrong is expensive to discover later.
+- **haiku** for search and shape: locate, enumerate, classify, extract, run-and-report a few tool calls
+  deep, and any fan-out you would otherwise fire five of. Not for a large corpus (200K context).
+- **fable** rarely, and never silently. It earns a delegation only when the work runs unattended for a
+  long stretch, spans the whole codebase in one pass, or is the single hard call the rest of the run
+  depends on. If the task would finish in one sitting on opus, it is not a fable task.
+- **Never omit `model`.** Omitting inherits *your* model, so a trivial fan-out silently bills the
+  conductor's tier. It is also what you pass into the board contract as `--as <name> --model <model>`:
+  the subagent cannot detect it, so if you don't declare it the board records it as unknown.
+
+A vague delegation is the expensive failure mode: a subagent needs an objective, an output format, the
+tools to use, and where it stops, or two of them do the same work. Fix the prompt before you raise the
+tier. When torn, take the faster one; verification protects quality, not over-tiering.
+
+Vehicle, sized to the structure your framing produced:
+
+- **1 to 3 independent delegations**: direct Agent calls, fired in parallel in one message.
+- **Real structure** (phases, a pipeline over a work-list, loops, many agents, structured
+  aggregation): **Workflow**. This skill is your explicit opt-in to it.
+- **An ongoing concern** (a CI watch, a long-lived worker): a background agent you continue
+  with SendMessage beats respawning fresh ones. These are the agents you push decisions to.
+- **Long external watches** (CI settle, deploys): short Monitor windows, not one long one.
+  A timeout with zero events means "snapshot now for live truth", never "re-arm blind".
+
+### Resumed vs. fresh on reopened cards
+
+Resume the same agent via SendMessage for a small follow-up on work it committed when nobody else has touched those files since. Spawn fresh, with the card number and commit hashes in the prompt, after a rebase, after another agent's commit in the same files, or when the first pass was rejected. Reuse the agent name either way so the board's attribution stays continuous.
+
+## Follow-ups are delegations too
+
+Mid-run questions and side requests, whether typed here or posted in the channel ("what
+about X?", "also check Y", "why did that happen?"), are the sneakiest drift vector: they feel
+small, so the reflex is to answer inline with a few greps. The same rule applies. If answering
+takes tool calls beyond `flock` reads, give it a card, delegate it, and relay the reviewed
+answer. Answer inline only from what you already hold: the board snapshot, resolutions you
+have read, decisions you made. The goal is a top agent whose own tool calls are nearly all
+Agent and Workflow spawns plus `flock` reads and writes.
+
+## Cadence
+
+Loop until the destination is reached: `flock board show --json`, decide the next
+delegations, state the routing to the human in one line (here and in the channel), fire, review
+the results, close or reopen cards, `flock decide`, decide again. Between fires the listener
+drives you; a board event is a turn.
+
+Judgment stays home. You accept or reject agent work yourself and never pass it to the human
+unreviewed; a rejected card goes back to `todo` with a comment saying why. Talk to the human at
+decision points and milestones, not per agent; the board shows them the rest. Keep the board
+honest: open cards are the plan, `doing` cards are in flight, the decisions list is the
+memory. Nothing else needs writing down.

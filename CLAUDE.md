@@ -1,0 +1,61 @@
+# flock
+
+A `flock` CLI for agents and a web app for humans, sharing one SQLite database. `README.md` explains the model; `VISION.md` is the long-range direction and yields to the README where they differ; `docs/adr/` records the decisions.
+
+## Setup and daily commands
+
+- `bun test` — the whole test suite. `bun run typecheck` — every package. `bun run build` — `vite build` then `scripts/gen-assets.ts`, producing the web app `flock serve`/a compiled binary embeds. `scripts/setup.sh` is the contributor setup on a fresh clone (`bun install`) and is idempotent; see README's Contributing section. It installs no daemon and never puts a dev build on `PATH`; by default it symlinks `~/.claude/skills/flock` at this checkout (moving aside a prod-installed real file/directory to `flock.bak` first); `--no-skill` skips that.
+- `flock up | down | restart | status | logs | url` — the daemon. `start`/`stop` alias `up`/`down`. From an installed binary this spawns one `serve` child; from a checkout (detected by `isStandalone()` being false) it starts the dev environment instead — `bun --watch … serve` plus `bun x vite --strictPort` — on this checkout's ports. Agents may run this. See `docs/adr/0003-per-checkout-dev-environment.md` for the port and worktree scheme and `docs/adr/0012-single-binary-distribution-and-a-daemon-instead-of-pm2.md` for the daemon and distribution design.
+- `bun run flock <verb>` runs the CLI from source. `scripts/setup.sh --link` opts into a global one: it writes a POSIX `sh` launcher at the install slot (`$FLOCK_INSTALL_DIR`, else `$FLOCK_HOME/bin`, else `~/.flock/bin`) whose body is `exec bun "<checkout>/packages/cli/src/main.ts" "$@"` — no `cd`, so the board still resolves from the caller's directory — setting an installed binary aside as `flock.bin.bak`. Line 2 carries `# flock-dev-launcher: <checkout>`; `scripts/install.sh` and auto-update both detect it and refuse to overwrite (installer: one stderr line, exit 0, `FLOCK_FORCE=1` overrides; `isDevLauncher` in `packages/cli/src/update.ts`). `--unlink` removes the launcher and restores the backup. Dev always wins over prod, with no PATH ordering involved.
+- `flock serve [--port N] [--host H] [--open]` runs the web UI plus the HTTP API in the foreground; `--host` defaults to `127.0.0.1`. `up` is what backgrounds it; `up --foreground` is the same thing spelled through the daemon verbs.
+- `flock setup [--no-start] [--skill-only]` writes `~/.claude/skills/flock/SKILL.md` from the binary's embedded copy (a real file, not a symlink; a symlinked destination is left alone) then runs `up`. `flock upgrade [--version=V]` reinstalls deliberately, re-running the embedded installer beside the current binary, refreshing the skill, and restarting a running daemon; an installed flock also does this on its own at most once a day. `FLOCK_NO_UPDATE=1`, or `{"autoupdate": false}` in `~/.flock/config.json` (`docs/config.md`), turns that off; auto-update never runs from a checkout.
+- Env vars beyond what `flock help` covers (`FLOCK_ACTOR`, `FLOCK_ACTOR_KIND`, `FLOCK_HARNESS`, `FLOCK_MODEL`, `FLOCK_EFFORT`, `FLOCK_DB`): `FLOCK_PORT` sets the API port for `up`/`serve`, `FLOCK_WEB_PORT` the dev web port, `FLOCK_HOME` relocates everything flock keeps outside the database (`~/.flock` by default: `run/`, `logs/`, `update.json`, `skill.json`, `config.json`), `FLOCK_NO_UPDATE`, `FLOCK_NO_SETUP` and `FLOCK_FORCE` are the installer/auto-update opt-outs (`FLOCK_INSTALL_DIR` picks the install slot for both `scripts/install.sh` and `scripts/setup.sh --link`).
+- `close` and `events` are aliases for `done` and `log`; `flock help` does not list them.
+
+## Worktrees
+
+Each checkout serves its own dev environment. The canonical checkout owns :4747 and :5173. A worktree gets its own stable ports (`flock status` lists every running checkout's runfile, from any directory); `flock up` picks them and prints them. Runfiles are namespaced by mode — `flock` for an installed binary's daemon, `dev` for the canonical checkout, `dev@<dir>` for a worktree — so an install and a checkout coexist, and `up` refuses (exit 1) rather than stopping a daemon that is not its own. Never serve the canonical ports from a worktree; `flock up` refuses, and there is no override. See `docs/adr/0003-per-checkout-dev-environment.md` for how the ports are derived.
+
+If :4747/:5173 are already held by something else — typically an installed `flock`'s own daemon — `flock up` in the canonical checkout does not refuse: it falls back to the same offset ports a worktree would get (`portOffset` on the checkout's path) and prints the URL plus a one-line note explaining the fallback. An explicit `--port`/`--web-port`/`FLOCK_PORT`/`FLOCK_WEB_PORT` still wins and still refuses if that port is held; `flock restart` still retakes its own ports rather than falling back. `flock status` also names which binary answered (`process.execPath`, and whether it's this checkout's source build) so the installed-vs-source ambiguity is visible.
+
+The global `flock` binary, if installed, is unrelated to any checkout; dev builds are never on `PATH`. Inside a worktree run the CLI from source: `bun run flock up`. That uses the worktree's code and the worktree's ports.
+
+Worktrees share `~/.flock/flock.db` by default, so the worktree's app shows the same boards as the canonical one. Use `bun run flock up --isolated` when the branch changes the schema or you want throwaway data; that creates a private `.flock/flock.db` in the worktree, which the CLI also picks up automatically from inside it. `up` is idempotent: re-running it reports "already running", starts fresh, or restarts only the processes whose settings (like `--isolated`) changed.
+
+## Scratch data
+
+Seed data for eyeballing a UI change never goes on the shared DB. Either run `bun run flock up --isolated`, or point `FLOCK_DB` at a file in your scratchpad for both the CLI and `flock up` (`up` passes it through to the API and web processes). `flock board new --project /tmp/...` does not change the database: `--project` only sets the board's scoping directory, and with `FLOCK_DB` unset the write still lands on `~/.flock/flock.db`. A board that reaches the shared DB anyway is deleted before the work is reported done: `flock board delete <slug> --yes`.
+
+## Layout
+
+- `packages/core` — the `Flock` class over bun:sqlite. Every domain rule lives here: claim CAS, frontier, awaiting-human, events, project scoping, body task checkboxes, image attachments, board-create hooks, markdown export and import, the `schema_version` guard on open. No dependencies.
+- `packages/cli` — arg parsing, human and `--json` output, `flock serve`. `daemon.ts` is the pidfile-based supervisor behind `up|down|restart|status|logs|url` (binary mode spawns one `serve` child; checkout mode reuses `dev.ts`'s pure port/worktree helpers). `setup.ts` writes the skill and starts the daemon. `update.ts` is auto-update (stamp, lock, CalVer compare, re-running the embedded installer) plus `flock upgrade`/`self-update`; `paths.ts` holds just `flockHome()` so `update.ts` doesn't drag `dev.ts` into every CLI invocation's startup. `runtime.ts` is `isStandalone()`/`version()`/`embeddedAssets()` — what lets one binary tell a checkout from a compiled executable and carry the built web app, `scripts/install.sh`, and `skills/flock/SKILL.md` inside itself.
+- `packages/server` — Hono routes mirroring `Flock` methods; SSE by tailing the events table; serves the embedded assets map (preferred) or `packages/web/dist` (checkout fallback), plus `GET /install.sh`.
+- `packages/web` — Vite and React. Hash routes are `#/b/<slug>`, `#/b/<slug>/c/<n>`, `#/b/<slug>/a/<actor>`, and `#/b/<slug>/<tab>` (tab is one of cards, channel, activity, decisions). Board views refetch the snapshot on SSE events, but coalesced: a 150ms-debounced, 600ms-ceiling, single-flight refetch, filtered by event type (`useCoalescedRefetch` in `packages/web/src/live.ts`).
+- Colour is a token layer: `packages/web/src/styles.css` defines every colour, and every other stylesheet (`brand.css`, `compose.css`, …) consumes tokens and never defines a hex. `bun test` runs a 4.5:1 contrast gate over the stylesheet (`scripts/contrast.ts`, `scripts/contrast.test.ts`); `bun run scripts/contrast.ts` prints the table. See `docs/adr/0011-design-tokens-and-lab.md`.
+- `skills/flock` — the user-invoked `/flock <goal>` conductor skill: board as state, subagents work cards, a persistent Monitor over `flock log --follow --json` feeds human writes back into the session. `flock setup` writes it as a real file to `~/.claude/skills/flock`, refreshed on upgrade; `scripts/setup.sh` symlinks it at a checkout instead for live-editing (default; `--no-skill` skips it), and `flock setup` detects and preserves that symlink. Agent onboarding text lives in `flock handoff` (`packages/cli/src/handoff.ts`), not in the skill.
+- `docs/agents/issue-tracker.md` — the tracker doc for Matt Pocock's engineering skills. Copy it into a project that wants flock as its issue tracker.
+- `docs/hooks/` — user-facing docs for flock's hooks (e.g. `board-create.md`). The hook logic itself lives in core `packages/core/src/hooks.ts` (discovery, permission guard, spawn/timeout, stdout parsing, field-schema normalization); CLI and server stay thin over it.
+- `docs/install.md` — the curl one-liner, what it installs, supported platforms, env overrides, auto-update, and uninstall. `docs/config.md` — `~/.flock/config.json`.
+- `scripts/gen-assets.ts` — walks `packages/web/dist` after `vite build` and writes the gitignored `packages/cli/src/assets.generated.ts` (a committed `.d.ts` is what the rest of the CLI type-checks against). `scripts/build-release.ts` — builds and tarballs one compiled binary per target. `scripts/install.sh` — the POSIX-sh installer, embedded in the binary and also served at `GET /install.sh`.
+- `.github/workflows/release.yml` — six-target release matrix, CalVer tag on push to `main`, `SHA256SUMS`. `.github/workflows/install-test.yml` — hermetic installer test on every push, an Alpine/Debian/wget container matrix on release.
+
+## Conventions
+
+- Domain rules go in core with a test. The CLI and server stay thin. Core's tests live in `packages/core/test/`; everywhere else they sit beside the source as `*.test.ts`.
+- Attribution is explicit: core methods take an `Actor`, the CLI reads `--as` and `FLOCK_ACTOR`, the server reads `x-flock-actor` and `x-flock-actor-kind` headers. An `Actor` also optionally carries `harness`/`model`/`effort` (see ADR 0005); the server mirrors them as `x-flock-harness`/`x-flock-model`/`x-flock-effort`.
+- One board per project directory, resolved from the working directory. The board argument is optional in most CLI verbs; a few (`boards`, `actors`, `needs-me`, `log --all`) take no board at all, and `board new` / `board import` take `--project` rather than resolving it.
+- Address cards by number, and by board slug only when the board is not implied. Never expose internal ids.
+- Keep CLI output stable. Agents parse `--json`; humans read the rest. Conflicts (including claiming a blocked or closed card) exit 3, not-found exits 2; `claim --force` claims past a blocker. Everything else exits 1.
+- The global database `~/.flock/flock.db` is the default. Tests use `:memory:`.
+- Record decisions as a new file in `docs/adr/`, numbered one past the highest existing file, following the format of 0001 and 0002.
+
+## Agent skills
+
+### Issue tracker
+
+Work on this repo is tracked on this checkout's flock board. See `docs/agents/issue-tracker.md`. Run `flock init` once in a fresh worktree, then `flock cards`.
+
+### Domain docs
+
+Single-context: decisions live in `docs/adr/`.

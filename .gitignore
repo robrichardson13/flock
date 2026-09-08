@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.flock/
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+packages/cli/src/assets.generated.ts

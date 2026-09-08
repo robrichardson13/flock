@@ -1,0 +1,7 @@
+{
+  "name": "@flock/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": { "flock": "src/main.ts" },
+  "dependencies": { "@flock/core": "workspace:*", "@flock/server": "workspace:*" }
+}

@@ -1,0 +1,218 @@
+name: release
+
+# Two ways in:
+#   1. A push to main runs the test suite, then (only for that trigger) computes and pushes a
+#      CalVer tag v<YYYY>.<MM>.<DD>.<n> — the counter is the next unused suffix among tags already
+#      on that UTC date, so two same-day merges land .1 and .2.
+#   2. A v* tag (hand-pushed, or the one job 1 just pushed) — or a manual workflow_dispatch — builds
+#      all six targets, concatenates SHA256SUMS, and creates the GitHub release.
+#
+# Loop safety: the tag-computing job only runs when `github.ref == 'refs/heads/main'`. The tag it
+# pushes has `github.ref` starting with `refs/tags/`, so a run this workflow's own tag push happens
+# to trigger can never re-enter that job — it only ever reaches the build/release path. (In
+# practice a push made with the default GITHUB_TOKEN does not trigger further workflow runs at all,
+# per GitHub's own recursion guard; the ref check above is what actually matters here and holds even
+# if that changes.)
+#
+# ADR 0012 gives the asset naming contract (`flock-bun-<target>.tar.gz`), shared with
+# scripts/build-release.ts and scripts/install.sh — do not change it in only one place.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v2026.09.07.1. Defaults to the latest tag."
+        required: false
+
+permissions:
+  contents: write
+
+env:
+  BUN_VERSION: "1.3.4"
+  # Repo slug lives in exactly one place; every step below reads it from here.
+  REPO_SLUG: robrichardson13/flock
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - run: bun test
+      - run: bun run typecheck
+
+  # Computes and pushes the CalVer tag. Only on a push to main — never on the tag push this job
+  # itself makes, never on workflow_dispatch, never on a hand-pushed tag.
+  tag:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Serialized so two merges landing close together see each other's tag: the second run's
+    # "what's the highest .n today" query only sees the first run's tag once it has actually
+    # pushed, which the concurrency group guarantees by not starting the second run's tag job
+    # until the first has finished (cancel-in-progress: false — never drop a queued release).
+    concurrency:
+      group: release-calver-tag
+      cancel-in-progress: false
+    outputs:
+      tag: ${{ steps.calver.outputs.tag }}
+      version: ${{ steps.calver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: calver
+        run: |
+          set -eu
+          git fetch --tags --force
+          today=$(date -u +%Y.%m.%d)
+          last=$(git tag -l "v${today}.*" | sed "s/^v${today}\.//" | sort -n | tail -1)
+          if [ -z "$last" ]; then n=1; else n=$((last + 1)); fi
+          tag="v${today}.${n}"
+          version="${today}.${n}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "$tag"
+          git push origin "$tag"
+
+  # Resolves one (tag, version) pair regardless of which of the three triggers fired, so build and
+  # release below don't each need to re-derive it.
+  resolve:
+    needs: [test, tag]
+    if: always() && needs.test.result == 'success' && (needs.tag.result == 'success' || needs.tag.result == 'skipped')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: resolve
+        run: |
+          set -eu
+          if [ "${{ needs.tag.result }}" = "success" ]; then
+            tag="${{ needs.tag.outputs.tag }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            tag="${{ github.ref_name }}"
+          elif [ -n "${{ github.event.inputs.tag }}" ]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            git fetch --tags --force
+            tag=$(git tag -l "v*" | sort -V | tail -1)
+          fi
+          if [ -z "$tag" ]; then
+            echo "resolve: no tag to build (none pushed, none found, none given)" >&2
+            exit 1
+          fi
+          version="${tag#v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # The runner is part of the contract, not a convenience. `bun build --compile --target=bun-darwin-*`
+  # appends the payload to a prebuilt, already-signed darwin bun; only a macOS host can re-sign the
+  # result, and macOS SIGKILLs a binary whose signature is present but broken. So the two darwin
+  # targets build on macOS (build-release.ts ad-hoc signs and verifies them there) and the four
+  # linux targets cross-compile on ubuntu, where cross-compilation carries no signature at all.
+  build:
+    needs: resolve
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-darwin-arm64
+            os: macos-14
+            smoke: true # macos-14 is Apple Silicon, so this binary is native: run it.
+          - target: bun-darwin-x64
+            os: macos-14
+          - target: bun-linux-x64
+            os: ubuntu-latest
+          - target: bun-linux-arm64
+            os: ubuntu-latest
+          - target: bun-linux-x64-musl
+            os: ubuntu-latest
+          - target: bun-linux-arm64-musl
+            os: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - name: Build release artifact
+        run: |
+          bun run scripts/build-release.ts \
+            --version "${{ needs.resolve.outputs.version }}" \
+            --targets "${{ matrix.target }}" \
+            --out dist
+      # Belt and braces: build-release.ts already signs and verifies on darwin, but an unsigned or
+      # broken darwin asset is the one failure a user cannot recover from, so assert it here too.
+      - name: Verify the darwin signature
+        if: startsWith(matrix.target, 'bun-darwin-')
+        run: |
+          set -eu
+          mkdir -p smoke
+          tar -xzf dist/flock-${{ matrix.target }}.tar.gz -C smoke
+          codesign --verify --strict --verbose=2 "smoke/flock-${{ matrix.target }}"
+      # The only step in this workflow that executes a macOS binary. macos-14 is arm64, so it can
+      # run the native build and nothing else; a broken signature shows up here as Killed: 9.
+      - name: Run the binary
+        if: matrix.smoke
+        run: |
+          set -eu
+          ./smoke/flock-${{ matrix.target }} --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+      - name: Build SHA256SUMS
+        working-directory: dist
+        run: cat ./*.sha256 > SHA256SUMS
+      # Idempotent: workflow_dispatch's documented use is rebuilding an existing tag, and
+      # `gh release create` fails outright when the release is already there. View first, create
+      # only if it is missing, and upload with --clobber so a rebuild replaces its own assets.
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -eu
+          if gh release view "$TAG" --repo "$REPO_SLUG" >/dev/null 2>&1; then
+            echo "release $TAG already exists; replacing its assets"
+          else
+            gh release create "$TAG" \
+              --repo "$REPO_SLUG" \
+              --title "$TAG" \
+              --generate-notes
+          fi
+          gh release upload "$TAG" \
+            dist/*.tar.gz dist/SHA256SUMS \
+            --repo "$REPO_SLUG" \
+            --clobber

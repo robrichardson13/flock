@@ -1,0 +1,186 @@
+/*
+ * Full-screen image viewer (Viewer.tsx). Black ground, no app chrome: the photo is the
+ * screen. Everything that moves during a gesture is written to element styles in JS —
+ * the rules here are the resting state and the chrome.
+ */
+
+.iv {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--vvh, 100dvh);
+  z-index: 80;
+  overscroll-behavior: contain;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.iv-scrim {
+  position: absolute;
+  inset: 0;
+  background: #000;
+}
+
+.iv-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.iv-strip {
+  display: flex;
+  height: 100%;
+  will-change: transform;
+}
+
+.iv-slide {
+  flex: 0 0 auto;
+  height: 100%;
+  box-sizing: border-box;
+  /* A gutter between images, so a page swipe shows a seam rather than two photos welded
+     together. Border-box keeps each slide exactly one viewport wide. */
+  padding-inline: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.iv-img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  display: block;
+  object-fit: contain;
+  will-change: transform;
+  -webkit-user-drag: none;
+}
+
+/* ---------- chrome ---------- */
+
+.iv-chrome {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  color: #fff;
+  transition: opacity var(--d-base) var(--ease-out), transform var(--d-base) var(--ease-out);
+}
+
+.iv-top {
+  top: 0;
+  padding: calc(var(--sat, 0px) + var(--s1)) var(--s2) var(--s3);
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
+}
+
+/* Three columns so the dots stay centred whether or not Share is there. */
+.iv-bottom {
+  bottom: 0;
+  padding: var(--s3) var(--s3) calc(var(--sab-in, 0px) + var(--s3));
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+
+.iv-bottom > :last-child { justify-self: end; }
+
+/* Tapping the image hides the chrome; it is out of the way for the pointer too, so a tap
+   where a button used to be is a tap on the image. */
+.iv-bare .iv-top { opacity: 0; transform: translateY(-8px); pointer-events: none; }
+.iv-bare .iv-bottom { opacity: 0; transform: translateY(8px); pointer-events: none; }
+.iv-closing .iv-chrome { opacity: 0; pointer-events: none; }
+/* The chrome arrives once the image has landed, and gets out of the way for the whole of
+   a swipe-down — during the drag the photo is the only thing that should be moving. */
+.iv-opening .iv-chrome { opacity: 0; transition: none; }
+.iv-dragging .iv-chrome { opacity: 0; transition: opacity var(--d-fast) var(--ease-out); pointer-events: none; }
+
+.iv-btn {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  cursor: pointer;
+  transition: transform var(--d-base) var(--ease-spring), background var(--d-fast) var(--ease-out);
+}
+
+.iv-close:active { transform: scale(0.92); background: rgba(255, 255, 255, 0.24); }
+.iv-spacer { background: none; pointer-events: none; }
+
+.iv-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  line-height: 1.25;
+}
+
+.iv-who { font-size: 14px; font-weight: var(--w-head); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iv-when { font-size: 12px; color: rgba(255, 255, 255, 0.66); }
+
+.iv-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 var(--s3);
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  transition: transform var(--d-base) var(--ease-spring), background var(--d-fast) var(--ease-out);
+}
+
+.iv-action:active { transform: scale(0.96); background: rgba(255, 255, 255, 0.24); }
+
+.iv-dots { display: flex; gap: 6px; align-items: center; min-height: 6px; }
+.iv-slot { display: block; }
+.iv-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.35);
+  transition: background var(--d-fast) var(--ease-out), transform var(--d-fast) var(--ease-out);
+}
+.iv-dot.on { background: #fff; transform: scale(1.2); }
+
+/* ---------- the thumbnail in a bubble ---------- */
+
+/* It was an <a> to the raw file; it is a button that opens the viewer now, so it has to
+   be told it is not one of the app's buttons. */
+.msg-attachment {
+  padding: 0;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  cursor: zoom-in;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* On a phone the thumbnail sits on the bubble's own fill. Desktop removed that fill from
+   agent messages (#12), so a thumbnail can now land directly on the page background — a
+   dark screenshot on dark, or a light one on light, with nothing to hold its shape. A 1px
+   edge does that job on any background, in either colour scheme. */
+@media (min-width: 900px) {
+  .msg-attachment { border: 1px solid var(--line); border-radius: var(--r-sm); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .iv-chrome, .iv-btn, .iv-action, .iv-dot { transition: none; }
+}
