@@ -688,8 +688,13 @@ export function LineComposer({
   // pill-and-sheet): the shell is sized to the visual viewport, so the field rides the
   // keyboard and the tab bar steps out from under it while a field is focused.
   const compactClass = compact ? (expanded ? " composer-expanded" : " composer-collapsed") : "";
+  // Mirrors `userExpanded` as a class so CSS can tell "at rest" apart from "the user is
+  // typing" even when the override fires and pins `compact` false (neither `compactClass`
+  // above nor `--composer-collapse` distinguishes that case on its own — see styles.css's
+  // `@media (max-width: 899px)` mobile clamp).
+  const openClass = userExpanded ? " composer-open" : "";
   return (
-    <form ref={footRef} className={`pane-foot${className ? ` ${className}` : ""}${compactClass}`} onSubmit={submit} onDrop={onDrop} onDragOver={onDragOver}>
+    <form ref={footRef} className={`pane-foot${className ? ` ${className}` : ""}${compactClass}${openClass}`} onSubmit={submit} onDrop={onDrop} onDragOver={onDragOver}>
       {expanded && above}
       {noticeBlock}
       {chips}

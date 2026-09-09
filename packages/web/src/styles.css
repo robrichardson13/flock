@@ -2313,14 +2313,22 @@ html[data-topbar] .sheet { max-height: 100%; }
   .card-composer .line-composer-input {
     min-height: 0;
     padding-block: calc(var(--s2) + (var(--s3) - var(--s2)) * (1 - var(--composer-collapse, 0)));
-    /* The lever that actually moves the field's row. `useAutoGrow` writes an inline
-       `style.height` in px on the textarea and `box-sizing` is border-box everywhere, so the
-       padding above cannot change the box — on its own it only slides the text around inside
-       a fixed-height field, which is exactly the "the text moves but the composer doesn't"
-       the human saw. `max-height` outranks an inline `height`, so this is what takes the row
-       from its expanded 48px (`--lh-body` + 2 x `--s3`) to the resting 40px (+ 2 x `--s2`),
-       continuously. Safe against a multi-line draft: a non-empty draft pins the variable at
-       0 via the focus/draft override. */
+  }
+
+  /* The lever that actually moves the field's row. `useAutoGrow` writes an inline
+     `style.height` in px on the textarea and `box-sizing` is border-box everywhere, so the
+     padding above cannot change the box — on its own it only slides the text around inside
+     a fixed-height field, which is exactly the "the text moves but the composer doesn't"
+     the human saw. `max-height` outranks an inline `height`, so this is what takes the row
+     from its expanded 48px (`--lh-body` + 2 x `--s3`) to the resting 40px (+ 2 x `--s2`),
+     continuously — but only while the composer is at rest. `.composer-open` mirrors
+     `userExpanded` (thread.tsx) — focused, has text, or has a staged attachment — and is the
+     one signal that agrees with `useScrollCollapse`'s override (which pins the variable at 0
+     but does not otherwise touch this rule): gating on it, rather than on `--composer-collapse`
+     or `.composer-expanded` (absent exactly when a draft exists, see thread.tsx's
+     `compactClass`), is what lets a growing draft fall through to the base 212px cap plus
+     `useAutoGrow`'s inline height instead of being pinned to one line forever. */
+  .card-composer:not(.composer-open) .line-composer-input {
     max-height: calc(var(--lh-body) + 2 * (var(--s2) + (var(--s3) - var(--s2)) * (1 - var(--composer-collapse, 0))));
   }
 
