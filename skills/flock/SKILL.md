@@ -2,11 +2,12 @@
 name: flock
 version: 1.0.0
 description: >-
-  USER-INVOCABLE ONLY. `/flock <goal>` turns this session into the conductor of a long
+  USER-INVOCABLE ONLY. `/flock [goal]` turns this session into the conductor of a long
   effort: the plan and decisions live on this directory's flock board, every heavy step runs
   in a model-routed subagent that works a card, and the session listens to the board so
   anything the human does in the web UI (a card, a decision, an answer, a channel message) reaches
-  the run within seconds.
+  the run within seconds. Invoked bare, with no goal, it stands the board up, arms the listener
+  and waits for the human to start the work from the web UI.
 disable-model-invocation: true
 tags:
   - orchestration
@@ -16,7 +17,9 @@ tags:
 # flock: conduct the run, listen to the board
 
 You were invoked because the task is deep, long, and heavy, and the human wants to steer it from the
-flock web UI as much as from this terminal. Two rules make that work:
+flock web UI as much as from this terminal. You may also have been invoked with no goal at all, which
+means the human wants the board and the listener standing before they say what the work is; see
+[Invoked with no goal](#invoked-with-no-goal). Two rules make that work:
 
 1. **Nothing heavy happens in your context window.** Your context is the run's scarce
    resource; spend it on framing, routing, decisions, and talking to the human. Reading code,
@@ -53,6 +56,43 @@ directory), every command below is `bun run flock ...` instead. Always act as a 
    The board's own page is that base plus `#/b/<slug>`, with the slug from
    `flock board show --json`. Say it here as one line — `Board: <url>/#/b/<slug>` — and say it
    again whenever the human asks where the board is, or when a resumed session starts up.
+
+## Invoked with no goal
+
+`/flock` with nothing after it is a deliberate mode, not a missing argument: the human wants the
+board live and you listening, and will kick the work off from the web UI's channel. Never ask them
+what the goal is — asking defeats the point of the mode.
+
+Do steps 1, 2, 4, 5 and 6 of Start, and **skip step 3 entirely**: create no cards. In step 1,
+`flock init` with no title takes the directory name, which is the right board name here. In step 2
+the brief has no destination yet, so write it as:
+
+```md
+Conducted run: re-read ~/.claude/skills/flock/SKILL.md before continuing.
+
+## Destination
+Not set yet. Awaiting the human's first instruction in the channel.
+
+## Notes
+<conventions and constraints you can already read off the repo>
+
+## Out of scope
+<nothing yet>
+```
+
+The `## Notes` section is worth filling in now even with no goal — repo conventions, the test and
+build commands, anything in `CLAUDE.md` a delegation would need — so the first delegation is not
+starting from nothing. Step 5's channel post says you are standing by rather than announcing a plan:
+`flock say "Conductor online, no goal yet. Post here to start the run."`
+
+Then stop and hold. Say one line here — the board URL and that you are waiting on the channel — and
+make no delegations, no cards, no research. The listener is the only thing running.
+
+The first human write is the goal. When it arrives, do Start over from step 2 with the goal in hand:
+rewrite the brief's `## Destination` and `## Out of scope`, break the work into cards (Start step 3),
+`flock say` the plan back, and run the normal cadence. A `card.created` rather than a
+`message.posted` is the same trigger: the human wrote the first card themselves, so plan around it
+instead of replacing it.
 
 ## Listen to the board
 
@@ -172,6 +212,11 @@ Loop until the destination is reached: `flock board show --json`, decide the nex
 delegations, state the routing to the human in one line (here and in the channel), fire, review
 the results, close or reopen cards, `flock decide`, decide again. Between fires the listener
 drives you; a board event is a turn.
+
+An empty board is a valid resting state, not a problem to solve. With no open cards and no goal —
+the bare-invocation mode, or a run whose cards are all closed — post the state to the channel in one
+line and wait on the listener. Do not invent work, propose next steps unprompted, or delegate a
+survey to have something in flight.
 
 Judgment stays home. You accept or reject agent work yourself and never pass it to the human
 unreviewed; a rejected card goes back to `todo` with a comment saying why. Talk to the human at
