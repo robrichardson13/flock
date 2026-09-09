@@ -14,3 +14,13 @@ import { DB_DIRNAME } from "@flock/core";
 export function flockHome(): string {
   return process.env.FLOCK_HOME ? resolve(process.env.FLOCK_HOME) : join(homedir(), DB_DIRNAME);
 }
+
+/**
+ * `~/.flock/skill.md` (`$FLOCK_HOME/skill.md` when set): the user's standing personalization of
+ * the flock skill (see ADR 0014). Optional, and flock never writes or reads it itself — the skill
+ * text tells the conductor to read it at run start. This function only computes the path so
+ * `flock setup` can report whether it exists.
+ */
+export function personalizationPath(): string {
+  return join(flockHome(), "skill.md");
+}
