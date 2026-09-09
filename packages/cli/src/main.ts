@@ -51,6 +51,8 @@ SETUP
   setup [--no-start] [--skill-only]   Write ~/.claude/skills/flock/SKILL.md, then \`flock up\`
                                       (a symlinked destination is left alone). --skill-only
                                       does just the skill; --no-start skips starting the daemon.
+                                      Reports ~/.flock/skill.md (your personalization of the
+                                      skill, see docs/config.md) when it exists; silent when not.
   up [--port N] [--host H] [--isolated | --db PATH] [--foreground] [--open]
                                       Start the daemon in the background (detached; survives the
                                       terminal). In a checkout it starts the dev environment

@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:tes
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { personalizationPath } from "./paths.ts";
 import { skillPath, version } from "./runtime.ts";
 import { claudeSkillsDir, setupCommand, skillDestPath, skillJsonPath, writeSkill } from "./setup.ts";
 
@@ -165,5 +166,38 @@ describe("setupCommand", () => {
     await setupCommand({ json: false, noStart: true });
 
     expect(readFileSync(rc, "utf8")).toBe("# untouched\n");
+  });
+
+  // ADR 0014: `flock setup` reports the personalization file when present, and stays silent
+  // (in human-readable output) when it is absent; --json always carries the path.
+  test("reports skill personalization only when the file exists", async () => {
+    useScratchHome();
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg?: unknown) => {
+      logs.push(String(msg));
+    };
+    try {
+      await setupCommand({ json: false, skillOnly: true });
+      expect(logs.some((l) => l.includes("skill personalization:"))).toBe(false);
+
+      logs.length = 0;
+      const path = personalizationPath();
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, "## Routing\nRoute anything Codex-shaped to codex.\n");
+
+      await setupCommand({ json: false, skillOnly: true });
+      expect(logs.some((l) => l.includes(`skill personalization: ${path}`))).toBe(true);
+
+      logs.length = 0;
+      await setupCommand({ json: true, skillOnly: true });
+      const jsonLine = logs.find((l) => l.startsWith("{"));
+      expect(jsonLine).toBeDefined();
+      const parsed = JSON.parse(jsonLine!);
+      expect(parsed.personalization).toBe(path);
+      expect(parsed.hasPersonalization).toBe(true);
+    } finally {
+      console.log = originalLog;
+    }
   });
 });

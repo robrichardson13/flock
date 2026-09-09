@@ -19,6 +19,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { flockHome } from "./daemon.ts";
 import { ensurePathConfigured, isNoModifyPath, type EnsurePathResult } from "./path-setup.ts";
+import { personalizationPath } from "./paths.ts";
 import { isStandalone, skillPath, version } from "./runtime.ts";
 
 export interface SetupOptions {
@@ -170,12 +171,27 @@ export async function setupCommand(opts: SetupOptions): Promise<void> {
         });
   if (path) reportPath(path, dir, opts.json);
 
+  const personalization = personalizationPath();
+  const hasPersonalization = existsSync(personalization);
+
   if (opts.json) {
-    console.log(JSON.stringify({ skill: skill.action, dest: skill.dest, path: path?.action }));
+    console.log(
+      JSON.stringify({
+        skill: skill.action,
+        dest: skill.dest,
+        path: path?.action,
+        personalization,
+        hasPersonalization,
+      }),
+    );
   } else if (skill.action === "up-to-date") {
     console.log(`skill up to date: ${skill.dest}`);
   } else if (skill.action === "written") {
     console.log(`wrote skill: ${skill.dest}`);
+  }
+  // Silent when absent — most users don't have one, and this line only matters to the ones who do.
+  if (!opts.json && hasPersonalization) {
+    console.log(`skill personalization: ${personalization}`);
   }
 
   if (opts.skillOnly || opts.noStart) return;

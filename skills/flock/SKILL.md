@@ -1,6 +1,6 @@
 ---
 name: flock
-version: 1.0.0
+version: 1.1.0
 description: >-
   USER-INVOCABLE ONLY. `/flock [goal]` turns this session into the conductor of a long
   effort: the plan and decisions live on this directory's flock board, every heavy step runs
@@ -39,16 +39,23 @@ directory), every command below is `bun run flock ...` instead. Always act as a 
 1. `flock board show --json`. No board for this directory: `flock init "<goal>"`. A board with
    cards: this is a resumed run. Read the brief, the decisions, and the open cards, then
    continue as if nothing happened.
-2. Write the brief with `flock board edit --body-file -`. First line:
-   `Conducted run: re-read ~/.claude/skills/flock/SKILL.md before continuing.` Then
+2. Read `~/.flock/skill.md` if it exists (`$FLOCK_HOME/skill.md` when `FLOCK_HOME` is set). That
+   file is this human's standing personalization of this skill: routing preferences, models
+   beyond the four below and how to invoke them, house conventions. It supplements what you are
+   reading now, and wherever the two conflict, it wins. Most users do not have one; if it is not
+   there, carry on without comment. Precedence, highest last: this skill, `~/.flock/skill.md`,
+   the board's brief and decisions, what the human says now.
+3. Write the brief with `flock board edit --body-file -`. First line:
+   `Conducted run: re-read ~/.claude/skills/flock/SKILL.md and ~/.flock/skill.md (if present)
+   before continuing.` Then
    `## Destination` (the goal in one or two lines), `## Notes` (constraints, conventions,
    standing routing preferences), `## Out of scope`.
-3. Break the goal into cards, one per delegation, blockers declared:
+4. Break the goal into cards, one per delegation, blockers declared:
    `flock card new "<title>" --body "..." --blocked-by n,m`. Acceptance criteria go in the
    body as a checklist. `flock cards --frontier` is what can run now.
-4. Arm the listener (next section) before the first delegation.
-5. `flock say "Conductor online: <one-line plan>"` so the channel shows the human the run has started.
-6. Give the human the board's URL before you delegate anything, so they can watch the run in the
+5. Arm the listener (next section) before the first delegation.
+6. `flock say "Conductor online: <one-line plan>"` so the channel shows the human the run has started.
+7. Give the human the board's URL before you delegate anything, so they can watch the run in the
    web UI rather than the terminal. `flock up` is idempotent and prints the URL (it reports
    "already running" when the daemon is already up), so run it and take the first line of
    `flock url` as the base — it is the right one for an installed binary and for a checkout's
@@ -63,12 +70,13 @@ directory), every command below is `bun run flock ...` instead. Always act as a 
 board live and you listening, and will kick the work off from the web UI's channel. Never ask them
 what the goal is — asking defeats the point of the mode.
 
-Do steps 1, 2, 4, 5 and 6 of Start, and **skip step 3 entirely**: create no cards. In step 1,
-`flock init` with no title takes the directory name, which is the right board name here. In step 2
+Do steps 1, 2, 3, 5, 6 and 7 of Start, and **skip step 4 entirely**: create no cards. In step 1,
+`flock init` with no title takes the directory name, which is the right board name here. In step 3
 the brief has no destination yet, so write it as:
 
 ```md
-Conducted run: re-read ~/.claude/skills/flock/SKILL.md before continuing.
+Conducted run: re-read ~/.claude/skills/flock/SKILL.md and ~/.flock/skill.md (if present) before
+continuing.
 
 ## Destination
 Not set yet. Awaiting the human's first instruction in the channel.
@@ -82,14 +90,14 @@ Not set yet. Awaiting the human's first instruction in the channel.
 
 The `## Notes` section is worth filling in now even with no goal — repo conventions, the test and
 build commands, anything in `CLAUDE.md` a delegation would need — so the first delegation is not
-starting from nothing. Step 5's channel post says you are standing by rather than announcing a plan:
+starting from nothing. Step 6's channel post says you are standing by rather than announcing a plan:
 `flock say "Conductor online, no goal yet. Post here to start the run."`
 
 Then stop and hold. Say one line here — the board URL and that you are waiting on the channel — and
 make no delegations, no cards, no research. The listener is the only thing running.
 
-The first human write is the goal. When it arrives, do Start over from step 2 with the goal in hand:
-rewrite the brief's `## Destination` and `## Out of scope`, break the work into cards (Start step 3),
+The first human write is the goal. When it arrives, do Start over from step 3 with the goal in hand:
+rewrite the brief's `## Destination` and `## Out of scope`, break the work into cards (Start step 4),
 `flock say` the plan back, and run the normal cadence. A `card.created` rather than a
 `message.posted` is the same trigger: the human wrote the first card themselves, so plan around it
 instead of replacing it.
@@ -163,7 +171,8 @@ The card keeps it.
 
 ### Routing
 
-Model, decided per delegation by the nature of the task:
+Model, decided per delegation by the nature of the task. These four are what flock ships;
+`~/.flock/skill.md` may add other models (e.g. Codex as a subagent) or re-rank these:
 
 - **sonnet** is the default. Everyday coding, multi-file reasoning, agentic tool use, run-and-report,
   first-pass review, and any implementation you can specify. Most delegations should land here.
