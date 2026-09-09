@@ -42,6 +42,7 @@ import {
   useNewIds,
   usePaneGrowth,
   useScrollCollapse,
+  useScrollRestore,
   useStickToBottom,
   type ItemId,
 } from "./live.ts";
@@ -51,6 +52,7 @@ import { failPending, LineComposer, mergeThread, nextTempId, resolvePending, Thr
 import { ActivitySkeleton, BoardSideSkeleton, CardPageSkeleton, CardsSkeleton, KanbanSkeleton, Line } from "./Skeleton.tsx";
 import { ActorSheet } from "./ActorView.tsx";
 import { clearSnapshot, readSnapshot, snapKey, writeSnapshot } from "./snapshot.ts";
+import { forgetView, readScroll, rememberedTab, rememberScroll, rememberTab } from "./viewstate.ts";
 import { useTopBarSlot } from "./TopBar.tsx";
 import { Avatar, D_BASE, D_SLOW, EMPTY_TEXT, Icons, prefersReducedMotion, RuntimeTag, Sheet, setEdgeSwipePeek, skipNextPushAnimation, STATUS_LABEL, StatusPill, TeamSheet, TeamStack, useAnyOverlayOpen, useEdgeSwipeBack, useIsMobile, Menu } from "./ui.tsx";
 
@@ -147,6 +149,29 @@ export function displayTabWhileClosing(tab: BoardTab, cardClosing: boolean, last
   return cardClosing || actorOpen ? lastTab : tab;
 }
 
+/**
+ * The mobile Cards tab's own scroll container, restoring and remembering its position
+ * (ADR 0013). A genuine component, not inlined, so `useScrollRestore` mounts and unmounts
+ * with the pane itself — the `.tab-pane` it lives under is keyed on the tab, so switching
+ * away and back is a real remount, which is what a mount-only restore needs to fire again.
+ * `listRef` is the existing anchor/FLIP callback ref this container already wore; merged
+ * here rather than replaced, so a card landing above the reader still holds their place.
+ */
+function CardsScrollBody({ boardSlug, listRef, children }: { boardSlug: string; listRef: (el: HTMLElement | null) => void; children: ReactNode }) {
+  // Read once per board, not once per render: only the mount effect inside the hook ever
+  // uses it, and a coalesced refetch re-renders this pane freely.
+  const restored = useMemo(() => readScroll(boardSlug, "cards"), [boardSlug]);
+  const restoreRef = useScrollRestore<HTMLDivElement>(restored, (y) => rememberScroll(boardSlug, "cards", y));
+  const combinedRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      listRef(el);
+      (restoreRef as { current: HTMLDivElement | null }).current = el;
+    },
+    [listRef, restoreRef],
+  );
+  return <div className="screen-body" ref={combinedRef}>{children}</div>;
+}
+
 export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, boards = [], needs = [], actor = "", onNewBoard = () => {}, onRename = () => {} }: { boardRef: string; cardNum?: number; actorName?: string; tab: BoardTab; onBoardsChanged: () => void;
   /** Desktop shell (P1.3): the top bar carries the boards switcher and who you are, so the
       board page needs what the sidebar used to be handed. Unused by the mobile branch. */
@@ -206,6 +231,10 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
       // 404 is the server saying the cache is wrong: drop it and let the error through.
       if (e instanceof ApiError && e.status === 404) {
         clearSnapshot(snapKey.board(boardRef));
+        // Same reasoning for the remembered tab and offsets: ADR 0013 assumed a dead board's
+        // record was inert, but `entryRedirect` reads it, so `#/b/<gone>` would keep
+        // redirecting and a slug reused later would inherit the dead board's positions.
+        forgetView(boardRef);
         setSnap(null);
       }
       setErr((e as Error).message);
@@ -515,10 +544,18 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
   // route has the same shape (`#/b/<slug>/a/<name>` carries no tab either), so it is guarded
   // the same way — otherwise the forced "cards" the route reports while an actor is open
   // would overwrite the tab it needs to be restored to underneath.
-  const lastTab = useRef<BoardTab>(tab);
+  // A cold mount straight onto a card or actor route carries no tab of its own (the URL has
+  // no room for it) and the route reports "cards" only as a placeholder, so there is no real
+  // last tab to fall back to yet — seed it from what was remembered instead (ADR 0013). A
+  // board already mounted and merely navigating to a card keeps whatever this ref already
+  // holds; the expression below only ever matters on the very first render.
+  const lastTab = useRef<BoardTab>((cardNum !== undefined || actorName) ? (rememberedTab(boardRef) ?? tab) : tab);
   useEffect(() => {
-    if (!cardNum && !actorName) lastTab.current = tab;
-  }, [tab, cardNum, actorName]);
+    if (!cardNum && !actorName) {
+      lastTab.current = tab;
+      rememberTab(boardRef, tab);
+    }
+  }, [tab, cardNum, actorName, boardRef]);
 
   // The actor view is a route of its own (#49), so it replaces whatever was on screen rather
   // than stacking on it. Closing it must therefore put back what it covered — the card page
@@ -735,7 +772,7 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
                   tab now names the board there, Cards included, and the bar's own team stack
                   replaces the trailing "+" on this one tab (`useTopBarSlot` above, TopBar.tsx).
                   Nothing left to draw here — the body starts straight at the sections. */}
-              <div className="screen-body" ref={listRef}>
+              <CardsScrollBody boardSlug={b.slug} listRef={listRef}>
                 {SECTIONS.map((status) => {
                   // Won't-fix lives inside Done, interleaved by close time: it is finished work either way.
                   // Done (and the wontfix cards folded into it) is ordered newest-closed-first.
@@ -771,7 +808,7 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
                     </Section>
                   );
                 })}
-              </div>
+              </CardsScrollBody>
             </>
           )}
           {displayTab === "channel" && <Channel boardId={b.id} snap={snap} onSent={refresh} />}
@@ -1553,7 +1590,14 @@ function NewPill({ count, onClick }: { count: number; onClick: () => void }) {
 function Channel({ boardId, snap, onSent }: { boardId: string; snap: Snapshot; onSent: () => void }) {
   const [pendingSends, setPendingSends] = useState<PendingSend<Message>[]>([]);
   const messages = mergeThread(snap.messages, pendingSends);
-  const { ref, onScroll, pending, toBottom, stick } = useStickToBottom<HTMLDivElement>(messages.map((m) => m.id));
+  // A remembered position that left the reader pinned to the bottom restores nothing — the
+  // hook's own bottom-pin already gives the same "where I left off" for a live log — so only
+  // a `bottom: false` position is ever handed in as `restoreTop` (ADR 0013).
+  const restored = useMemo(() => readScroll(snap.board.slug, "channel"), [snap.board.slug]);
+  const { ref, onScroll, pending, toBottom, stick } = useStickToBottom<HTMLDivElement>(messages.map((m) => m.id), {
+    restoreTop: restored && !restored.bottom ? restored.y : null,
+    onExit: (pos) => rememberScroll(snap.board.slug, "channel", pos),
+  });
   const mobile = useIsMobile();
   // The `.pane` ancestor `--composer-h` is already published onto (thread.tsx's
   // LineComposer) — `useScrollCollapse` writes its own continuous `--composer-collapse`
@@ -1643,7 +1687,11 @@ const ACTIVITY_EMPTY_TEXT = "No activity yet. Claims, comments and closes land h
  */
 function Activity({ events: loaded, boardSlug, cards, desktop }: { events: Event[] | null; boardSlug: string; cards: Card[]; desktop?: boolean }) {
   const events = loaded ?? [];
-  const { ref, onScroll, pending, toBottom } = useStickToBottom<HTMLDivElement>(events.map((e) => e.seq));
+  const restored = useMemo(() => readScroll(boardSlug, "activity"), [boardSlug]);
+  const { ref, onScroll, pending, toBottom } = useStickToBottom<HTMLDivElement>(events.map((e) => e.seq), {
+    restoreTop: restored && !restored.bottom ? restored.y : null,
+    onExit: (pos) => rememberScroll(boardSlug, "activity", pos),
+  });
   const newIds = useNewIds(events.map((e) => e.seq), loaded !== null);
   // No mount entrance, same as Channel above (#5, reworked): bottom-pinned, so a stagger
   // delayed exactly the rows the reader was looking at.
@@ -1701,6 +1749,16 @@ function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap:
   const paneRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollCollapse = useScrollCollapse(scrollRef, mobile, paneRef);
+  // Top-anchored, same as Cards: restored and remembered directly, no bottom pin to defer to.
+  const restored = useMemo(() => readScroll(snap.board.slug, "decisions"), [snap.board.slug]);
+  const restoreRef = useScrollRestore<HTMLDivElement>(restored, (y) => rememberScroll(snap.board.slug, "decisions", y));
+  const combinedScrollRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      (scrollRef as { current: HTMLDivElement | null }).current = el;
+      (restoreRef as { current: HTMLDivElement | null }).current = el;
+    },
+    [scrollRef, restoreRef],
+  );
   // `newIds` comes from BoardView's own top-level baseline (arrivals over SSE), and that is
   // now the only thing that animates here: the mount entrance went with Channel's and
   // Activity's (#5, reworked), leaving the pane crossfade to carry the list in.
@@ -1708,7 +1766,7 @@ function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap:
   const orders = enterOrders(snap.decisions.map((d) => d.id), entrants);
   return (
     <div className="pane" ref={paneRef}>
-      <div className="pane-scroll" ref={scrollRef} onScroll={scrollCollapse.onScroll}>
+      <div className="pane-scroll" ref={combinedScrollRef} onScroll={scrollCollapse.onScroll}>
         {snap.decisions.length === 0 && <div className="muted pad">{EMPTY_TEXT}</div>}
         {snap.decisions.map((d) => (
           <div key={d.id} className={`decision${enterClass(entrants.has(d.id))}`} style={enterDelay(orders.get(d.id))}>

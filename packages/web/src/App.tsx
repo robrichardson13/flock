@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, getActorName, setActorName, streamPath, type BoardSummary, type NeedsHuman } from "./api.ts";
 import { BoardView, type BoardTab } from "./BoardView.tsx";
 import { BoardRow } from "./BoardRow.tsx";
 import { groupBoardsByActivity } from "./boardActivity.ts";
 import { HomeSkeleton, Line } from "./Skeleton.tsx";
 import { readSnapshot, snapKey, writeSnapshot } from "./snapshot.ts";
+import { entryRedirect, rememberedTab } from "./viewstate.ts";
 import { Brand } from "./Mark.tsx";
 import { AppTopBar } from "./shell.tsx";
 import { NeedsYou } from "./NeedsYou.tsx";
@@ -16,12 +17,36 @@ import { readoutRequested } from "./vv.ts";
 import { VVReadout } from "./VVReadout.tsx";
 import { ActorLinks, Avatar, Icons, OverlayProvider, PromptProvider, PushStack, useEdgeSwipePeek, useIsMobile, usePrompt } from "./ui.tsx";
 
+/**
+ * Reads the hash and remembers which board was last resolved from it, so that only
+ * *entering* a board — the slug differing from the one last rendered — can rewrite the hash
+ * to a remembered tab (ADR 0013). Without that gate, an in-board tap on Cards (which writes
+ * the bare `#/b/<slug>` route too, `paneHref`) would read as a fresh entry and bounce the
+ * reader straight back to whatever tab they just left. `entryRedirect` is the single pure
+ * check that decides this; `history.replaceState` — never `location.hash =` — edits the
+ * current history entry in place rather than pushing one, so Back still leaves a restored
+ * board straight to the boards list, exactly as it does today.
+ */
 function useHash() {
-  const [hash, setHash] = useState(() => window.location.hash);
+  // undefined, not the initial hash's own board: the very first render has no "previous
+  // board" either, and a cold load straight onto a board is exactly the entry a redirect
+  // has to fire for.
+  const prevBoard = useRef<string | undefined>(undefined);
+  const resolve = (h: string): string => {
+    const target = entryRedirect(h, prevBoard.current, rememberedTab);
+    const next = target ?? h;
+    prevBoard.current = parseRoute(next).board;
+    if (target) {
+      try { window.history.replaceState(null, "", target); } catch { /* nothing to do */ }
+    }
+    return next;
+  };
+  const [hash, setHash] = useState(() => resolve(window.location.hash));
   useEffect(() => {
-    const on = () => setHash(window.location.hash);
+    const on = () => setHash(resolve(window.location.hash));
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return hash;
 }

@@ -797,6 +797,89 @@ export function isSelfScroll(args: { expected: number; scrollTop: number }): boo
   return args.expected >= 0 && args.scrollTop === args.expected;
 }
 
+/* ---------- a clamped restore's settling window ---------- */
+
+/** A restore's settling window: how long a clamped restore keeps re-applying itself as
+ *  content grows underneath it before giving up (ADR 0013). */
+const RESTORE_WINDOW_MS = 1000;
+
+/**
+ * Hold a scroll container at a remembered offset `y` while its content is still settling,
+ * and let go at the first of: the clamp reaching `y`, a scroll the restore did not itself
+ * cause, or `windowMs` elapsing. Returns the disposer for whichever of those has not
+ * happened yet.
+ *
+ * The clamp (`min(y, scrollHeight - clientHeight)`) is what makes a shrunk pane need no
+ * special case; the window is what makes a pane that mounts against the cached `flock.snap`
+ * frame, or with late-sizing images, still land on `y` once the real content arrives.
+ *
+ * Shared by both scroll surfaces on purpose. The top-anchored ones (Cards, Decisions) reach
+ * it through `useScrollRestore`; the bottom-anchored ones (Channel, Activity) reach it from
+ * inside `useStickToBottom`, which owns their `stuck` state. `useStickToBottom`'s own growth
+ * observer cannot stand in for this: `shouldRepin` is gated on `stuck`, which a restore has
+ * just set false by design, so without this the bottom-anchored restore was a bare clamp
+ * that stayed wherever the first frame's height put it.
+ */
+export interface RestoreWindow {
+  /** End the window immediately (no further re-applies) without asserting how far it got. */
+  release: () => void;
+  /** Whether the window closed on its own — reached `y`, a foreign scroll, or the timeout —
+   *  as opposed to being cut short by `release`. A caller writing the pane's position out
+   *  needs this: while `false`, `el.scrollTop` is still the short clamp from a not-yet-grown
+   *  pane, not the offset that was actually remembered, and writing it would overwrite a good
+   *  stored offset with a worse one (ADR 0013). */
+  settled: () => boolean;
+}
+
+export function settleRestore(el: HTMLElement, y: number, windowMs = RESTORE_WINDOW_MS): RestoreWindow {
+  let done = false;
+  let applying = false;
+  let raf = 0;
+  let timer = 0;
+  let ro: ResizeObserver | null = null;
+
+  function onScroll() {
+    // Our own assignment's echo, not the reader moving: `apply` sets `applying` right before
+    // it, and this fires — asynchronously — before the next frame clears it.
+    if (applying) return;
+    finish();
+  }
+  function finish() {
+    if (done) return;
+    done = true;
+    if (raf) cancelAnimationFrame(raf);
+    window.clearTimeout(timer);
+    ro?.disconnect();
+    el.removeEventListener("scroll", onScroll);
+  }
+  function apply() {
+    if (done) return;
+    const target = Math.min(y, Math.max(0, el.scrollHeight - el.clientHeight));
+    if (Math.abs(el.scrollTop - target) > 0.5) {
+      applying = true;
+      // One frame in flight at a time: an earlier frame clearing `applying` from under a
+      // later assignment would let that assignment's own echo read as a reader scroll and
+      // close the window early.
+      if (raf) cancelAnimationFrame(raf);
+      el.scrollTop = target;
+      raf = requestAnimationFrame(() => { applying = false; raf = 0; });
+    }
+    if (target >= y - 0.5) finish();
+  }
+
+  apply();
+  const handle: RestoreWindow = { release: finish, settled: () => done };
+  if (done) return handle;
+  el.addEventListener("scroll", onScroll);
+  if (typeof ResizeObserver !== "undefined") {
+    ro = new ResizeObserver(() => apply());
+    ro.observe(el);
+    for (const child of Array.from(el.children)) ro.observe(child);
+  }
+  timer = window.setTimeout(finish, windowMs);
+  return handle;
+}
+
 export interface StickToBottom<T extends HTMLElement> {
   ref: RefObject<T>;
   onScroll: () => void;
@@ -816,6 +899,25 @@ export interface StickToBottom<T extends HTMLElement> {
   atBottom: RefObject<boolean>;
 }
 
+export interface StickToBottomOptions {
+  slack?: number;
+  /**
+   * A remembered offset to restore instead of pinning to the bottom on mount, or
+   * `null`/`undefined` for the ordinary "start at the bottom" behaviour (ADR 0013). The hook
+   * owns `stuck`, so a restore has to happen here rather than beside it — applied on the
+   * very first layout effect, before anything pins to the bottom, and it starts the reader
+   * unstuck so the "N new" pill behaves exactly as if they had scrolled up by hand.
+   */
+  restoreTop?: number | null;
+  /**
+   * Called with the pane's current `{ y, bottom }` on unmount, and on `pagehide` /
+   * `visibilitychange` turning hidden (a reload or app switch, neither of which unmounts).
+   * Never called from a scroll handler. `bottom` is this hook's own notion of "at the
+   * bottom" at that moment, so a reader who was pinned restores to the pin, not a stale y.
+   */
+  onExit?: (pos: { y: number; bottom: boolean }) => void;
+}
+
 /**
  * Keep a transcript pane pinned to the bottom only while the reader is already there.
  * Otherwise hold their position and count what arrived, so the caller can offer a
@@ -829,7 +931,8 @@ export interface StickToBottom<T extends HTMLElement> {
  * already stale by the time it lands. Only the explicit "N new" tap animates, and that
  * one suppresses the handler until it settles and then lands on the real bottom.
  */
-export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], slack = BOTTOM_SLACK_PX): StickToBottom<T> {
+export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], options: StickToBottomOptions = {}): StickToBottom<T> {
+  const { slack = BOTTOM_SLACK_PX, restoreTop, onExit } = options;
   const ref = useRef<T>(null);
   const stuck = useRef(true);
   const first = useRef(true);
@@ -840,6 +943,13 @@ export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], 
   // The scrollTop of the last pin we performed ourselves, or -1 once its echo is consumed.
   const selfScroll = useRef(-1);
   const [pending, setPending] = useState(0);
+  // Consumed on the first layout effect only; a later id-driven run must not re-restore.
+  const restoreDone = useRef(false);
+  // The in-flight settling window, so the exit-writer can tell a short mid-settle clamp from
+  // the offset that was actually reached (ADR 0013).
+  const restoreWindow = useRef<RestoreWindow | null>(null);
+  const onExitRef = useRef(onExit);
+  onExitRef.current = onExit;
 
   /** Pin to the bottom and remember where we landed, so the echoing scroll event is known. */
   const pinToBottom = useCallback((el: HTMLElement) => {
@@ -886,6 +996,56 @@ export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], 
     return () => {
       window.clearTimeout(settleTimer.current);
       resizeObserver.current?.disconnect();
+      // Refs outlive StrictMode's throwaway first mount, so a consumed `restoreDone` would
+      // make the real mount skip the restore entirely. Clearing it here re-arms it.
+      restoreDone.current = false;
+    };
+  }, []);
+
+  // Write the pane's position out on the two moments that can end this mount without
+  // running React's own unmount cleanup — `pagehide` (navigating away, closing the tab) and
+  // the tab being backgrounded (`visibilitychange` -> hidden), covering a reload or an app
+  // switch — plus the unmount cleanup itself (a tab switch, leaving the board, opening a
+  // card from the channel). Never on scroll: the offset is worth remembering only once the
+  // reader is done moving.
+  //
+  // A *layout* effect, and not negotiable (ADR 0013: "the cleanup of the same layout
+  // effect"). React 18 runs a deleted subtree's layout destroys in the mutation phase,
+  // before it detaches host refs, but defers its passive destroys until after the mutation
+  // phase has already run `ref.current = null`. As a passive effect this cleanup saw a null
+  // ref and wrote nothing on every unmount — so the channel and activity offsets were only
+  // ever written by `pagehide`, and one backgrounding while scrolled up left a permanent
+  // `bottom: false` offset that yanked the reader up on every later visit. `live.dom.test.tsx`
+  // mounts and unmounts the hook for real and asserts the write, which is what makes the
+  // difference between the two visible to `bun test`.
+  //
+  // The settling window's release lives in this same effect's cleanup, not a neighbouring
+  // passive one — on purpose, and for the same reason the writer itself is a layout effect.
+  // A passive cleanup here would run after this one, once `ref.current` is already null, so
+  // the window would outlive the write it needs to gate: `write` would read a still-settling
+  // `el.scrollTop` (the short clamp) and overwrite a good stored offset with it. Keeping both
+  // in one layout-effect cleanup, write before release, closes that gap the same way the
+  // blocker fix closed the ref-null one.
+  useLayoutEffect(() => {
+    const write = () => {
+      const el = ref.current;
+      if (!el || !onExitRef.current) return;
+      // Mid-settle: `el.scrollTop` is still the short clamp from a not-yet-grown pane, not
+      // the offset that was actually remembered. Skip the write rather than overwrite a good
+      // stored offset with a worse one; the settling window's own outcome (or a later exit)
+      // writes the right value later.
+      if (restoreWindow.current && !restoreWindow.current.settled()) return;
+      onExitRef.current({ y: el.scrollTop, bottom: stuck.current });
+    };
+    const onVisibility = () => { if (document.visibilityState === "hidden") write(); };
+    window.addEventListener("pagehide", write);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", write);
+      document.removeEventListener("visibilitychange", onVisibility);
+      write();
+      restoreWindow.current?.release();
+      restoreWindow.current = null;
     };
   }, []);
 
@@ -923,6 +1083,23 @@ export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], 
     }
 
     if (animating.current) return; // The settle handler will land on the true bottom.
+
+    // A remembered offset, applied once: takes over the very first pin decision instead of
+    // pinning to the bottom, and leaves the reader unstuck so arrivals count into `pending`
+    // exactly as if they had scrolled up by hand (ADR 0013).
+    if (!restoreDone.current) {
+      restoreDone.current = true;
+      if (restoreTop != null) {
+        stuck.current = false;
+        first.current = false;
+        // `settleRestore` applies the clamped offset immediately and then holds it against a
+        // growing pane for `RESTORE_WINDOW_MS`. The hook's own growth observer cannot do
+        // this job: `repinOnGrow` is gated on `stuck`, which this restore has just set false.
+        restoreWindow.current = settleRestore(el, restoreTop);
+        return;
+      }
+    }
+
     if (stuck.current) {
       pinToBottom(el);
       first.current = false;
@@ -957,6 +1134,61 @@ export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], 
   }, [pinToBottom]);
 
   return { ref, onScroll, pending, toBottom, stick, atBottom: stuck };
+}
+
+/* ---------- restore a top-anchored pane's scroll position ---------- */
+
+/**
+ * Restore a top-anchored scroll container (Cards, Decisions) to a remembered offset on
+ * mount, and write the offset back out on unmount and on `pagehide` / `visibilitychange`
+ * turning hidden. The channel and activity panes are bottom-anchored instead and get the
+ * matching option on `useStickToBottom`, which owns their `stuck` state; this is their
+ * top-anchored counterpart, with no pin to fight.
+ *
+ * Restore is a clamped one-shot with a short settling window: applied before paint
+ * (`useLayoutEffect`), then re-applied as a `ResizeObserver` reports growth, until the
+ * remembered offset is reached, a scroll the restore did not itself cause arrives, or
+ * `RESTORE_WINDOW_MS` passes — whichever comes first. That is what makes a coalesced
+ * snapshot refetch safe rather than something to defend against: it replaces content
+ * without unmounting this container, so no restore is attempted (the window already
+ * closed). Only a mount restores. Content that shrank below `y`, or now fits without
+ * scrolling at all, needs no special case — the clamp simply lands at the new maximum.
+ */
+export function useScrollRestore<T extends HTMLElement>(y: number | undefined, onExit: (y: number) => void): RefObject<T> {
+  const ref = useRef<T>(null);
+  const onExitRef = useRef(onExit);
+  onExitRef.current = onExit;
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // The settling window, shared with `useStickToBottom`'s restore. Applied here rather
+    // than beside the write-out so it runs before paint, with no visible jump.
+    const restoreWindow = y !== undefined && y > 0 ? settleRestore(el, y) : null;
+
+    const write = () => {
+      // Mid-settle: `el.scrollTop` is still the short clamp from a not-yet-grown pane, not
+      // the offset that was actually remembered. Skip the write rather than overwrite a good
+      // stored offset with a worse one (ADR 0013), symmetric with `useStickToBottom`.
+      if (restoreWindow && !restoreWindow.settled()) return;
+      onExitRef.current(el.scrollTop);
+    };
+    const onVisibility = () => { if (document.visibilityState === "hidden") write(); };
+    window.addEventListener("pagehide", write);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      window.removeEventListener("pagehide", write);
+      document.removeEventListener("visibilitychange", onVisibility);
+      // Write before releasing the window, so `write` can still see whether it had settled.
+      write();
+      restoreWindow?.release();
+    };
+    // Mount-only: `y` is the offset this container opened with, not a live prop to track.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return ref;
 }
 
 /* ---------- minimize the composer while scrolling toward older content ---------- */
