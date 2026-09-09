@@ -301,9 +301,10 @@ export function splitMessageBlocks(text: string): MessageBlock[] {
 
 /**
  * Channel messages, comments, resolutions, asks, answers, and decision gists: **message
- * mode**. No headings, no paragraph wrapping, every newline preserved. Bullet lines still
- * become a `<ul>` and fenced code still works (agents paste commands into the channel),
- * everything else is inline nodes in document order. Task items render read-only: there
+ * mode**. No paragraph wrapping, every newline preserved. Bullet lines still become a
+ * `<ul>`, `#` lines a heading, `> ` lines a `<blockquote>`, and fenced code still works
+ * (agents paste commands into the channel); everything else is inline nodes in document
+ * order. Task items render read-only: there
  * is no toggle target for a checkbox typed into a message.
  */
 export function MessageBody({ text }: { text: string }) {
