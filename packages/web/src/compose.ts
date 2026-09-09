@@ -254,3 +254,44 @@ export function shouldSendOnEnter(e: {
   if (e.metaKey || e.ctrlKey) return true;
   return enterSends && !e.shiftKey;
 }
+
+/* ---------- insertion hand-off: add-to-chat quoting a message into a composer ---------- */
+
+type InsertListener = (text: string) => void;
+
+/**
+ * How "Add to chat" hands a formatted quote to a composer it has no reference to. A
+ * `LineComposer` owns its text in local React `useState`, seeded from the draft store only
+ * at mount with no ongoing subscription (see the draft store above), so writing the draft
+ * store from outside does nothing to one already on screen. This is a second, narrower
+ * channel for exactly that hand-off: fire-and-forget, one notification per request, never a
+ * queue. Nothing accumulates for a key with no listener — add-to-chat is only ever offered
+ * while its composer is mounted and enabled, so a request that arrives with nobody
+ * subscribed is simply not wanted by anything and is dropped rather than saved for later.
+ */
+const insertListeners = new Map<string, Set<InsertListener>>();
+
+/** Ask whichever composer is listening at `key` to insert `text` at its caret. */
+export function requestInsert(key: string, text: string): void {
+  for (const fn of insertListeners.get(key) ?? []) fn(text);
+}
+
+/** Listen for insertion requests at `key`. Returns an unsubscribe; a composer calls it on
+ *  unmount so a stale listener never fires into a component that is gone. */
+export function subscribeInsert(key: string, fn: InsertListener): () => void {
+  let listeners = insertListeners.get(key);
+  if (!listeners) {
+    listeners = new Set();
+    insertListeners.set(key, listeners);
+  }
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+    if (listeners.size === 0) insertListeners.delete(key);
+  };
+}
+
+/** Test seam. */
+export function resetInsertListeners(): void {
+  insertListeners.clear();
+}
