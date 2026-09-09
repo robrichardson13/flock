@@ -426,18 +426,42 @@ export function LineComposer({
   //
   // The mirror only exists while the draft holds a quoted line: with nothing to paint the
   // field keeps its own visible text and this costs nothing.
-  const hlLines = highlightDraft(text);
+  const hlLines = useMemo(() => highlightDraft(text), [text]);
   const highlighted = hasHighlight(hlLines);
   const hlRef = useRef<HTMLDivElement>(null);
-  // The mirror does not scroll itself (it has no scrollbar and no pointer events); it is
-  // moved to wherever the field is scrolled to. Both on the field's own scroll and after a
-  // text change, since growing past `max-height` scrolls the field without a scroll event.
-  const syncScroll = () => {
+  // Keeping the picture on its text, in the two ways CSS cannot.
+  //
+  // Scroll: the mirror does not scroll itself (no scrollbar, no pointer events); it is moved
+  // to wherever the field is scrolled to. Both on the field's own scroll and after a text
+  // change, since growing past `max-height` scrolls the field without a scroll event.
+  //
+  // Width: past eight rows the field scrolls, and where the platform draws a classic
+  // scrollbar rather than an overlay one (Windows, Linux) that scrollbar comes out of the
+  // field's content column — while the mirror, `overflow: hidden`, keeps its full width. The
+  // two then wrap at different points and the glyphs you read stop sitting on the glyphs the
+  // caret is in. `clientWidth` is the field's padding box with the scrollbar already taken
+  // off it, and the mirror is borderless and `box-sizing: border-box` like everything else,
+  // so pinning one to the other lines the content columns up exactly. Invisible on macOS,
+  // which is why the browser pass on cards #6/#7 did not catch it.
+  const syncMirror = () => {
     const hl = hlRef.current;
     const el = areaRef.current;
-    if (hl && el) hl.scrollTop = el.scrollTop;
+    if (!hl || !el) return;
+    hl.scrollTop = el.scrollTop;
+    hl.style.width = `${el.clientWidth}px`;
   };
-  useEffect(syncScroll, [text, highlighted]);
+  useEffect(syncMirror, [text, highlighted]);
+  // The field's width changes without its text changing: a window resize, the pane's own
+  // breakpoint, the composer collapsing on the phone, an attachment strip appearing. One
+  // observer on the field covers all of them, and only while there is a mirror to keep.
+  useEffect(() => {
+    const el = areaRef.current;
+    if (!highlighted || !el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(syncMirror);
+    ro.observe(el);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlighted]);
 
   const showNotice = (message: string) => {
     setNotice(message);
@@ -698,7 +722,7 @@ export function LineComposer({
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
-            onScroll={syncScroll}
+            onScroll={syncMirror}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
             enterKeyHint="enter"
