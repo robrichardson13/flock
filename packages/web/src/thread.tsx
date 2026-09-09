@@ -385,18 +385,20 @@ export function LineComposer({
 
   // "Add to chat" (ADR 0014): a request arrives with no reference to this component at all,
   // through `compose.ts`'s insertion channel keyed on the same `key` the draft store uses.
-  // Insert at the caret when the field is actually focused (so a quote picked while mid-edit
-  // lands where the cursor was, not wherever it happened to sit last); otherwise append after
-  // whatever is already there, `joinDraft` supplying the separating blank line either way.
+  // The quote appends to the end of the draft, after the blank line `joinDraft` supplies,
+  // and the caret goes after it. Not at the caret: making a selection in the feed takes
+  // focus off this textarea (a `mousedown` on non-focusable content blurs it), so by the
+  // time a quote is picked there is no live caret in here to insert at — what
+  // `selectionStart` still reports is a position the human left, or 0 once the engine has
+  // reset it, and honouring it put the quote in front of a sentence they were mid-way
+  // through writing (found in review, card #3).
   // The caret position to restore is stashed in a ref because `setText`'s updater runs before
   // the DOM value it computes exists to place a selection in.
   const pendingCaret = useRef<number | null>(null);
   useEffect(() => subscribeInsert(key, (quote) => {
     setText((prev) => {
-      const el = areaRef.current;
-      const caret = el && document.activeElement === el && typeof el.selectionStart === "number" ? el.selectionStart : prev.length;
-      const joined = joinDraft(prev.slice(0, caret), quote) + prev.slice(caret);
-      pendingCaret.current = joined.length - prev.slice(caret).length;
+      const joined = joinDraft(prev, quote);
+      pendingCaret.current = joined.length;
       return joined;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps

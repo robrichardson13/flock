@@ -69,13 +69,17 @@ export function quoteBlock(text: string, author: string | null, limit: number = 
 }
 
 /**
- * Where a quote lands in an existing draft: appended as-is onto an empty or newline-ended
- * draft, otherwise onto a fresh line first — never mid-line onto whatever the human was
- * already typing.
+ * Where a quote lands in an existing draft: as-is onto an empty draft, and after a blank
+ * line onto anything else — never mid-line onto whatever the human was already typing, and
+ * never merely on the next line either. A blank line is what separates the human's own
+ * sentence from the quote as two blocks, both in the textarea and in the rendered message
+ * (`> ` lines directly under a text line still render as their own blockquote, but they
+ * read as one run of text while being typed).
  */
 export function joinDraft(existing: string, quote: string): string {
   if (!existing) return quote;
-  return existing.endsWith("\n") ? existing + quote : `${existing}\n${quote}`;
+  if (existing.endsWith("\n\n")) return existing + quote;
+  return existing.endsWith("\n") ? existing + "\n" + quote : `${existing}\n\n${quote}`;
 }
 
 /**
@@ -147,9 +151,10 @@ function readSelection(scope: HTMLElement): SelectionInfo | null {
 
 /**
  * Watches the document's selection while `enabled` and reports the one currently eligible
- * for "Add to chat" — or null, which is what hides the tip. Dismisses on scroll of `scopeRef`
- * itself (rather than repositioning: a selection scrolled off is honest to abandon) and on
- * window blur, on top of the collapse/whitespace/cross-message rejections in `readSelection`.
+ * for "Add to chat" — or null, which is what hides the tip. Dismisses on any scroll (rather
+ * than repositioning: a selection scrolled off is honest to abandon), on a window resize,
+ * on window blur and on Escape, on top of the collapse/whitespace/cross-message rejections
+ * in `readSelection`.
  */
 export function useAddToChat(scopeRef: RefObject<HTMLElement | null>, enabled: boolean): SelectionInfo | null {
   const [info, setInfo] = useState<SelectionInfo | null>(null);
@@ -159,7 +164,6 @@ export function useAddToChat(scopeRef: RefObject<HTMLElement | null>, enabled: b
       setInfo(null);
       return;
     }
-    const scope = scopeRef.current;
     const onSelectionChange = () => {
       const el = scopeRef.current;
       setInfo(el ? readSelection(el) : null);
@@ -170,12 +174,23 @@ export function useAddToChat(scopeRef: RefObject<HTMLElement | null>, enabled: b
     };
     document.addEventListener("selectionchange", onSelectionChange);
     document.addEventListener("keydown", onKeyDown);
-    scope?.addEventListener("scroll", dismiss);
+    // `scroll` on `document` in the capture phase, not on `scopeRef.current`: a scroll event
+    // does not bubble, but it does capture, and the scroller element this hook is pointed at
+    // is not the same node for the life of the hook — the pane mounts a skeleton first and
+    // swaps the real scroller in when the snapshot lands, so a listener bound to whatever
+    // `scopeRef.current` happened to be when this effect ran sat on a detached node and the
+    // tip never dismissed on scroll at all. Capture on the document catches every scroller,
+    // including the programmatic pin `useStickToBottom` performs when a new message arrives.
+    document.addEventListener("scroll", dismiss, true);
+    // A resize relays out the feed underneath a selection, so the rect the tip was placed
+    // from is stale the moment it happens.
+    window.addEventListener("resize", dismiss);
     window.addEventListener("blur", dismiss);
     return () => {
       document.removeEventListener("selectionchange", onSelectionChange);
       document.removeEventListener("keydown", onKeyDown);
-      scope?.removeEventListener("scroll", dismiss);
+      document.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("resize", dismiss);
       window.removeEventListener("blur", dismiss);
       setInfo(null);
     };
@@ -218,6 +233,14 @@ export function AddToChatTip({ info, onPick }: { info: SelectionInfo | null; onP
       className="add-to-chat"
       style={pos ? { top: pos.top, left: pos.left, visibility: "visible" } : { top: 0, left: 0, visibility: "hidden" }}
       onMouseDown={(e) => {
+        e.preventDefault();
+        onPick(info);
+      }}
+      // A button reachable by Tab (it is portalled to the end of `document.body`) that only
+      // answered `mousedown` was a dead stop in the tab order. Enter and Space act here
+      // instead of through `onClick`, which would double-fire after the `mousedown` above.
+      onKeyDown={(e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
         e.preventDefault();
         onPick(info);
       }}

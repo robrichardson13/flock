@@ -57,12 +57,16 @@ describe("joinDraft", () => {
     expect(joinDraft("", "> quoted\n\n")).toBe("> quoted\n\n");
   });
 
-  test("a draft not ending in a newline gets exactly one separating newline", () => {
-    expect(joinDraft("half a thought", "> quoted\n\n")).toBe("half a thought\n> quoted\n\n");
+  test("a draft not ending in a newline gets a blank line before the quote", () => {
+    expect(joinDraft("half a thought", "> quoted\n\n")).toBe("half a thought\n\n> quoted\n\n");
   });
 
-  test("a draft already ending in a newline gets no extra separator", () => {
-    expect(joinDraft("half a thought\n", "> quoted\n\n")).toBe("half a thought\n> quoted\n\n");
+  test("a draft ending in one newline gets the second, so there is still a blank line", () => {
+    expect(joinDraft("half a thought\n", "> quoted\n\n")).toBe("half a thought\n\n> quoted\n\n");
+  });
+
+  test("a draft already ending in a blank line gets no extra separator", () => {
+    expect(joinDraft("half a thought\n\n", "> quoted\n\n")).toBe("half a thought\n\n> quoted\n\n");
   });
 
   test("quoting the same text twice appends it twice", () => {

@@ -199,4 +199,22 @@ describe("splitMessageBlocks: message mode block splitting", () => {
   test("`>` that is not at line start is not a quote", () => {
     expect(splitMessageBlocks("5 > 3 is true")).toEqual([{ t: "text", value: "5 > 3 is true" }]);
   });
+
+  // The shape "Add to chat" produces when the composer already had text in it: the human's
+  // own line, a blank line, then the quote. The quote must be its own block either way —
+  // this also pins the no-blank-line case, since a lazy paragraph continuation (what
+  // CommonMark would do) would swallow the `>` lines into the text above them.
+  test("a `> ` run directly under a text line is still its own quote block", () => {
+    expect(splitMessageBlocks("my reply\n> quoted")).toEqual([
+      { t: "text", value: "my reply" },
+      { t: "quote", lines: ["quoted"] },
+    ]);
+  });
+
+  test("a `> ` run under a text line and a blank line is its own quote block", () => {
+    expect(splitMessageBlocks("my reply\n\n> quoted")).toEqual([
+      { t: "text", value: "my reply\n" },
+      { t: "quote", lines: ["quoted"] },
+    ]);
+  });
 });
