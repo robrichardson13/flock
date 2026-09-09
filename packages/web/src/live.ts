@@ -1238,12 +1238,16 @@ export interface ScrollCollapse {
    *  internally, and writes straight to `cssTarget`'s `--composer-collapse` custom property
    *  rather than React state, so a scroll frame never re-renders React. */
   onScroll: () => void;
-  /** Told whenever `LineComposer`'s own expanded/collapsed state changes (focus, or
-   *  non-empty draft text/staged attachments) via its `onExpandedChange`. While expanded for
-   *  that reason, collapse progress is pinned at 0 (full size) regardless of scroll —
-   *  `LineComposer` already forces its *structural* expansion in that case; this keeps the
-   *  continuous CSS var in step with it. */
-  setExpandedOverride: (expanded: boolean) => void;
+  /** Told whenever `LineComposer`'s own *focus* changes (not the broader "user is editing" —
+   *  see #6). While focused, collapse progress is pinned at 0 (full size) regardless of
+   *  scroll — the composer *is* the task while the keyboard is up, and shrinking the field
+   *  under an active caret is hostile. Unlike the pre-#6 signal this deliberately does *not*
+   *  also pin for a blurred draft: a blurred multi-line draft is exactly the state #6 asks to
+   *  keep collapsing, so a blur runs the ordinary scroll mapping below like an empty
+   *  composer — `LineComposer`'s CSS (`.composer-open:not(.composer-focused)`) is what gives
+   *  that mapping a different ceiling (the grown height, quantized to whole line boxes,
+   *  rather than one resting line). */
+  setFocusOverride: (focused: boolean) => void;
 }
 
 /**
@@ -1326,9 +1330,10 @@ export function useScrollCollapse<T extends HTMLElement>(
     if (!el) return;
 
     if (override.current) {
-      // Focus or a non-empty draft: the composer is definitely at its full height here, so
-      // this is the moment to re-learn what "resting" measures (a staged image or a grown
-      // draft makes it taller than it was).
+      // Focused: the composer is definitely at its full height here, so this is also a
+      // moment to re-learn what "resting" measures (a staged image or a grown draft makes it
+      // taller than it was) — belt-and-braces alongside the same call in `setFocusOverride`,
+      // since a scroll can still land here while focus holds (e.g. a keyboard resize).
       learnRestingHeight();
       applyVar(0);
       if (collapsedRef.current) setCollapsed(false);
@@ -1404,16 +1409,29 @@ export function useScrollCollapse<T extends HTMLElement>(
     raf.current = requestAnimationFrame(recompute);
   }, [enabled, recompute]);
 
-  const setExpandedOverride = useCallback(
-    (expanded: boolean) => {
-      override.current = expanded;
-      if (expanded) applyVar(0);
-      else recompute();
+  const setFocusOverride = useCallback(
+    (focused: boolean) => {
+      override.current = focused;
+      if (focused) {
+        learnRestingHeight();
+        applyVar(0);
+      } else {
+        // Releasing the pin on blur: if a draft remains, this is the last instant it is
+        // guaranteed to be at its full grown height, so freeze the reservation here *before*
+        // `recompute()` lets the ordinary scroll mapping start interpolating the ceiling
+        // down. Skipping this leaves `--composer-h-rest` at whatever it last measured (often
+        // one resting line, if the field was never scrolled while focused) while the live
+        // height is the whole grown draft — the scroller-fights-finger loop #6 (the collapse
+        // rewrite, not this card) killed, at full grown-height amplitude instead of 52px
+        // (design write-up #6 §4).
+        learnRestingHeight();
+        recompute();
+      }
     },
-    [applyVar, recompute],
+    [applyVar, recompute, learnRestingHeight],
   );
 
-  return { collapsed, onScroll, setExpandedOverride };
+  return { collapsed, onScroll, setFocusOverride };
 }
 
 /* ---------- hold position when content lands above the viewport ---------- */

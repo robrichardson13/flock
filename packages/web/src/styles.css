@@ -1698,6 +1698,12 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
      up the attach button's muted grey circle. */
   .line-composer > .icon-btn-primary { order: 2; margin-left: auto; border-radius: 50%; background: var(--ink-action); }
   .line-composer > .icon-btn-primary.tone-warn { background: var(--attn-fill); }
+  /* #6: joins the attach/send row (`order: 1`, same as attach) rather than falling in with
+     the textarea's own order-0 row above it — this row's own column-gap is also 0 (only the
+     wrap's row-gap, `--s1`, is set above), so here the hint's pull-back only has to cancel
+     its own width, not a gap in front of it too, unlike the base rule's `--s2` term (which
+     assumes the unwrapped desktop/rest gap). */
+  .line-composer > .composer-linecount { order: 1; margin-left: calc(-1 * var(--tap)); }
 }
 /* Ten lines, then the rest is available rather than imposed. The measurement is done in JS
    against this clamp, so the toggle only appears when there is really more to see. */
@@ -2280,6 +2286,31 @@ html[data-topbar] .sheet { max-height: 100%; }
   .card-composer .line-composer { transition: padding-block var(--d-fast) var(--ease-out); }
 }
 
+/* #6: the `+N` hidden-line hint lives in the same slot the paperclip occupies, so the two can
+   cross-fade in place (paperclip fades out, hint fades in, both keyed off
+   `--composer-collapse`) rather than one vacating a slot the other claims. It is a normal
+   flex sibling of the attach button in the DOM, rendered right after it — not an overlay and
+   not a wrapper around it, so the attach button stays a *direct* child of `.line-composer`
+   for the several existing rules keyed on exactly that (order, the collapsed-row merge, the
+   paperclip's own fade). No explicit `order` here: default order (0) is what keeps it
+   immediately after the attach button in source order everywhere nothing else reorders
+   (desktop, and the mobile rest state before the two-row wrap); the mobile wrap below (which
+   *does* reorder attach/send) sets `order: 1` there to match them. `.line-composer`'s own gap
+   (`--s2` here; `0` once that wrap takes over) is exactly the space a negative `margin-left`
+   needs to cancel to pull the hint back onto the attach button's own box, so it costs the row
+   nothing extra: `--tap` wide like the button it sits on, then pulled back by its own width
+   plus the gap before it. No fallback needed on the opacity beyond the media rule's own `, 0`
+   — outside a collapsing composer the variable is never set at all, so this resolves to
+   fully transparent everywhere collapse doesn't apply, focused included (pinned at progress
+   0). */
+.composer-linecount {
+  flex: none; width: var(--tap); height: var(--tap);
+  margin-left: calc(-1 * var(--tap) - var(--s2));
+  display: flex; align-items: center; justify-content: center;
+  font-size: var(--t-cap); color: var(--muted); pointer-events: none;
+  opacity: var(--composer-collapse, 0);
+}
+
 /* #4: the channel composer's scroll-linked continuous collapse (mobile only — desktop never
    sets `--composer-collapse`, so every rule here falls back to its `0`/expanded value there).
    `--composer-collapse` is a plain 0..1 number written straight onto `.pane` every scroll
@@ -2321,15 +2352,50 @@ html[data-topbar] .sheet { max-height: 100%; }
      a fixed-height field, which is exactly the "the text moves but the composer doesn't"
      the human saw. `max-height` outranks an inline `height`, so this is what takes the row
      from its expanded 48px (`--lh-body` + 2 x `--s3`) to the resting 40px (+ 2 x `--s2`),
-     continuously — but only while the composer is at rest. `.composer-open` mirrors
-     `userExpanded` (thread.tsx) — focused, has text, or has a staged attachment — and is the
-     one signal that agrees with `useScrollCollapse`'s override (which pins the variable at 0
-     but does not otherwise touch this rule): gating on it, rather than on `--composer-collapse`
-     or `.composer-expanded` (absent exactly when a draft exists, see thread.tsx's
-     `compactClass`), is what lets a growing draft fall through to the base 212px cap plus
-     `useAutoGrow`'s inline height instead of being pinned to one line forever. */
+     continuously — but only while the composer is at rest, i.e. genuinely empty and
+     unfocused. `.composer-open` mirrors `userExpanded` (thread.tsx) — focused, has text, or
+     has a staged attachment — and gating on it, rather than on `--composer-collapse` or
+     `.composer-expanded` (absent exactly when a draft exists, see thread.tsx's
+     `compactClass`), is what makes this rule apply only to the actually-empty case. What
+     `.composer-open` itself does is split further below (#6). */
   .card-composer:not(.composer-open) .line-composer-input {
     max-height: calc(var(--lh-body) + 2 * (var(--s2) + (var(--s3) - var(--s2)) * (1 - var(--composer-collapse, 0))));
+  }
+
+  /* #6: the line-quantized peek. A composer that is open *because it holds a draft*, not
+     because it is focused, still collapses on scroll — but its ceiling is the grown height
+     (`--composer-grown-h`, published by `useAutoGrow`), interpolating down to one whole line
+     box, never to a fraction of a line. Card #2's bug was arithmetic (48px clamped against a
+     24px line box always cuts a glyph mid-height), so the fix quantizes rather than just
+     picking a nicer pair of endpoints: `--composer-peek-lines` rounds the *content* height
+     down to a whole multiple of `--lh-body` before the (unchanged, ungated) padding above is
+     added back, so the textarea's content box is always an integer number of lines tall at
+     every value of `--composer-collapse`, and only the padding around it moves continuously.
+     `round()` down rather than to-nearest so the endpoint at progress 1 lands on exactly one
+     line (round(down, 24px, 24px) = 24px) rather than a step that could round up past it.
+
+     Focused is excluded (`:not(.composer-focused)`) — a focused draft keeps the base 212px
+     cap plus the live inline height, same as before #6; this only ever fires once the field
+     is blurred, which is exactly when `useScrollCollapse`'s ordinary distance-from-bottom
+     mapping (not the old always-0 override) drives `--composer-collapse` for a draft.
+
+     `overflow` is hidden rather than the base `auto`: the point is a *window* onto the
+     draft, not a finger-scrollable one — thread.tsx pins `scrollTop` to 0 on blur so the
+     window is line-aligned on the draft's first line (the human's call on #5), and disabling
+     scroll keeps a stray touch from moving it off that alignment. The bottom `mask-image`
+     fade (not a hard cut) is what makes the hidden remainder read as tucked away rather than
+     clipped — deepening with `--composer-collapse` the same way everything else here does. */
+  .card-composer.composer-open:not(.composer-focused) .line-composer-input {
+    --composer-peek-lines: round(
+      down,
+      calc((var(--composer-grown-h, 212px) - 2 * var(--s3)) * (1 - var(--composer-collapse, 0)) + var(--lh-body) * var(--composer-collapse, 0)),
+      var(--lh-body)
+    );
+    max-height: calc(var(--composer-peek-lines) + 2 * (var(--s2) + (var(--s3) - var(--s2)) * (1 - var(--composer-collapse, 0))));
+    overflow: hidden;
+    --peek-fade: calc(var(--composer-collapse, 0) * var(--s4));
+    mask-image: linear-gradient(to bottom, black calc(100% - var(--peek-fade)), transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - var(--peek-fade)), transparent 100%);
   }
 
   /* The wrapped attach/send row is ~48px of the 52px delta — the human's option A on #4 asked
@@ -2355,7 +2421,8 @@ html[data-topbar] .sheet { max-height: 100%; }
      40px up and sprang back down over ~250ms. Measured frame by frame: 719 -> 679 -> 699 ->
      712 -> 718 -> 720.6 -> 720.2 -> 719. Expand never showed it, because there the rule that
      suppresses the transform transition is the one *arriving* rather than the one leaving. */
-  .card-composer:not(.composer-collapsed) .line-composer > .icon-btn {
+  .card-composer:not(.composer-collapsed) .line-composer > .icon-btn,
+  .card-composer:not(.composer-collapsed) .line-composer > .composer-linecount {
     --btn-lift: calc((var(--lh-body) + 2 * var(--s2)) * var(--composer-collapse, 0));
     margin-top: calc(-1 * var(--btn-lift));
     /* The paperclip below still uses `transform` for its scale, and the shared control
