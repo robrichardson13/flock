@@ -1522,9 +1522,9 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
    The mirror is glyph-for-glyph aligned with the real text, which is the whole constraint
    here: every declaration below is colour, background or an inset shadow. Anything that
    moves a glyph — padding, border, font-weight, letter-spacing, a different font-size —
-   would slide the picture off the text it is a picture of. The band reaches into the field's
-   padding gutter with a negative margin and an equal padding, which is the one exception,
-   and it moves nothing because the two cancel. */
+   would slide the picture off the text it is a picture of. The one thing CSS cannot do here
+   is keep the two *content columns* the same width when the field grows a scrollbar, so
+   thread.tsx pins the mirror's width to the field's `clientWidth`. */
 .composer-field { position: relative; flex: 1; min-width: 0; display: flex; }
 /* The field stacks *above* the mirror, and its own background stays out of the way. Without
    the explicit stacking the mirror (positioned, so painted after a static sibling) covers
@@ -1567,8 +1567,9 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 }
 .hl-quote-start { border-top-left-radius: var(--r-sm); border-top-right-radius: var(--r-sm); }
 .hl-quote-end { border-bottom-left-radius: var(--r-sm); border-bottom-right-radius: var(--r-sm); }
-/* The `> ` marker and the `**` around an author's name: still there, still occupying their
-   columns (the mirror would fall out of alignment otherwise), just not drawn. */
+/* The `> ` marker: still there, still occupying its two columns (the mirror would fall out of
+   alignment otherwise), just not drawn. It is the only thing hidden — the format carries no
+   `**` any more, precisely because a hidden character keeps its space (card #7). */
 .hl-hidden { color: transparent; }
 /* The channel as a conversation. A run of messages from one actor inside five minutes shares
    one header and stacks as bubbles under it; your own writes go right on a tinted ground with
