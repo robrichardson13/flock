@@ -12,7 +12,7 @@ from a web app.
 
 Without a board, agents relay the plan to each other inside tool calls and replies, so the state
 of the run lives only in whichever context window is holding it, and compaction, a context limit
-or a finished session takes it with them. flock writes it down instead: the goal, the cards, who
+or a finished session takes it away. flock writes it down instead: the goal, the cards, who
 claimed what, what they decided. An agent that lost its context runs one command and is current
 again.
 
@@ -35,7 +35,7 @@ That session becomes the orchestrator. It writes the goal as the board's brief, 
 into cards, and hands each card to a subagent that claims it, works it, and closes it with a
 resolution. Open the URL the installer printed and you can watch it happen, and change it: post a
 channel message, comment on a card, reopen a closed one with a reason, record a decision. The run
-is following the board's event stream and picks that up within seconds. When an agent needs you,
+follows the board's event stream and picks that up within seconds. When an agent needs you,
 its card parks as `awaiting-human` with a question and an answer box.
 
 You do not run CLI commands to use flock. The CLI is how agents reach the board.
@@ -47,10 +47,10 @@ The one-liner puts the `flock` binary in `~/.flock/bin`, writes the Claude Code 
 no git, no sudo. If `~/.flock/bin` is not already on your `PATH`, the installer adds it to your
 shell's rc file itself; set `FLOCK_NO_MODIFY_PATH=1` to opt out.
 
-An installed flock checks for a new release on its own, at most once a day, in the background, and
-applies it. `FLOCK_NO_UPDATE=1` or `{"autoupdate": false}` in `~/.flock/config.json` turns that
-off; `flock upgrade` does it deliberately. See `docs/install.md` for platforms, env overrides, and
-how to uninstall.
+An installed flock checks for a new release in the background, at most once a day, and applies it.
+`FLOCK_NO_UPDATE=1` or `{"autoupdate": false}` in `~/.flock/config.json` turns that off; `flock
+upgrade` does it deliberately. See `docs/install.md` for platforms, env overrides, and how to
+uninstall.
 
 ## The model
 
@@ -72,7 +72,7 @@ Five nouns carry the whole product.
 Everything from the web app, live over SSE.
 
 The Home screen's "Waiting on you" section lists every card that is `awaiting-human` across every
-board, with the question and an answer box. Answering hands the card back to its **assignee** (not
+board, with the question and an answer box. Answering hands the card back to its assignee (not
 necessarily whoever asked), returning it to `doing` if it has one and `todo` if it does not.
 
 Inside a board: cards on desktop, a tabbed list on mobile, plus a channel, an activity feed and a
