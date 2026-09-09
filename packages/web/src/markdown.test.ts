@@ -166,4 +166,37 @@ describe("splitMessageBlocks: message mode block splitting", () => {
       { t: "code", value: "# not a heading" },
     ]);
   });
+
+  test("a run of `> ` lines becomes one quote block", () => {
+    expect(splitMessageBlocks("> **ada** said:\n> first\n> second")).toEqual([
+      { t: "quote", lines: ["**ada** said:", "first", "second"] },
+    ]);
+  });
+
+  test("a quote block is followed by ordinary text once the `>` lines end", () => {
+    expect(splitMessageBlocks("> quoted\n\nmy reply")).toEqual([
+      { t: "quote", lines: ["quoted"] },
+      { t: "text", value: "\nmy reply" },
+    ]);
+  });
+
+  test("a `> - x` line stays inside the quote block, not a list", () => {
+    expect(splitMessageBlocks("> - not a bullet")).toEqual([
+      { t: "quote", lines: ["- not a bullet"] },
+    ]);
+  });
+
+  test("a `>` inside a fenced code block is literal, not a quote", () => {
+    expect(splitMessageBlocks("```\n> not a quote\n```")).toEqual([
+      { t: "code", value: "> not a quote" },
+    ]);
+  });
+
+  test("a bare `>` with no space becomes an empty quoted line", () => {
+    expect(splitMessageBlocks(">")).toEqual([{ t: "quote", lines: [""] }]);
+  });
+
+  test("`>` that is not at line start is not a quote", () => {
+    expect(splitMessageBlocks("5 > 3 is true")).toEqual([{ t: "text", value: "5 > 3 is true" }]);
+  });
 });
