@@ -2030,19 +2030,39 @@ html[data-topbar] .sheet { max-height: 100%; }
    the glyph off, and the group is already a card floating on the page rather than something
    flush to a gutter. The drawer is where the measured complaint actually was — there the
    group has no fill, no radius and no clipping, and the row has no horizontal padding at all,
-   so the same layer goes the other way and outsets. */
+   so the same layer goes the other way and outsets.
+   #4: that outset used to be a literal `inset: 0 var(--detail-fill-x)` on the pseudo's own
+   box — geometry, not paint. `.card-details` goes `overflow: visible` in the drawer (below,
+   for a row popover's sake), so nothing clips it, and a position:absolute box really is 8px
+   wider than `.card-details` on each side: `.card-details` measured scrollWidth 503 against
+   clientWidth 495 in the drawer at rest, on a plain card, with no bar only because
+   `.screen-body.card-body`'s own slack (559 wide) happened to absorb it. The bleed is the
+   point — the row should visually reach past its box on hover — so the fix is not to clip it
+   away (that would flatten the highlight back to flush, the thing #7/3 undid) but to paint it
+   without moving the box: two box-shadows, offset ±(-1 * --detail-fill-x) with zero blur and
+   spread, each an exact copy of the pseudo's own rounded shape translated sideways. Their
+   union reproduces the old enlarged rounded rect pixel-for-pixel (verified: at 8px offset
+   against the row's 12px `--hover-radius`, the two copies' straight edges overlap well past
+   each other's corner arcs, so there is no seam) while box-shadow is ink: it never enters
+   scrollable overflow, however far it paints past a visible ancestor. Confirmed in-browser at
+   320–1440: `.card-details` scrollWidth == clientWidth everywhere, hover/active fill
+   unchanged pixel-for-pixel at rest, on hover and on press. */
 .detail-row { --detail-fill-x: 0px; position: relative; }
 .detail-row::before {
   content: "";
   position: absolute;
-  inset: 0 var(--detail-fill-x);
+  inset: 0;
   border-radius: var(--hover-radius);
   pointer-events: none;
+  background: var(--detail-fill-color, transparent);
+  box-shadow:
+    calc(-1 * var(--detail-fill-x)) 0 0 0 var(--detail-fill-color, transparent),
+    var(--detail-fill-x) 0 0 0 var(--detail-fill-color, transparent);
 }
 .detail-row > * { position: relative; }
 /* The press keeps the reach it had — the old rule was on `.detail-row`, static rows included —
    and only changes shape. Hover stays off a static row, as it always was. */
-.detail-row:active::before { background: var(--surface-press); }
+.detail-row:active::before { --detail-fill-color: var(--surface-press); }
 /* #27: pulls the row text in to the same --row-pad-l the boards/cards list titles and
    the card heading above now share, instead of the wider --s4 the base rule sets for
    both breakpoints. After the base rule so its longhand wins over that rule's shorthand
@@ -3149,7 +3169,7 @@ html[data-topbar] .sheet { max-height: 100%; }
      fill the rest of this block uses, since it draws no surface at rest at all. */
   .linkish:hover { background: var(--surface-hover); }
   .list-row:hover, .card-tile:hover, .board-link:hover { background: var(--surface-hover); }
-  .detail-row:not(.detail-row-static):hover::before { background: var(--surface-hover); }
+  .detail-row:not(.detail-row-static):hover::before { --detail-fill-color: var(--surface-hover); }
   a.evt:hover { background: var(--surface-hover); }
   .app-topbar .btn-ghost:hover { color: var(--text); }
   /* No border on hover (#12, F6/P3.2): the tile is the only thing in the app that changed
@@ -3201,7 +3221,7 @@ html[data-topbar] .sheet { max-height: 100%; }
 @media (prefers-reduced-motion: no-preference) {
   .btn, .icon-btn, .linkish, .chip, .card-tile, .list-row, .board-link, .tab, .mode, .status-chip,
   .action-item, a.evt, .needs-item, .tabbar-item, .disclosure, .md-task-label.is-live,
-  .detail-row, .detail-row::before, .board-row-desk::before, .attach-chip-remove, .skip-link,
+  .detail-row, .board-row-desk::before, .attach-chip-remove, .skip-link,
   /* #12/3: these two were named in the reduce block below but not here, so the chip and the
      me button snapped under normal motion and cross-faded under `reduce` — the bargain
      exactly inverted. The reduce block's contract is "every control that eases a colour under
@@ -3223,12 +3243,22 @@ html[data-topbar] .sheet { max-height: 100%; }
       box-shadow var(--d-base) var(--ease-out),
       transform var(--d-base) var(--ease-spring);
   }
+  /* #4: the pseudo now paints its own box *and* the drawer's bleed with the same
+     `--detail-fill-color`, the box via `background`, the bleed via two `box-shadow` copies
+     (see the rule above) — both must ease together or the bleed would snap while the flush
+     centre fades. */
+  .detail-row::before {
+    transition: background-color var(--d-fast) var(--ease-out), box-shadow var(--d-fast) var(--ease-out);
+  }
   /* Going down is a fast decelerate; coming back up is the spring above. */
   .btn:active, .icon-btn:active, .linkish:active, .chip:active, .mode:active, .status-chip:active,
   .list-row:active, .card-tile:active, .board-link:active, a.evt:active, .needs-item:active,
   .action-item:active, .tabbar-item:active, .disclosure:active, .md-task-label.is-live:active,
-  .detail-row:not(.detail-row-static):active, .detail-row:not(.detail-row-static):active::before {
+  .detail-row:not(.detail-row-static):active {
     transition: background-color var(--d-fast) var(--ease-out), transform var(--d-fast) var(--ease-out);
+  }
+  .detail-row:not(.detail-row-static):active::before {
+    transition: background-color var(--d-fast) var(--ease-out), box-shadow var(--d-fast) var(--ease-out);
   }
 }
 /* Press: a row or a tile gives 2%, a control 4%, both from the centre. Everything that
