@@ -23,7 +23,7 @@ describe("quoteBlock", () => {
   });
 
   test("an author adds a leading attribution line", () => {
-    expect(quoteBlock("hello", "ada")).toBe("> **ada** said:\n> hello\n\n");
+    expect(quoteBlock("hello", "ada")).toBe("> ada said:\n> hello\n\n");
   });
 
   test("no author omits the attribution line entirely", () => {

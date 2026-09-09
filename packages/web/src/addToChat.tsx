@@ -35,8 +35,9 @@ export const QUOTE_CHAR_LIMIT = 4000;
  * whitespace-only once trimmed). Pure, and the whole of the quote format: CRLF/CR normalise
  * to LF, leading and trailing blank lines drop, every remaining line gets `> ` (a bare `>`
  * for an empty interior line), truncation at a line boundary under `limit` chars appends a
- * `> …(truncated)` line, and — when `author` is given — a `> **author** said:` line leads
- * the quote. Ends in a blank line, so a caret placed right after it starts a fresh line
+ * `> …(truncated)` line, and — when `author` is given — a `> author said:` line leads
+ * the quote (no `**`: the renderer styles that line as a cite, and every hidden character
+ * is dead space in the composer's own highlight — card #7). Ends in a blank line, so a caret placed right after it starts a fresh line
  * rather than continuing the quote.
  */
 export function quoteBlock(text: string, author: string | null, limit: number = QUOTE_CHAR_LIMIT): string | null {
@@ -64,7 +65,7 @@ export function quoteBlock(text: string, author: string | null, limit: number = 
   const quoted = lines.map((l) => (l.trim() === "" ? ">" : `> ${l}`));
   if (truncated) quoted.push("> …(truncated)");
 
-  const header = author ? [`> **${author}** said:`] : [];
+  const header = author ? [`> ${author} said:`] : [];
   return [...header, ...quoted].join("\n") + "\n\n";
 }
 

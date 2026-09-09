@@ -299,6 +299,9 @@ export function splitMessageBlocks(text: string): MessageBlock[] {
   return blocks;
 }
 
+/** A quote's attribution line: one bare word (an actor name is a slug) and `said:`. */
+const CITE = /^(\S+) said:$/;
+
 /**
  * Channel messages, comments, resolutions, asks, answers, and decision gists: **message
  * mode**. No paragraph wrapping, every newline preserved. Bullet lines still become a
@@ -329,9 +332,18 @@ export function MessageBody({ text }: { text: string }) {
           );
         }
         if (b.t === "quote") {
+          // "Add to chat" leads a quote with `<author> said:` (ADR 0014, and no `**` on the
+          // name since card #7 — every hidden character is dead space in the composer's own
+          // highlight of the same text). The renderer is what makes that line read as an
+          // attribution: matched only as the *first* line of a quote, and only as a bare
+          // name, so an ordinary quote that happens to contain "someone said:" further down
+          // is untouched.
+          const cite = b.lines.length > 1 ? CITE.exec(b.lines[0]) : null;
+          const lines = cite ? b.lines.slice(1) : b.lines;
           return (
             <blockquote key={i}>
-              {b.lines.map((l, j) => (
+              {cite && <cite className="quote-cite">{cite[1]}</cite>}
+              {lines.map((l, j) => (
                 <Fragment key={j}>
                   {j > 0 && <br />}
                   {inline(l)}

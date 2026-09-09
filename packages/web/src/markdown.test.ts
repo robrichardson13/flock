@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { splitDocumentBlocks, splitMessageBlocks } from "./markdown.tsx";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MessageBody, splitDocumentBlocks, splitMessageBlocks } from "./markdown.tsx";
 
 describe("splitDocumentBlocks: document mode block splitting", () => {
   test("a single newline inside a paragraph keeps both lines in one para block, not joined", () => {
@@ -168,8 +170,8 @@ describe("splitMessageBlocks: message mode block splitting", () => {
   });
 
   test("a run of `> ` lines becomes one quote block", () => {
-    expect(splitMessageBlocks("> **ada** said:\n> first\n> second")).toEqual([
-      { t: "quote", lines: ["**ada** said:", "first", "second"] },
+    expect(splitMessageBlocks("> ada said:\n> first\n> second")).toEqual([
+      { t: "quote", lines: ["ada said:", "first", "second"] },
     ]);
   });
 
@@ -216,5 +218,36 @@ describe("splitMessageBlocks: message mode block splitting", () => {
       { t: "text", value: "my reply\n" },
       { t: "quote", lines: ["quoted"] },
     ]);
+  });
+});
+
+/** The attribution line "Add to chat" leads a quote with (ADR 0014, card #7): the format
+ *  carries no `**`, so the render is what has to make it read as a cite. */
+describe("MessageBody: a quote's attribution line", () => {
+  const html = (text: string) => renderToStaticMarkup(createElement(MessageBody, { text }));
+
+  test("`<author> said:` as a quote's first line renders as a cite, out of the quoted lines", () => {
+    const out = html("> ada said:\n> the thing she said");
+    expect(out).toContain("<cite class=\"quote-cite\">ada</cite>");
+    expect(out).not.toContain("said:");
+    expect(out).toContain("the thing she said");
+  });
+
+  test("a quote with nothing under the attribution line is left alone — it is the quote", () => {
+    expect(html("> ada said:")).not.toContain("<cite");
+  });
+
+  test("`said:` further down a quote is ordinary quoted text", () => {
+    const out = html("> first\n> ada said:");
+    expect(out).not.toContain("<cite");
+    expect(out).toContain("ada said:");
+  });
+
+  test("only a bare name matches: a sentence ending in `said:` is not a cite", () => {
+    expect(html("> and then he said:\n> nothing")).not.toContain("<cite");
+  });
+
+  test("an ordinary quote gets no cite", () => {
+    expect(html("> just a quote\n> over two lines")).not.toContain("<cite");
   });
 });
