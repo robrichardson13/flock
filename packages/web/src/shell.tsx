@@ -42,7 +42,11 @@ export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoar
             align="left"
             triggerClass="btn btn-ghost boards-switch"
             menuClass="menu-boards"
-            trigger={<>Boards <span className="boards-switch-chev">{Icons.chevron(14)}</span></>}
+            trigger={(
+              <span className="boards-switch-label">
+                Boards <span className="boards-switch-chev">{Icons.chevron(14)}</span>
+              </span>
+            )}
           >
             {(close) => (
               <div onClick={close}>

@@ -2475,7 +2475,26 @@ html[data-topbar] .sheet { max-height: 100%; }
   }
   .app-topbar .grow { flex: 1; }
   /* The boards switcher: the sidebar's list, one click away instead of always on screen. */
-  .boards-switch { flex: none; gap: var(--s1); color: var(--muted); }
+  .boards-switch { flex: none; color: var(--muted); }
+  /*
+   * The trigger's own label, wrapped so the correction below moves only the glyphs, never
+   * the button's box — the box still centers on the brand wordmark next to it via the
+   * shared `.app-topbar-inner` row, and its hover/press fill and tap target stay exactly
+   * where the button sits.
+   *
+   * `line-height: 1` (matching brand.css's `.wordmark`) turns out not to move anything: the
+   * button's `min-height: var(--tap-desk)` is fixed, so shrinking the text's own line box
+   * just gets it re-centered inside the same 32px, which is why the trigger's text still
+   * measured ~3px below the wordmark's own glyphs with that alone. Confirmed against the
+   * actual raster (headless-Chrome screenshots, not just computed styles): "flock" centers
+   * on ink row ~21.8, "Boards" centered on ~25.0 before this rule and ~22.0 after it. The
+   * remaining gap is `-apple-system`'s (the trigger's font) ascent/descent split sitting
+   * lower, at this weight and size, than SF Rounded's (the wordmark's) — a real difference
+   * between two different type stacks set side by side, not something a line-height or
+   * padding token expresses. `translateY` is the deliberate, measured exception to "no magic
+   * numbers": it moves only the rendered glyphs, so the button's own box is untouched.
+   */
+  .boards-switch-label { display: inline-flex; align-items: center; gap: var(--s1); line-height: 1; transform: translateY(-3px); }
   .boards-switch.is-open { color: var(--text); }
   .boards-switch-chev { display: flex; transform: rotate(90deg); }
   .board-link { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); padding: var(--s2) var(--s3); border-radius: var(--r-sm); color: var(--text); }
