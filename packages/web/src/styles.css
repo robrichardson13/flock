@@ -1511,6 +1511,61 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
   line-height: 24px; /* one row + padding matches --tap (44px); caps growth at 8 rows */
   max-height: 212px;
 }
+
+/* ---------- the composer's quote treatment (ADR 0014) ---------- */
+
+/* A quoted line in the draft is banded and its `> ` markers hidden, so what "Add to chat"
+   puts in the field reads as a quote instead of as markdown — while staying ordinary,
+   editable text, so a reply can be typed between two quotes. nib colours the `>` lines of
+   its NSTextView directly; a <textarea> cannot, so `.composer-hl` is a mirror of the field's
+   value drawn behind it (see draftHighlight.ts) and the field's own glyphs go transparent.
+   The mirror is glyph-for-glyph aligned with the real text, which is the whole constraint
+   here: every declaration below is colour, background or an inset shadow. Anything that
+   moves a glyph — padding, border, font-weight, letter-spacing, a different font-size —
+   would slide the picture off the text it is a picture of. The band reaches into the field's
+   padding gutter with a negative margin and an equal padding, which is the one exception,
+   and it moves nothing because the two cancel. */
+.composer-field { position: relative; flex: 1; min-width: 0; display: flex; }
+/* The field stacks *above* the mirror, and its own background stays out of the way. Without
+   the explicit stacking the mirror (positioned, so painted after a static sibling) covers
+   the field, and the selection highlight and IME underline on a quoted line disappear
+   behind the band. */
+.composer-field > .line-composer-input { flex: 1; position: relative; z-index: 1; background: transparent; }
+/* Mirrors `.input`/`.textarea`'s type and padding and `.line-composer-input`'s wrapping and
+   line box. These have to be restated rather than joined onto `.input, .textarea`, whose
+   background, border and min-height the mirror must *not* have — and they have to be
+   restated everywhere the field's own are (the desktop step below, and the two
+   `padding-block` rules the card and channel composers use when collapsing). A drift there
+   shows up immediately as a picture sitting off its text. */
+.composer-hl {
+  position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none;
+  padding: var(--s3); border: none; border-radius: var(--r-md);
+  font: inherit; font-size: var(--t-body); line-height: 24px;
+  white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text);
+}
+/* Only while there is something to paint: with no quote in the draft the field keeps its own
+   ink and no mirror is rendered at all. `caret-color` has to be restated, since it otherwise
+   follows `color` and a transparent caret is a field that looks broken. The selection needs
+   nothing: the field paints above the mirror, so its translucent selection tint lands over
+   the mirror's glyphs and a drag-select reads normally — while `::selection { color }` is
+   deliberately *not* set, which would give the selected run its real glyphs back and flash
+   the raw `> **name** said:` markdown the treatment exists to hide. */
+.has-hl > .line-composer-input { color: transparent; caret-color: var(--text); }
+/* An empty line still occupies a line box in the textarea, so it has to here too. */
+.hl-line { min-height: 24px; }
+.hl-quote {
+  background: var(--bg-3); color: var(--muted);
+  /* The left rule, drawn inside the box: a border would move every glyph on the line. */
+  box-shadow: inset 2px 0 0 var(--accent);
+  /* Full-bleed into the field's padding, without moving the text: the negative margin and
+     the padding are the same amount. */
+  margin-inline: calc(-1 * var(--s3)); padding-inline: var(--s3);
+}
+.hl-quote-start { border-top-left-radius: var(--r-sm); border-top-right-radius: var(--r-sm); }
+.hl-quote-end { border-bottom-left-radius: var(--r-sm); border-bottom-right-radius: var(--r-sm); }
+/* The `> ` marker and the `**` around an author's name: still there, still occupying their
+   columns (the mirror would fall out of alignment otherwise), just not drawn. */
+.hl-hidden { color: transparent; }
 /* The channel as a conversation. A run of messages from one actor inside five minutes shares
    one header and stacks as bubbles under it; your own writes go right on a tinted ground with
    no avatar and no name. `.msg` is still the animated unit (one bubble), so `enterClass` and
@@ -1615,6 +1670,9 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
     order: 0; flex: 1 1 100%;
     border: none; background: transparent;
   }
+  /* The field is wrapped by `.composer-field` (the quote mirror sits in there with it), so
+     the wrapper is what has to take the full row; the textarea then fills the wrapper. */
+  .line-composer > .composer-field { order: 0; flex: 1 1 100%; }
   .line-composer-input:focus { outline: none; border: none; }
   /* Attach gets its own subtle circular surface — one step up to --bg-3, same --tap diameter
      as send — so the bottom row reads as two round buttons rather than a filled send beside
@@ -2179,6 +2237,8 @@ html[data-topbar] .sheet { max-height: 100%; }
    multi-line, mode-row-and-attach shape — same field, no remount. */
 .card-composer.composer-collapsed { gap: 0; }
 .card-composer.composer-collapsed .line-composer { flex-wrap: nowrap; padding-block: var(--s1); }
+.card-composer.composer-collapsed .line-composer > .composer-field { flex: 1 1 auto; order: 0; }
+.card-composer.composer-collapsed .composer-hl,
 .card-composer.composer-collapsed .line-composer-input {
   flex: 1 1 auto; order: 0;
   /* `.input`'s base padding (--s3, 12px) and 44px min-height are sized for the expanded,
@@ -2226,6 +2286,9 @@ html[data-topbar] .sheet { max-height: 100%; }
      not touched: the channel's form has a single child, so it spaces nothing.) */
   .card-composer .line-composer { row-gap: calc(var(--s1) * (1 - var(--composer-collapse, 0))); }
 
+  /* The mirror is included wherever the field's padding-block moves, so the picture keeps
+     sitting exactly on the text (draftHighlight.ts). */
+  .card-composer .composer-hl,
   .card-composer .line-composer-input {
     min-height: 0;
     padding-block: calc(var(--s2) + (var(--s3) - var(--s2)) * (1 - var(--composer-collapse, 0)));
@@ -2404,6 +2467,10 @@ html[data-topbar] .sheet { max-height: 100%; }
   }
   body { font-size: var(--t-sub); line-height: var(--lh-sub); }
   .input, .textarea { font-size: var(--t-sub); padding: var(--s2) var(--s3); }
+  /* The composer's quote mirror tracks the field's type and padding exactly (see
+     `.composer-hl` above); it is not in the selector above because it must stay borderless
+     and unfilled. */
+  .composer-hl { font-size: var(--t-sub); padding: var(--s2) var(--s3); }
   .select { font-size: var(--t-sub); padding: var(--s2) calc(var(--s3) + 20px) var(--s2) var(--s3); }
   .sk-input { height: calc(var(--lh-body) + 2 * var(--s2)); }
   .input-lg { font-size: var(--t-head); }

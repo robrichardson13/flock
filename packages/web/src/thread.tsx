@@ -30,6 +30,7 @@ import { useImageViewer } from "./Viewer.tsx";
 import { timeAgo } from "./App.tsx";
 import { clearDraft, draftKey, getDraft, saveDraft, shouldSendOnEnter, subscribeInsert, takeDroppedCount, type DraftAddress, type StagedAttachment } from "./compose.ts";
 import { joinDraft } from "./addToChat.tsx";
+import { hasHighlight, highlightDraft } from "./draftHighlight.ts";
 import { useAutoGrow } from "./autogrow.ts";
 import { focusNoScroll } from "./focus.ts";
 import { ActorTap, Avatar, Icons, useHasFinePointer, useIsMobile } from "./ui.tsx";
@@ -416,6 +417,28 @@ export function LineComposer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text]);
 
+  // The quote's visual treatment (ADR 0014, card #6). The quote stays ordinary text in the
+  // field — that is what lets a reply be typed between two of them — and the treatment is
+  // painted by a mirror layer behind a field whose own glyphs go transparent, the web's
+  // answer to what nib does by colouring the `>` lines of its NSTextView directly. The
+  // draft string is never rewritten, so send, drafts, autogrow and Enter-to-send are all
+  // untouched, and the posted markdown is what it always was.
+  //
+  // The mirror only exists while the draft holds a quoted line: with nothing to paint the
+  // field keeps its own visible text and this costs nothing.
+  const hlLines = highlightDraft(text);
+  const highlighted = hasHighlight(hlLines);
+  const hlRef = useRef<HTMLDivElement>(null);
+  // The mirror does not scroll itself (it has no scrollbar and no pointer events); it is
+  // moved to wherever the field is scrolled to. Both on the field's own scroll and after a
+  // text change, since growing past `max-height` scrolls the field without a scroll event.
+  const syncScroll = () => {
+    const hl = hlRef.current;
+    const el = areaRef.current;
+    if (hl && el) hl.scrollTop = el.scrollTop;
+  };
+  useEffect(syncScroll, [text, highlighted]);
+
   const showNotice = (message: string) => {
     setNotice(message);
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
@@ -649,20 +672,39 @@ export function LineComposer({
       <div className="line-composer">
         {leading}
         {expanded && attachControls}
-        <textarea
-          ref={areaRef}
-          className="input textarea line-composer-input"
-          rows={1}
-          placeholder={placeholder}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          enterKeyHint="enter"
-          data-composer
-        />
+        <div className={`composer-field${highlighted ? " has-hl" : ""}`}>
+          {highlighted && (
+            // `aria-hidden`: it is a picture of the textarea's own value, which a screen
+            // reader already reads from the textarea.
+            <div className="composer-hl" ref={hlRef} aria-hidden="true">
+              {hlLines.map((line, i) => (
+                <div
+                  key={i}
+                  className={line.quote ? `hl-line hl-quote${line.start ? " hl-quote-start" : ""}${line.end ? " hl-quote-end" : ""}` : "hl-line"}
+                >
+                  {line.spans.map((span, j) => (
+                    <span key={j} className={span.kind === "hidden" ? "hl-hidden" : undefined}>{span.value}</span>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+          <textarea
+            ref={areaRef}
+            className="input textarea line-composer-input"
+            rows={1}
+            placeholder={placeholder}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            onScroll={syncScroll}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            enterKeyHint="enter"
+            data-composer
+          />
+        </div>
         <button type="submit" className={`icon-btn icon-btn-primary${sendClass ? ` ${sendClass}` : ""}`} disabled={!canSend} aria-label={action}>{Icons.send(18)}</button>
       </div>
     </form>
