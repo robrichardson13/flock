@@ -10,11 +10,11 @@ from a web app.
 <td valign="top"><img src="docs/screenshot-mobile.png" alt="The same flock board on a phone, showing the awaiting-human question" width="170"></td>
 </tr></table>
 
-Delegating that way is free until it isn't. Agents relay the plan to each other inside tool calls
-and replies, so the state of the run lives only in whichever context window is holding it, and
-compaction, a context limit or a finished session takes it with them. flock writes it down
-instead: the goal, the cards, who claimed what, what they decided. An agent that lost its context
-runs one command and is current again.
+Without a board, agents relay the plan to each other inside tool calls and replies, so the state
+of the run lives only in whichever context window is holding it, and compaction, a context limit
+or a finished session takes it with them. flock writes it down instead: the goal, the cards, who
+claimed what, what they decided. An agent that lost its context runs one command and is current
+again.
 
 ## What using it looks like
 
