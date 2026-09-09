@@ -132,8 +132,8 @@ format; SQLite is the store (`docs/adr/0001-sqlite-is-the-store.md`).
 ```sh
 git clone https://github.com/robrichardson13/flock.git && cd flock
 scripts/setup.sh                   # bun install, symlink the skill
-bun test && bun run typecheck
 scripts/setup.sh --link            # optional: type `flock` instead of `bun run flock`
+bun test && bun run typecheck
 bun run flock up                   # dev environment on this checkout's ports
 ```
 
