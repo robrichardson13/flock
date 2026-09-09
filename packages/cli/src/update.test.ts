@@ -297,7 +297,11 @@ describe("the lock", () => {
 
 // ---------------------------------------------------------------------------- end to end
 //
-// Compiling two ~60 MB binaries takes a couple of minutes, so this is gated. Run it with:
+// This actually costs ~7s total (measured), not the minutes an earlier version of this comment
+// claimed — that false claim is why this was never turned on in CI. It is gated anyway so a local
+// `bun test` loop stays free of building binaries and binding a port; CI sets FLOCK_E2E=1 on the
+// test step in both ci.yml and release.yml, so this block runs on every PR and every push to main.
+// Run it locally with:
 //
 //   FLOCK_E2E=1 bun test packages/cli/src/update.test.ts
 //

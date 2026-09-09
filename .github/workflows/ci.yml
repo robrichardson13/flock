@@ -38,6 +38,11 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
       - name: Test
+        env:
+          # Turns on the self-update end-to-end in packages/cli/src/update.test.ts. It builds two
+          # real release binaries and updates one into the other over a file:// release base:
+          # hermetic, no network, ~7s total.
+          FLOCK_E2E: "1"
         run: bun test
       - name: Build
         run: bun run build
