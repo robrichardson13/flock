@@ -133,12 +133,16 @@ format; SQLite is the store (`docs/adr/0001-sqlite-is-the-store.md`).
 git clone https://github.com/robrichardson13/flock.git && cd flock
 scripts/setup.sh                   # bun install, symlink the skill
 bun test && bun run typecheck
+scripts/setup.sh --link            # optional: type `flock` instead of `bun run flock`
 bun run flock up                   # dev environment on this checkout's ports
 ```
 
-`bun run flock <verb>` runs the CLI from source; a checkout never puts a dev build on `PATH`. The
-canonical checkout serves `:4747` and `:5173`, and a worktree gets its own stable pair derived
-from its path. `CLAUDE.md` has the working detail and `docs/adr/` has the reasoning.
+By default a checkout puts no dev build on `PATH`; run the CLI from source as
+`bun run flock <verb>`. `--link` is the deliberate opt-in: it points the global `flock` at this
+checkout, so dev wins over prod with no PATH ordering involved, and `--unlink` restores whatever
+binary was there. The canonical checkout serves `:4747` and `:5173`, and a worktree gets its own
+stable pair derived from its path. `CLAUDE.md` has the install-slot mechanics and `docs/adr/` has
+the reasoning.
 
 ## License
 
