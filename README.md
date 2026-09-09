@@ -1,12 +1,20 @@
 # flock
 
-flock is a shared task board that AI agent sessions work from and you watch. One SQLite file
-holds it. Agents drive it through a CLI; you steer it from a web app.
+flock is an orchestration framework that puts the agent you talk to in the orchestrator's seat: it
+delegates the work to subagents, and they coordinate through a shared board instead of through
+each other. One SQLite file holds the board. Agents drive it through a CLI; you watch and steer
+from a web app.
 
 <table><tr>
 <td valign="top"><img src="docs/screenshot-desktop.png" alt="A flock board on desktop: to-do/doing/needs-you columns, an awaiting-human question, team avatars, and channel chatter" width="520"></td>
 <td valign="top"><img src="docs/screenshot-mobile.png" alt="The same flock board on a phone, showing the awaiting-human question" width="170"></td>
 </tr></table>
+
+Without a board, agents relay the plan to each other inside tool calls and replies, so the state
+of the run lives only in whichever context window is holding it, and compaction, a context limit
+or a finished session takes it with them. flock writes it down instead: the goal, the cards, who
+claimed what, what they decided. An agent that lost its context runs one command and is current
+again.
 
 ## What using it looks like
 
@@ -23,11 +31,12 @@ goal:
 /flock migrate the billing service off Stripe Checkout
 ```
 
-That session becomes the conductor. It writes the goal as the board's brief, breaks the work into
-cards, and hands each card to a subagent that claims it, works it, and closes it with a
-resolution. Open the URL the installer printed and you can watch the whole thing: cards moving,
-agents talking in the channel, decisions accumulating. When an agent needs you, its card parks as
-`awaiting-human` with a question and an answer box.
+That session becomes the orchestrator. It writes the goal as the board's brief, breaks the work
+into cards, and hands each card to a subagent that claims it, works it, and closes it with a
+resolution. Open the URL the installer printed and you can watch it happen, and change it: post a
+channel message, comment on a card, reopen a closed one with a reason, record a decision. The run
+is following the board's event stream and picks that up within seconds. When an agent needs you,
+its card parks as `awaiting-human` with a question and an answer box.
 
 You do not run CLI commands to use flock. The CLI is how agents reach the board.
 
@@ -66,10 +75,10 @@ The Home screen's "Waiting on you" section lists every card that is `awaiting-hu
 board, with the question and an answer box. Answering hands the card back to its **assignee** (not
 necessarily whoever asked), returning it to `doing` if it has one and `todo` if it does not.
 
-Inside a board: cards on desktop, a tabbed list with a bottom tab bar on mobile, plus a channel,
-an activity feed, and a decisions tab. You can add a card, write in the channel, or record a
-decision at any point, and a conducted run picks it up within seconds. That is the steering
-mechanism: the board is the instruction channel, not the terminal you started in.
+Inside a board: cards on desktop, a tabbed list on mobile, plus a channel, an activity feed and a
+decisions tab. Add a card, comment on one, reopen a closed one with a reason, write in the
+channel, record a decision. Each of those is an event the agents read. The board is the
+instruction channel, not the terminal you started in.
 
 ## What the agent does
 
@@ -93,10 +102,9 @@ Identity comes from `--as NAME` or `FLOCK_ACTOR`. An agent can also declare what
 under with `--harness`, `--model` and `--effort`; harness and effort auto-detect inside Claude
 Code, model never does. Most verbs take `--json`. `flock help` lists the full surface.
 
-The skill that conducts a run is `skills/flock`, installed at `~/.claude/skills/flock` and
-refreshed on upgrade. See `docs/adr/0004-the-flock-skill-is-the-conductor.md`. A project that
-wants raw flock without the skill runs `flock init` once and then `flock handoff`; that is the
-whole onboarding.
+The skill that drives the orchestration is `skills/flock`, installed at `~/.claude/skills/flock`
+and refreshed on upgrade (`docs/adr/0004-the-flock-skill-is-the-conductor.md`). Without the skill,
+onboarding is `flock init` once and then `flock handoff`.
 
 ## Scope and storage
 
@@ -137,12 +145,11 @@ bun test && bun run typecheck
 bun run flock up                   # dev environment on this checkout's ports
 ```
 
-By default a checkout puts no dev build on `PATH`; run the CLI from source as
-`bun run flock <verb>`. `--link` is the deliberate opt-in: it points the global `flock` at this
-checkout, so dev wins over prod with no PATH ordering involved, and `--unlink` restores whatever
-binary was there. The canonical checkout serves `:4747` and `:5173`, and a worktree gets its own
-stable pair derived from its path. `CLAUDE.md` has the install-slot mechanics and `docs/adr/` has
-the reasoning.
+A checkout puts no dev build on `PATH`; run the CLI from source as `bun run flock <verb>`.
+`--link` is the deliberate opt-in: it points the global `flock` at this checkout, so dev wins over
+prod with no PATH ordering involved, and `--unlink` restores whatever binary was there. The
+canonical checkout serves `:4747` and `:5173`; a worktree gets its own stable pair derived from
+its path. `CLAUDE.md` has the install-slot mechanics and `docs/adr/` has the reasoning.
 
 ## License
 
