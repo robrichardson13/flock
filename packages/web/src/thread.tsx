@@ -317,6 +317,7 @@ export function LineComposer({
   onTextChange,
   compact,
   onExpandedChange,
+  onUserExpandedChange,
 }: {
   placeholder: string;
   action: string;
@@ -351,6 +352,16 @@ export function LineComposer({
    *  changes, so a caller can hide something (the jump-to-latest button) while the composer
    *  is focused or holding a draft, and let it back once the composer collapses. */
   onExpandedChange?: (expanded: boolean) => void;
+  /** Channel only (#4): told whenever *the reasons a caller can actually control* — focus, or
+   *  a non-empty draft/staged attachment — change, independent of `compact`/`expanded` itself.
+   *  `expanded` above is `!compact || focused || text || staged`, which is unconditionally
+   *  true on the very first render of a composer whose `compact` prop starts `false` (exactly
+   *  Channel's case, since its `compact` is itself derived from scroll progress) — a caller
+   *  driving that same scroll progress off `onExpandedChange` would latch its "user is
+   *  editing" override permanently on that first tick and never let go (#4 reopened). This
+   *  callback only ever reflects the user-driven reasons, so it starts `false` regardless of
+   *  `compact`'s own initial value. */
+  onUserExpandedChange?: (expanded: boolean) => void;
 }) {
   const key = draftKey(address);
   const [text, setText] = useState(() => getDraft(key).text);
@@ -464,11 +475,19 @@ export function LineComposer({
   // reads false while `compact` is set, the field is unfocused, and there is nothing in it
   // or staged worth keeping open for.
   const expanded = !compact || focused || !!text.trim() || staged.length > 0;
+  // Unlike `expanded`, never true merely because `compact` is false — see
+  // `onUserExpandedChange`'s doc comment for why that distinction matters (#4 reopened).
+  const userExpanded = focused || !!text.trim() || staged.length > 0;
 
   useEffect(() => {
     onExpandedChange?.(expanded);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded]);
+
+  useEffect(() => {
+    onUserExpandedChange?.(userExpanded);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userExpanded]);
 
   const submit = async (e?: FormEvent) => {
     e?.preventDefault();

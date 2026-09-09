@@ -809,6 +809,11 @@ export interface StickToBottom<T extends HTMLElement> {
    *  Call it before the row that earns the jump is added to `ids`, so the layout effect
    *  that runs once it lands sees `stuck` already true. */
   stick: () => void;
+  /** Whether the reader is currently within `slack` of the bottom — the same notion this
+   *  hook already tracks internally to decide whether to re-pin on growth, exposed as a
+   *  ref (rather than state) so a scroll-rate consumer (`useScrollCollapse`, #4) can read it
+   *  every frame without forcing a React re-render. */
+  atBottom: RefObject<boolean>;
 }
 
 /**
@@ -951,7 +956,233 @@ export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], 
     if (el) pinToBottom(el);
   }, [pinToBottom]);
 
-  return { ref, onScroll, pending, toBottom, stick };
+  return { ref, onScroll, pending, toBottom, stick, atBottom: stuck };
+}
+
+/* ---------- minimize the composer while scrolling toward older content ---------- */
+
+/** Distance, in px, scrolled away from the bottom over which collapse progress saturates.
+ *  Measured from the first pixel of scroll rather than from the far side of a dead zone
+ *  (#6: "it seems like the effect doesn't start until x amount of scrolling happens"), so
+ *  this is the whole travel, not the second half of it. 120px puts a little under half a
+ *  pixel of composer height on every pixel of drag — the first 20px of a thumb move is
+ *  already ~9px of visible change, and a short drag finishes the morph. */
+const SCROLL_COLLAPSE_RANGE_PX = 120;
+
+/** How close to the bottom still counts as "at the bottom" for forcing the composer full.
+ *  Deliberately tiny (#6). `useStickToBottom`'s own 80px slack is the right band for
+ *  deciding whether to *re-pin on growth*, but using it here meant the first 80px of every
+ *  scroll away from the bottom did nothing at all. This only has to absorb sub-pixel scroll
+ *  positions and rounding; the mapping below covers everything past it. */
+const AT_BOTTOM_EPS_PX = 4;
+
+/** Where the *structural* flip fires (attach button and mode row unmounting,
+ *  `.line-composer`'s mobile flex-wrap flipping to `nowrap`) — the "snap the wrap late" the
+ *  human chose on #4. Both ends sit at the very end of the range, so `collapsed` is a pure
+ *  function of progress (`>= 1`) and the flip therefore happens at the identical position
+ *  scrolling either way. `ON` is 1 rather than a few percent short (#6) because the
+ *  continuous rules are shaped so that at progress exactly 1 the composer already *is* the
+ *  resting look to the pixel — same height, send on the same row at the same size, attach
+ *  scaled to nothing — so flipping there moves nothing at all.
+ *
+ *  There is deliberately no hysteresis band any more (#7). The band it used to carry (0.9)
+ *  froze the composer at its resting height for the last 12px of scroll on the way *out*
+ *  and then stepped ~5px, which is an asymmetry between the two directions for no
+ *  benefit — the flicker it guarded against needed a noise source, and the only one there
+ *  ever was (the composer's own resize feeding back into `scrollHeight`) is gone by
+ *  construction since #6 froze the feed's reservation. Progress is now a clean function of
+ *  scroll position, so a threshold on it is stable on its own. */
+const NEAR_COLLAPSE_ON = 1;
+const NEAR_COLLAPSE_OFF = 1;
+
+/** Discrete-toggle threshold, in px past the last flip point, used only under
+ *  `prefers-reduced-motion` — the original anchor-based hysteresis from #2's first pass. */
+const SCROLL_COLLAPSE_PX = 24;
+
+export interface ScrollCollapse {
+  /** True once collapse progress has crossed `NEAR_COLLAPSE_ON`; false again once it has
+   *  dropped back below `NEAR_COLLAPSE_OFF`. Feeds `LineComposer`'s `compact` prop — the
+   *  structural (non-continuous) part of the collapse. Always false while `enabled` is
+   *  false. */
+  collapsed: boolean;
+  /** Feed every scroll event on the same element `scrollRef` points at (alongside whatever
+   *  else that container's `onScroll` already does — this does not replace it). rAF-throttled
+   *  internally, and writes straight to `cssTarget`'s `--composer-collapse` custom property
+   *  rather than React state, so a scroll frame never re-renders React. */
+  onScroll: () => void;
+  /** Told whenever `LineComposer`'s own expanded/collapsed state changes (focus, or
+   *  non-empty draft text/staged attachments) via its `onExpandedChange`. While expanded for
+   *  that reason, collapse progress is pinned at 0 (full size) regardless of scroll —
+   *  `LineComposer` already forces its *structural* expansion in that case; this keeps the
+   *  continuous CSS var in step with it. */
+  setExpandedOverride: (expanded: boolean) => void;
+}
+
+/**
+ * Drives the channel composer's scroll-to-minimize (mobile only): a continuous 0..1 progress
+ * — 0 the full composer, 1 the card-detail composer's resting look — set as a CSS custom
+ * property (`--composer-collapse`) on `cssTarget` directly (not React state), so scrolling
+ * slowly morphs the chin at the same rate the reader scrolls, and scrolling back morphs it
+ * straight back, without a React re-render on every frame. Progress saturates over
+ * `SCROLL_COLLAPSE_RANGE_PX` of distance scrolled away from the bottom.
+ *
+ * Pinned-to-bottom (`atBottom`, the same notion `useStickToBottom` already tracks) always
+ * forces progress to 0, regardless of scroll direction or history — arriving back at the
+ * newest messages (including via a programmatic pin: an own send, the "N new" jump,
+ * `useStickToBottom`'s re-pin on growth) always shows the full composer.
+ *
+ * The structural bits that cannot be a scalar — the attach button and mode row unmounting,
+ * the mobile `.line-composer` flex-wrap flip — stay a discrete toggle (`collapsed`), flipped
+ * only in the last few percent of progress (`NEAR_COLLAPSE_ON`/`OFF`), same as the card-detail
+ * composer's own focus-driven compact/expanded flip already does for that boundary.
+ *
+ * Under `prefers-reduced-motion`, falls back to the original discrete anchor-based hysteresis
+ * from #2: `--composer-collapse` jumps straight between 0 and 1 rather than tracking scroll
+ * continuously.
+ */
+export function useScrollCollapse<T extends HTMLElement>(
+  scrollRef: RefObject<T>,
+  enabled: boolean,
+  atBottom: RefObject<boolean>,
+  cssTarget: RefObject<HTMLElement>,
+): ScrollCollapse {
+  const [collapsed, setCollapsed] = useState(false);
+  const collapsedRef = useRef(false);
+  collapsedRef.current = collapsed;
+  const anchor = useRef(0);
+  const override = useRef(false);
+  const raf = useRef(0);
+
+  const applyVar = useCallback(
+    (value: number) => {
+      cssTarget.current?.style.setProperty("--composer-collapse", String(value));
+    },
+    [cssTarget],
+  );
+
+  /** Publish the chin's *resting* height so the feed reserves that much for the whole
+   *  collapse instead of following it down. Only called from the two places the composer is
+   *  known to be at full height — pinned to the bottom, or held open by focus/draft — so the
+   *  live `--composer-h` is the resting height by definition. `--composer-space` in
+   *  styles.css takes `max()` of the two, so a value briefly left short during the composer's
+   *  own re-expansion just falls through to the live height rather than clipping. */
+  const learnRestingHeight = useCallback(() => {
+    const el = cssTarget.current;
+    if (!el) return;
+    const h = el.style.getPropertyValue("--composer-h");
+    if (h) el.style.setProperty("--composer-h-rest", h);
+  }, [cssTarget]);
+
+  const recompute = useCallback(() => {
+    raf.current = 0;
+    if (!enabled) return;
+    const el = scrollRef.current;
+    if (!el) return;
+
+    if (override.current) {
+      anchor.current = el.scrollTop;
+      // Focus or a non-empty draft: the composer is definitely at its full height here, so
+      // this is the moment to re-learn what "resting" measures (a staged image or a grown
+      // draft makes it taller than it was).
+      learnRestingHeight();
+      applyVar(0);
+      if (collapsedRef.current) setCollapsed(false);
+      return;
+    }
+
+    if (reducedMotion()) {
+      if (atBottom.current) {
+        anchor.current = el.scrollTop;
+        applyVar(0);
+        if (collapsedRef.current) setCollapsed(false);
+        return;
+      }
+      const delta = el.scrollTop - anchor.current;
+      if (delta < -SCROLL_COLLAPSE_PX && !collapsedRef.current) {
+        anchor.current = el.scrollTop;
+        applyVar(1);
+        setCollapsed(true);
+      } else if (delta > SCROLL_COLLAPSE_PX && collapsedRef.current) {
+        anchor.current = el.scrollTop;
+        applyVar(0);
+        setCollapsed(false);
+      }
+      return;
+    }
+
+    // Absolute distance from the bottom of the feed — not an anchor-relative delta (#5). An
+    // anchor snapshot gets refreshed every time you are at the bottom or touch the field, so
+    // progress measured against it tracks *accumulated movement since that moment* rather
+    // than where the feed actually is: focus the composer two thousand px up in history,
+    // blur, and it is fully expanded again with a whole range to scroll before it collapses.
+    // That was the "isn't attached to the scroll" the human reported.
+    const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+
+    // At the bottom the composer is always full, whatever the history (#4) — including
+    // arriving there programmatically (an own send, the "N new" jump, `useStickToBottom`'s
+    // re-pin on growth), which lands exactly at `fromBottom === 0`. `reservedFull` can only
+    // grow here: this branch also runs during the re-expansion that being here triggers, and
+    // latching the half-grown height would leave the mapping permanently short.
+    if (fromBottom <= AT_BOTTOM_EPS_PX) {
+      anchor.current = el.scrollTop;
+      learnRestingHeight();
+      applyVar(0);
+      if (collapsedRef.current) setCollapsed(false);
+      return;
+    }
+
+    // Plain distance from the bottom, with no correction term — the scroll metric is not
+    // self-referential any more because the feed's reservation no longer follows the
+    // collapse. `--composer-h-rest` (published above, consumed by `--composer-space` in
+    // styles.css) holds `.pane-scroll`'s trailing padding at the chin's resting height for
+    // the whole range, so `scrollHeight` is constant across a collapse and this is a pure
+    // function of where the reader is. #5 got the same invariance by subtracting the live
+    // `--composer-h`, but that put the composer's entire height in front of the zero point:
+    // the first ~120px of every scroll did nothing, which is what the human felt (#6).
+    const distance = Math.max(0, fromBottom - AT_BOTTOM_EPS_PX);
+    const progress = Math.min(1, distance / SCROLL_COLLAPSE_RANGE_PX);
+    applyVar(progress);
+    if (!collapsedRef.current && progress >= NEAR_COLLAPSE_ON) setCollapsed(true);
+    else if (collapsedRef.current && progress < NEAR_COLLAPSE_OFF) setCollapsed(false);
+  }, [enabled, scrollRef, atBottom, applyVar, learnRestingHeight]);
+
+  useEffect(() => {
+    if (!enabled) {
+      setCollapsed(false);
+      applyVar(0);
+      cssTarget.current?.style.removeProperty("--composer-h-rest");
+      return;
+    }
+    anchor.current = scrollRef.current?.scrollTop ?? 0;
+    // Mounts pinned to the bottom with the composer full, so this is the resting height.
+    learnRestingHeight();
+    recompute();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled]);
+
+  useEffect(
+    () => () => {
+      if (raf.current) cancelAnimationFrame(raf.current);
+    },
+    [],
+  );
+
+  const onScroll = useCallback(() => {
+    if (!enabled) return;
+    if (raf.current) return;
+    raf.current = requestAnimationFrame(recompute);
+  }, [enabled, recompute]);
+
+  const setExpandedOverride = useCallback(
+    (expanded: boolean) => {
+      override.current = expanded;
+      if (expanded) applyVar(0);
+      else recompute();
+    },
+    [applyVar, recompute],
+  );
+
+  return { collapsed, onScroll, setExpandedOverride };
 }
 
 /* ---------- hold position when content lands above the viewport ---------- */

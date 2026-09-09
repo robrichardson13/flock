@@ -941,14 +941,34 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
    and a send error each add a row above it — so it is measured rather than tokenised. The
    fallback is one resting row, for the frame before the observer first fires.
    --composer-space is that plus the pill's own clearance: everything below the last message. */
+/* #6: `max(..., --composer-h-rest)` holds the reservation at the chin's *resting* height for
+   the whole scroll-linked collapse. `--composer-h-rest` is published by `useScrollCollapse`
+   (live.ts) only while the composer is known to be full, and only on the channel pane — it is
+   unset everywhere else (the card page, and the channel on desktop, where the hook is
+   disabled), so `max()` falls through to `--composer-h` and nothing changes there.
+
+   Why it has to be frozen: `--composer-h` shrinking mid-collapse shrinks this padding, which
+   shrinks `scrollHeight`, which (a) feeds straight back into the hook's own distance-from-
+   bottom and (b) reads to `useStickToBottom`'s ResizeObserver as content moving, so with a
+   small at-bottom epsilon it re-pinned the reader to the bottom the instant the composer
+   started collapsing — the scroller fighting the finger. Reserving the resting height
+   throughout makes the collapse invisible to both. The cost is trailing space below the last
+   message while collapsed, which is only ever off-screen: reaching the end of the feed is
+   exactly the case where the composer is full and the reservation is exact. */
 .screen:has(.tabbar) .pane:has(> .pane-foot) {
-  --composer-space: calc(var(--pillbar-space) + var(--composer-h, 56px));
+  --composer-space: calc(var(--pillbar-space) + max(var(--composer-h, 56px), var(--composer-h-rest, 0px)));
 }
 .screen:has(.tabbar) .pane:has(> .pane-foot) .pane-scroll { padding-bottom: calc(var(--s3) + var(--composer-space)); }
 /* "N new" is anchored to the bottom of `.pane-body`, which now runs the full height of the
    pane rather than stopping at the chin's top edge — so it has to be lifted clear itself,
    or it sits behind the composer. */
-.screen:has(.tabbar) .pane:has(> .pane-foot) .new-pill { bottom: calc(var(--s2) + var(--composer-space)); }
+/* The pill floats over the feed rather than reserving space in it, so it wants the chin's
+   *live* height, not the frozen reservation `--composer-space` now carries (#6) — otherwise
+   it hovers a collapsed composer's width of empty air above it. This is what
+   `--composer-space` resolved to before the freeze. */
+.screen:has(.tabbar) .pane:has(> .pane-foot) .new-pill {
+  bottom: calc(var(--s2) + var(--pillbar-space) + var(--composer-h, 56px));
+}
 
 /* ---------- push navigation (phone) ---------- */
 /* Home -> Board -> Card is one stack, and moving through it is an iOS push: the arriving
@@ -2143,6 +2163,95 @@ html[data-topbar] .sheet { max-height: 100%; }
 }
 @media (prefers-reduced-motion: no-preference) {
   .card-composer .line-composer { transition: padding-block var(--d-fast) var(--ease-out); }
+}
+
+/* #4: the channel composer's scroll-linked continuous collapse (mobile only — desktop never
+   sets `--composer-collapse`, so every rule here falls back to its `0`/expanded value there).
+   `--composer-collapse` is a plain 0..1 number written straight onto `.pane` every scroll
+   frame by `useScrollCollapse` (live.ts), not animated by a CSS transition here — the JS
+   already tracks the scroll position frame-for-frame, so a transition would lag behind and
+   double-smooth it. This is deliberately additive to, not a replacement for, the discrete
+   `.composer-collapsed` rules above: those still own the exact resting look (and still fire,
+   at a higher specificity, the moment `useScrollCollapse`'s `collapsed` crosses its
+   near-the-end threshold), so padding/height here only ever needs to interpolate between
+   today's two existing looks, never invent a third. */
+@media (max-width: 899px) {
+  /* #5: these have to be the properties that actually carry the container's height, or the
+     variable moves and nothing visible does. Measured at 390px before this rule existed, the
+     composer was 106px tall at every value of `--composer-collapse` from 0 to 0.91 and 54px
+     the instant `.composer-collapsed` flipped — the whole 52px in the snap, none of it in the
+     range. The chin is two flex lines: the field's own row, and the wrapped attach/send row
+     under it. Both are driven below.
+
+     `--composer-h` (published by LineComposer's ResizeObserver, thread.tsx) follows whatever
+     these produce, so the feed's bottom reservation tracks the collapse for free;
+     `useScrollCollapse` subtracts it back out of its own scroll metric so that following
+     cannot feed back into progress. */
+
+  /* The gap between the two flex lines. (`.card-composer`'s own column gap is deliberately
+     not touched: the channel's form has a single child, so it spaces nothing.) */
+  .card-composer .line-composer { row-gap: calc(var(--s1) * (1 - var(--composer-collapse, 0))); }
+
+  .card-composer .line-composer-input {
+    min-height: 0;
+    padding-block: calc(var(--s2) + (var(--s3) - var(--s2)) * (1 - var(--composer-collapse, 0)));
+    /* The lever that actually moves the field's row. `useAutoGrow` writes an inline
+       `style.height` in px on the textarea and `box-sizing` is border-box everywhere, so the
+       padding above cannot change the box — on its own it only slides the text around inside
+       a fixed-height field, which is exactly the "the text moves but the composer doesn't"
+       the human saw. `max-height` outranks an inline `height`, so this is what takes the row
+       from its expanded 48px (`--lh-body` + 2 x `--s3`) to the resting 40px (+ 2 x `--s2`),
+       continuously. Safe against a multi-line draft: a non-empty draft pins the variable at
+       0 via the focus/draft override. */
+    max-height: calc(var(--lh-body) + 2 * (var(--s2) + (var(--s3) - var(--s2)) * (1 - var(--composer-collapse, 0))));
+  }
+
+  /* The wrapped attach/send row is ~48px of the 52px delta — the human's option A on #4 asked
+     for exactly this ("continuously shrink ... the button row"), and it is the part that was
+     missing. Rather than shrink the buttons away, the row *merges up into the field's row*:
+     `--btn-lift` is exactly the collapsed field row's height (`--lh-body` + 2 x `--s2`, the
+     row send ends up sharing), the negative margin takes that much out of the flex line's
+     cross size, and the matching translate carries the buttons up by the same amount. So the
+     buttons stay glued to the composer's bottom edge the whole way down and, at progress 1,
+     send is on the exact pixel `.composer-collapsed` puts it — the wrap flip then moves
+     nothing. Excluded while `.composer-collapsed` is on so the resting endpoint is untouched.
+
+     Send keeps `--tap` throughout and only travels (#6): it is the same size at both
+     endpoints, so scaling it down and back up mid-range was motion with nothing behind it.
+
+     The lift is a negative `margin-top`, not a `translate` (#7). A negative margin-top takes
+     the same amount out of the flex line's cross size *and* seats the border box that far
+     above the line's top edge, so it does the whole job in layout with `transform` left at
+     `none`. Doing it with a translate cost a visible pop at the end of collapse: the moment
+     `.composer-collapsed` took over, send's layout position moved up 40px and its transform
+     went from `translateY(-40px)` to `none` in the same frame — statically identical, but the
+     shared control transition below springs `transform` over `--d-base`, so the button flew
+     40px up and sprang back down over ~250ms. Measured frame by frame: 719 -> 679 -> 699 ->
+     712 -> 718 -> 720.6 -> 720.2 -> 719. Expand never showed it, because there the rule that
+     suppresses the transform transition is the one *arriving* rather than the one leaving. */
+  .card-composer:not(.composer-collapsed) .line-composer > .icon-btn {
+    --btn-lift: calc((var(--lh-body) + 2 * var(--s2)) * var(--composer-collapse, 0));
+    margin-top: calc(-1 * var(--btn-lift));
+    /* The paperclip below still uses `transform` for its scale, and the shared control
+       transition springs transform over `--d-base` — a lagging spring on top of a value that
+       already tracks the finger. Colour keeps its easing; transform does not. */
+    transition: background-color var(--d-fast) var(--ease-out), border-color var(--d-fast) var(--ease-out),
+      color var(--d-fast) var(--ease-out);
+  }
+  /* Only the paperclip shrinks. It is not there at all at the endpoint, so shrinking and
+     fading it *is* its half of the collapse, and by progress 1 it is already scaled to
+     nothing and invisible — its unmount at the flip is a no-op. A uniform `scale`, not a
+     shrinking `height`: the row's cross size is set by whichever button is tallest, and send
+     (which keeps `--tap` throughout) is always at least as tall, so the paperclip's own
+     height never drove the layout — shrinking it only squashed the glyph into an ellipse.
+     Scaling leaves the layout alone and reads as the icon receding. */
+  .card-composer:not(.composer-collapsed) .line-composer > .icon-btn:not(.icon-btn-primary) {
+    transform: scale(calc(1 - var(--composer-collapse, 0)));
+    opacity: calc(1 - var(--composer-collapse, 0));
+  }
+  .card-composer:not(.composer-collapsed) .line-composer > .icon-btn:not(.icon-btn-primary):active:not(:disabled) {
+    transform: scale(calc((1 - var(--composer-collapse, 0)) * 0.96));
+  }
 }
 
 /* The same three modes as one segmented control, in the composer's leading slot (#23). It
