@@ -995,10 +995,6 @@ const AT_BOTTOM_EPS_PX = 4;
 const NEAR_COLLAPSE_ON = 1;
 const NEAR_COLLAPSE_OFF = 1;
 
-/** Discrete-toggle threshold, in px past the last flip point, used only under
- *  `prefers-reduced-motion` — the original anchor-based hysteresis from #2's first pass. */
-const SCROLL_COLLAPSE_PX = 24;
-
 export interface ScrollCollapse {
   /** True once collapse progress has crossed `NEAR_COLLAPSE_ON`; false again once it has
    *  dropped back below `NEAR_COLLAPSE_OFF`. Feeds `LineComposer`'s `compact` prop — the
@@ -1026,30 +1022,31 @@ export interface ScrollCollapse {
  * straight back, without a React re-render on every frame. Progress saturates over
  * `SCROLL_COLLAPSE_RANGE_PX` of distance scrolled away from the bottom.
  *
- * Pinned-to-bottom (`atBottom`, the same notion `useStickToBottom` already tracks) always
- * forces progress to 0, regardless of scroll direction or history — arriving back at the
- * newest messages (including via a programmatic pin: an own send, the "N new" jump,
- * `useStickToBottom`'s re-pin on growth) always shows the full composer.
+ * Progress is a pure function of distance from the bottom of `scrollRef`, so the same hook
+ * serves both shapes of pane (#8) with no second mode. The channel opens pinned to the
+ * bottom, so it rests at progress 0 (full) and collapses as the reader travels back through
+ * history. The card detail page and Decisions open at the top, so the very same mapping rests
+ * them at progress 1 (the resting look) and expands them continuously as the reader nears the
+ * end of the page — the mirror image, for free. Reaching the bottom always forces progress 0,
+ * including via a programmatic pin (an own send, the "N new" jump, `useStickToBottom`'s
+ * re-pin on growth).
  *
  * The structural bits that cannot be a scalar — the attach button and mode row unmounting,
  * the mobile `.line-composer` flex-wrap flip — stay a discrete toggle (`collapsed`), flipped
  * only in the last few percent of progress (`NEAR_COLLAPSE_ON`/`OFF`), same as the card-detail
  * composer's own focus-driven compact/expanded flip already does for that boundary.
  *
- * Under `prefers-reduced-motion`, falls back to the original discrete anchor-based hysteresis
- * from #2: `--composer-collapse` jumps straight between 0 and 1 rather than tracking scroll
- * continuously.
+ * Under `prefers-reduced-motion`, the same mapping is snapped at its midpoint rather than
+ * tracked continuously: `--composer-collapse` is only ever 0 or 1.
  */
 export function useScrollCollapse<T extends HTMLElement>(
   scrollRef: RefObject<T>,
   enabled: boolean,
-  atBottom: RefObject<boolean>,
   cssTarget: RefObject<HTMLElement>,
 ): ScrollCollapse {
   const [collapsed, setCollapsed] = useState(false);
   const collapsedRef = useRef(false);
   collapsedRef.current = collapsed;
-  const anchor = useRef(0);
   const override = useRef(false);
   const raf = useRef(0);
 
@@ -1067,10 +1064,27 @@ export function useScrollCollapse<T extends HTMLElement>(
    *  styles.css takes `max()` of the two, so a value briefly left short during the composer's
    *  own re-expansion just falls through to the live height rather than clipping. */
   const learnRestingHeight = useCallback(() => {
-    const el = cssTarget.current;
-    if (!el) return;
-    const h = el.style.getPropertyValue("--composer-h");
-    if (h) el.style.setProperty("--composer-h-rest", h);
+    const host = cssTarget.current;
+    if (!host) return;
+    const form = host.querySelector<HTMLElement>("form.pane-foot");
+    if (!form) return;
+    // Measured, not read off the live `--composer-h`. Reading the live value only works if
+    // the composer happens to be at rest at that instant, and on a pane that opens at the
+    // top (#8) it never is: the first recompute collapses it before anything can observe it,
+    // and a remount (React StrictMode in dev, a tab switch in production) re-learns from the
+    // already-collapsed height and latches it. So put the composer at rest for the length of
+    // one synchronous read instead. Both the custom property and the structural class have
+    // to come off — the class outranks the continuous rules — and both go straight back
+    // before the frame ends, so React never sees the className it did not write.
+    const prevVar = host.style.getPropertyValue("--composer-collapse");
+    const collapsedClass = form.classList.contains("composer-collapsed");
+    host.style.setProperty("--composer-collapse", "0");
+    if (collapsedClass) form.classList.remove("composer-collapsed");
+    const h = Math.round(form.getBoundingClientRect().height);
+    if (collapsedClass) form.classList.add("composer-collapsed");
+    if (prevVar) host.style.setProperty("--composer-collapse", prevVar);
+    else host.style.removeProperty("--composer-collapse");
+    if (h > 0) host.style.setProperty("--composer-h-rest", `${h}px`);
   }, [cssTarget]);
 
   const recompute = useCallback(() => {
@@ -1080,33 +1094,12 @@ export function useScrollCollapse<T extends HTMLElement>(
     if (!el) return;
 
     if (override.current) {
-      anchor.current = el.scrollTop;
       // Focus or a non-empty draft: the composer is definitely at its full height here, so
       // this is the moment to re-learn what "resting" measures (a staged image or a grown
       // draft makes it taller than it was).
       learnRestingHeight();
       applyVar(0);
       if (collapsedRef.current) setCollapsed(false);
-      return;
-    }
-
-    if (reducedMotion()) {
-      if (atBottom.current) {
-        anchor.current = el.scrollTop;
-        applyVar(0);
-        if (collapsedRef.current) setCollapsed(false);
-        return;
-      }
-      const delta = el.scrollTop - anchor.current;
-      if (delta < -SCROLL_COLLAPSE_PX && !collapsedRef.current) {
-        anchor.current = el.scrollTop;
-        applyVar(1);
-        setCollapsed(true);
-      } else if (delta > SCROLL_COLLAPSE_PX && collapsedRef.current) {
-        anchor.current = el.scrollTop;
-        applyVar(0);
-        setCollapsed(false);
-      }
       return;
     }
 
@@ -1124,7 +1117,6 @@ export function useScrollCollapse<T extends HTMLElement>(
     // grow here: this branch also runs during the re-expansion that being here triggers, and
     // latching the half-grown height would leave the mapping permanently short.
     if (fromBottom <= AT_BOTTOM_EPS_PX) {
-      anchor.current = el.scrollTop;
       learnRestingHeight();
       applyVar(0);
       if (collapsedRef.current) setCollapsed(false);
@@ -1140,11 +1132,19 @@ export function useScrollCollapse<T extends HTMLElement>(
     // `--composer-h`, but that put the composer's entire height in front of the zero point:
     // the first ~120px of every scroll did nothing, which is what the human felt (#6).
     const distance = Math.max(0, fromBottom - AT_BOTTOM_EPS_PX);
-    const progress = Math.min(1, distance / SCROLL_COLLAPSE_RANGE_PX);
+    const continuous = Math.min(1, distance / SCROLL_COLLAPSE_RANGE_PX);
+    // Reduced motion gets the same mapping, snapped: the discrete fallback #4 asked for, but
+    // read off scroll *position* like everything else rather than off an accumulated
+    // direction-of-travel anchor. An anchor-based fallback assumed the composer starts
+    // expanded and collapses as you travel away, which is only true of the channel — on a
+    // page that opens at the top (#8) it would show the composer expanded until the reader
+    // moved, the opposite of the resting state. A threshold on the shared mapping is right
+    // for both, and is symmetric in the two directions for free.
+    const progress = reducedMotion() ? (continuous >= 0.5 ? 1 : 0) : continuous;
     applyVar(progress);
     if (!collapsedRef.current && progress >= NEAR_COLLAPSE_ON) setCollapsed(true);
     else if (collapsedRef.current && progress < NEAR_COLLAPSE_OFF) setCollapsed(false);
-  }, [enabled, scrollRef, atBottom, applyVar, learnRestingHeight]);
+  }, [enabled, scrollRef, applyVar, learnRestingHeight]);
 
   useEffect(() => {
     if (!enabled) {
@@ -1153,7 +1153,6 @@ export function useScrollCollapse<T extends HTMLElement>(
       cssTarget.current?.style.removeProperty("--composer-h-rest");
       return;
     }
-    anchor.current = scrollRef.current?.scrollTop ?? 0;
     // Mounts pinned to the bottom with the composer full, so this is the resting height.
     learnRestingHeight();
     recompute();
