@@ -1,8 +1,8 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensurePathConfigured, PATH_MARKER, type PathSetupEnv } from "./path-setup.ts";
+import { ensurePathConfigured, isNoModifyPath, PATH_MARKER, type PathSetupEnv } from "./path-setup.ts";
 
 // A scratch HOME per test, never the real one — this module edits real rc files in production,
 // so its tests must never touch ~/.zshrc or ~/.bashrc.
@@ -148,5 +148,123 @@ describe("ensurePathConfigured", () => {
       expect(result.rc).toBe(join(home, ".config", "fish", "config.fish"));
       expect(readFileSync(result.rc, "utf8")).toContain(`fish_add_path ${INSTALL_DIR}`);
     }
+  });
+
+  // --- regression tests for card 12's five blockers -----------------------------------------
+
+  // B1: an unwritable rc must never throw — it must degrade to the printed fallback. Skipped
+  // under root, which ignores file-mode permissions entirely and would make chmod a no-op.
+  test.skipIf(process.getuid?.() === 0)(
+    "B1: unwritable rc degrades to the printed fallback instead of throwing",
+    () => {
+      const home = scratchHome();
+      const rc = join(home, ".zshrc");
+      writeFileSync(rc, "# existing user content\n");
+      chmodSync(rc, 0o444);
+
+      let result: ReturnType<typeof ensurePathConfigured> | undefined;
+      expect(() => {
+        result = ensurePathConfigured(INSTALL_DIR, zshEnv(home));
+      }).not.toThrow();
+
+      expect(result?.action).toBe("printed");
+      if (result?.action === "printed") {
+        expect(result.message).toContain(INSTALL_DIR);
+        expect(result.message).toContain("could not write to");
+      }
+      // The file was not touched — restore permissions to let afterAll clean it up.
+      const before = readFileSync(rc, "utf8");
+      chmodSync(rc, 0o644);
+      expect(before).toBe("# existing user content\n");
+    },
+  );
+
+  // B2: an empty (not just missing) HOME must never resolve to a relative rc path — that would
+  // land a shell rc file wherever the process happened to be running from.
+  test("B2: home ''  never produces a relative rc path; degrades to the printed fallback", () => {
+    const result = ensurePathConfigured(INSTALL_DIR, zshEnv("", {}));
+    expect(result.action).toBe("printed");
+    // Nothing relative to the test's own cwd should ever be created.
+    expect(existsSync(join(process.cwd(), ".zshrc"))).toBe(false);
+  });
+
+  // B4: the opt-out must fail closed — any non-empty value other than 0/false counts, not just "1".
+  describe("B4: isNoModifyPath", () => {
+    test.each([
+      ["1", true],
+      ["true", true],
+      ["TRUE", true],
+      ["yes", true],
+      ["on", true],
+      ["0", false],
+      ["false", false],
+      ["FALSE", false],
+      ["", false],
+      [undefined, false],
+    ] as const)("isNoModifyPath(%p) === %p", (value, expected) => {
+      expect(isNoModifyPath(value)).toBe(expected);
+    });
+
+    test("end to end: FLOCK_NO_MODIFY_PATH-style truthy value other than 1 still opts out", () => {
+      const home = scratchHome();
+      const rc = join(home, ".zshrc");
+      writeFileSync(rc, "# untouched\n");
+
+      const result = ensurePathConfigured(INSTALL_DIR, zshEnv(home, { noModifyPath: isNoModifyPath("true") }));
+
+      expect(result.action).toBe("printed");
+      expect(readFileSync(rc, "utf8")).toBe("# untouched\n");
+    });
+  });
+
+  // B5: an unmarked pre-existing PATH line, in any realistic spelling, must not get a duplicate —
+  // and must not ride on the onPath short-circuit (env.path deliberately excludes the install dir,
+  // the cron/CI/agent-subprocess scenario the review flagged as real on the maintainer's machine).
+  describe("B5: unmarked pre-existing .flock/bin line is recognized, not duplicated", () => {
+    // A dedicated install dir under each test's own scratch home, so the $HOME/${HOME}/~
+    // substitutions below line up with a real (sandboxed) directory rather than a fake one.
+    const spellings: Array<[string, (dir: string, home: string) => string]> = [
+      ["absolute path", (dir) => `export PATH="${dir}:$PATH"\n`],
+      ["$HOME spelling", (dir, home) => `export PATH="$HOME${dir.slice(home.length)}:$PATH"\n`],
+      ["${HOME} spelling", (dir, home) => `export PATH="\${HOME}${dir.slice(home.length)}:$PATH"\n`],
+      ["~ spelling", (dir, home) => `export PATH="~${dir.slice(home.length)}:$PATH"\n`],
+    ];
+
+    test.each(spellings)("%s", (_label, buildLine) => {
+      const home = scratchHome();
+      const dir = join(home, ".flock", "bin");
+      const rc = join(home, ".zshrc");
+      const line = buildLine(dir, home);
+      writeFileSync(rc, `# flock dev launcher (scripts/setup.sh --link)\n${line}`);
+
+      const result = ensurePathConfigured(dir, {
+        home,
+        shell: "/bin/zsh",
+        path: "/usr/bin:/bin", // deliberately does not contain dir
+        platform: "darwin",
+        noModifyPath: false,
+      });
+
+      expect(result).toEqual({ action: "already-on-path-unmarked", rc });
+      // Append-only: the file must be byte-identical, not just "still contains" the line.
+      expect(readFileSync(rc, "utf8")).toBe(`# flock dev launcher (scripts/setup.sh --link)\n${line}`);
+    });
+
+    test("still recognizes it when the dir actually is on PATH (the common case)", () => {
+      const home = scratchHome();
+      const dir = join(home, ".flock", "bin");
+      const rc = join(home, ".zshrc");
+      writeFileSync(rc, `export PATH="${dir}:$PATH"\n`);
+
+      const result = ensurePathConfigured(dir, {
+        home,
+        shell: "/bin/zsh",
+        path: `/usr/bin:${dir}`,
+        platform: "darwin",
+        noModifyPath: false,
+      });
+
+      expect(result).toEqual({ action: "on-path" });
+    });
   });
 });

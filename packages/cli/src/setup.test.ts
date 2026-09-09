@@ -1,9 +1,9 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { skillPath, version } from "./runtime.ts";
-import { setupCommand, skillDestPath, skillJsonPath, writeSkill } from "./setup.ts";
+import { claudeSkillsDir, setupCommand, skillDestPath, skillJsonPath, writeSkill } from "./setup.ts";
 
 const SCRATCH_ROOT = mkdtempSync(join(tmpdir(), "flock-setup-home-"));
 
@@ -126,6 +126,21 @@ describe("writeSkill", () => {
   });
 });
 
+// B2 regression: `??` doesn't catch HOME="", so `join("", ".claude", "skills")` used to resolve
+// to a relative path (a `.claude` dropped into whatever the cwd happened to be). claudeSkillsDir
+// must always resolve to an absolute path derived from a real home directory.
+describe("claudeSkillsDir", () => {
+  test('HOME="" never produces a relative path; falls back to os.homedir()', () => {
+    process.env.HOME = "";
+    delete process.env.CLAUDE_SKILLS_DIR;
+
+    const dir = claudeSkillsDir();
+
+    expect(isAbsolute(dir)).toBe(true);
+    expect(dir.startsWith(".")).toBe(false);
+  });
+});
+
 describe("setupCommand", () => {
   test("--skill-only writes the skill and starts nothing", async () => {
     const home = useScratchHome();
@@ -137,5 +152,18 @@ describe("setupCommand", () => {
     const runDir = join(home, ".flock", "run");
     const running = existsSync(runDir) ? readdirSync(runDir) : [];
     expect(running).toEqual([]);
+  });
+
+  // N1/N2 regression: a checkout (bun test is never a standalone compiled binary) must never edit
+  // a real shell rc, and --skill-only must not touch it either, even if it somehow were standalone.
+  test("never touches the shell rc from a checkout, with or without --skill-only", async () => {
+    const home = useScratchHome();
+    const rc = join(home, ".zshrc");
+    writeFileSync(rc, "# untouched\n");
+
+    await setupCommand({ json: false, skillOnly: true });
+    await setupCommand({ json: false, noStart: true });
+
+    expect(readFileSync(rc, "utf8")).toBe("# untouched\n");
   });
 });

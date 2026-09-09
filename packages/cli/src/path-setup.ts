@@ -12,7 +12,7 @@
  * flag, why this lives in `flock setup` rather than `install.sh`) is card 10/11 on the flock board.
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 /** The environment `ensurePathConfigured` needs, gathered explicitly rather than read ambiently. */
 export interface PathSetupEnv {
@@ -76,15 +76,39 @@ export function fallbackBlock(installDir: string, env: Pick<PathSetupEnv, "shell
 export type EnsurePathResult =
   | { action: "on-path" }
   | { action: "already-present"; rc: string }
+  | { action: "already-on-path-unmarked"; rc: string }
   | { action: "appended"; rc: string }
   | { action: "printed"; message: string };
+
+/** Any non-empty value other than `0`/`false` (case-insensitive) opts out — an opt-out must fail
+ *  closed, not open: the cost of honouring a value the user didn't mean is one un-set PATH, the
+ *  cost of ignoring one they did mean is an unrequested edit to their shell startup. Only `1` is
+ *  documented, but `true`/`yes`/anything else non-falsy is still honoured as an opt-out. */
+export function isNoModifyPath(value: string | undefined): boolean {
+  if (!value) return false;
+  const v = value.trim().toLowerCase();
+  return v !== "0" && v !== "false";
+}
+
+/** Every spelling of `installDir` under `home` that a human or `scripts/setup.sh --link` plausibly
+ *  writes by hand: the expanded absolute path, and `$HOME/`, `${HOME}/`, `~/` variants. Matching
+ *  only the absolute path misses the common case of a hand-written or `--link`-written line. */
+function pathNeedles(installDir: string, home: string): string[] {
+  const needles = [installDir];
+  if (home && installDir.startsWith(`${home}/`)) {
+    const rest = installDir.slice(home.length); // "/.flock/bin"
+    needles.push(`$HOME${rest}`, `\${HOME}${rest}`, `~${rest}`);
+  }
+  return needles;
+}
 
 /**
  * Makes sure `installDir` ends up on the user's `PATH`, or explains how to do it by hand.
  *
  * Order of checks: already on `PATH` (nothing to do) → opt-out or no determinable rc (print the
- * fallback, touch nothing) → rc already carries our marker (no-op, idempotent) → append.
- * Append-only: this never rewrites, reorders, or truncates an existing rc file.
+ * fallback, touch nothing) → rc already carries our marker, or an unmarked line already puts the
+ * dir on PATH (no-op, idempotent either way) → append. Append-only: this never rewrites, reorders,
+ * or truncates an existing rc file.
  */
 export function ensurePathConfigured(installDir: string, env: PathSetupEnv): EnsurePathResult {
   const onPath = (env.path ?? "").split(":").filter(Boolean).includes(installDir);
@@ -92,19 +116,36 @@ export function ensurePathConfigured(installDir: string, env: PathSetupEnv): Ens
 
   const rc = detectRc(env);
 
+  // A relative rc path (e.g. HOME="" makes join("", ".zshrc") === ".zshrc") must never be written
+  // to — that would land a shell rc file in whatever directory happened to be the cwd. Treat it the
+  // same as "no rc determinable": print the fallback, touch nothing.
+  if (rc !== undefined && !isAbsolute(rc)) {
+    return { action: "printed", message: fallbackBlock(installDir, env, undefined) };
+  }
+
   if (env.noModifyPath || !rc) {
     return { action: "printed", message: fallbackBlock(installDir, env, rc) };
   }
 
   let existing = "";
-  if (existsSync(rc)) existing = readFileSync(rc, "utf8");
-  if (existing.includes(PATH_MARKER)) {
-    return { action: "already-present", rc };
-  }
+  try {
+    if (existsSync(rc)) existing = readFileSync(rc, "utf8");
+    if (existing.includes(PATH_MARKER)) {
+      return { action: "already-present", rc };
+    }
+    if (pathNeedles(installDir, env.home).some((needle) => existing.includes(needle))) {
+      return { action: "already-on-path-unmarked", rc };
+    }
 
-  mkdirSync(dirname(rc), { recursive: true });
-  const needsLeadingNewline = existing.length > 0 && !existing.endsWith("\n");
-  const block = `${needsLeadingNewline ? "\n" : ""}\n${PATH_MARKER}\n${pathLine(installDir, rc)}\n`;
-  appendFileSync(rc, block);
-  return { action: "appended", rc };
+    mkdirSync(dirname(rc), { recursive: true });
+    const needsLeadingNewline = existing.length > 0 && !existing.endsWith("\n");
+    const block = `${needsLeadingNewline ? "\n" : ""}\n${PATH_MARKER}\n${pathLine(installDir, rc)}\n`;
+    appendFileSync(rc, block);
+    return { action: "appended", rc };
+  } catch (err) {
+    // An unwritable rc or a read-only $HOME must never fail the whole install — PATH advice is a
+    // nicety, not a requirement. Degrade to the same fallback a container with no rc gets.
+    const code = err && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : String(err);
+    return { action: "printed", message: `${fallbackBlock(installDir, env, rc)}\n  (could not write to ${rc}: ${code})` };
+  }
 }
