@@ -16,8 +16,9 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { flockHome } from "./daemon.ts";
+import { ensurePathConfigured, type EnsurePathResult } from "./path-setup.ts";
 import { skillPath, version } from "./runtime.ts";
 
 export interface SetupOptions {
@@ -49,6 +50,13 @@ export function skillDestPath(): string {
 }
 
 export const skillJsonPath = () => join(flockHome(), "skill.json");
+
+/** Where the installer put the binary: `FLOCK_INSTALL_DIR`, else `<flockHome>/bin` — the same
+ *  formula `scripts/install.sh` uses, so `flock setup` repairs the PATH for the binary it's
+ *  actually running from, whether that's a release install or `FLOCK_INSTALL_DIR` override. */
+function installDir(): string {
+  return process.env.FLOCK_INSTALL_DIR ? resolve(process.env.FLOCK_INSTALL_DIR) : join(flockHome(), "bin");
+}
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -116,12 +124,39 @@ export function writeSkill(): SkillResult {
   return { action: "written", dest };
 }
 
-/** `flock setup`: write the skill, then `flock up` unless `--no-start`/`--skill-only`. */
+function reportPath(result: EnsurePathResult, dir: string, json: boolean): void {
+  if (json) return; // folded into setupCommand's single JSON line below
+  switch (result.action) {
+    case "on-path":
+    case "already-present":
+      return; // nothing changed, nothing to say
+    case "appended":
+      console.log(`flock: added ${dir} to your PATH in ${result.rc}`);
+      console.log(`  restart your shell or run: export PATH="${dir}:$PATH"`);
+      return;
+    case "printed":
+      console.error(result.message);
+      return;
+  }
+}
+
+/** `flock setup`: write the skill, repair `PATH` if needed, then `flock up` unless
+ *  `--no-start`/`--skill-only`. */
 export async function setupCommand(opts: SetupOptions): Promise<void> {
   const skill = writeSkill();
 
+  const dir = installDir();
+  const path = ensurePathConfigured(dir, {
+    home: process.env.HOME ?? homedir(),
+    shell: process.env.SHELL,
+    path: process.env.PATH,
+    platform: process.platform,
+    noModifyPath: process.env.FLOCK_NO_MODIFY_PATH === "1",
+  });
+  reportPath(path, dir, opts.json);
+
   if (opts.json) {
-    console.log(JSON.stringify({ skill: skill.action, dest: skill.dest }));
+    console.log(JSON.stringify({ skill: skill.action, dest: skill.dest, path: path.action }));
   } else if (skill.action === "up-to-date") {
     console.log(`skill up to date: ${skill.dest}`);
   } else if (skill.action === "written") {

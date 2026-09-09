@@ -29,6 +29,33 @@ adding it on stderr.
 A running flock daemon also serves this same script at `GET /install.sh`, so a machine that can
 already reach a flock instance learns only one hostname.
 
+## Adding `~/.flock/bin` to your PATH
+
+`flock setup` — which the installer runs automatically, and which you can re-run any time to
+repair a broken PATH — appends one line to your shell's rc file when `$INSTALL_DIR` isn't already
+on `PATH`:
+
+```sh
+# Added by flock (https://github.com/robrichardson13/flock) — safe to remove
+export PATH="$HOME/.flock/bin:$PATH"
+```
+
+It edits `~/.zshrc`, `~/.bash_profile` (`~/.bashrc` on Linux; macOS Terminal starts bash as a login
+shell, which reads `.bash_profile` and never `.bashrc`), or `~/.config/fish/config.fish`
+(`fish_add_path` instead of `export`), matching `$SHELL`. It never rewrites, reorders, or clobbers
+anything already in the file — only appends — and the marker comment makes the addition
+idempotent: running `flock setup` again, or reinstalling, never duplicates the line. Removing it by
+hand is exactly what the uninstall section below covers.
+
+Set `FLOCK_NO_MODIFY_PATH=1` to opt out. That's an environment variable rather than a flag on
+purpose — flags do not survive `curl | sh`. With the opt-out set, or when `$SHELL` isn't set to
+something flock recognizes (a common state in a container), `flock setup` falls back to printing
+the same advice `install.sh` always has — the export line to add yourself, and the rc file it would
+have used, if any — and writes nothing.
+
+This logic lives in `flock setup` (not `install.sh`) specifically so it's testable and so a later
+`flock setup` can repair a PATH that never got configured, without re-running the installer.
+
 ## Supported platforms
 
 Six prebuilt targets, matching `scripts/build-release.ts` and the release workflow:
@@ -50,6 +77,7 @@ your platform isn't one of the six above.
 | `FLOCK_INSTALL_DIR` | `$HOME/.flock/bin` | Destination directory for the binary. |
 | `FLOCK_RELEASE_BASE` | GitHub Releases download URL for `FLOCK_VERSION` | Base URL the tarball and checksums are fetched from — override to install from a mirror or a local test server. |
 | `FLOCK_NO_SETUP` | unset | Set to `1` to skip the automatic `flock setup` call after install (so you get just the binary). |
+| `FLOCK_NO_MODIFY_PATH` | unset | Set to `1` to stop `flock setup` from editing your shell rc; it prints the export line instead. |
 
 The installer verifies the download against the release's `SHA256SUMS` (or the per-asset
 `.sha256`) before installing anything. A checksum mismatch is one line on stderr and a non-zero
@@ -113,3 +141,9 @@ rm -rf ~/.flock/bin/flock ~/.claude/skills/flock
 That removes the binary and the skill. Add `rm -rf ~/.flock` to also drop the database, logs, and
 every other piece of state flock keeps under its home directory (`FLOCK_HOME` if you set one) —
 back up `~/.flock/flock.db` first if you want to keep your boards.
+
+Neither command touches your shell rc. If `flock setup` added the `PATH` line described above,
+remove it by hand: look for the `# Added by flock (https://github.com/robrichardson13/flock) —
+safe to remove` comment in `~/.zshrc`, `~/.bash_profile`/`~/.bashrc`, or
+`~/.config/fish/config.fish`, and delete that line and the `export PATH=…` (or `fish_add_path …`)
+line right after it.
