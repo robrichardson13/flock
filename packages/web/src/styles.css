@@ -281,8 +281,12 @@
      a bar that failed to reach it rather than as a thing lifted off the page. */
   --pillbar-x: var(--s4);
   /* How far the active tab's tinted pill is held in from its tab's own slot. The tabs are
-     icon-only, so the highlight is a pill around a glyph rather than a quarter of the bar. */
-  --pillbar-tab-inset: 14px;
+     icon-only, so the highlight is a pill around a glyph rather than a quarter of the bar.
+     0 so the pill's horizontal gap to the bar's edge (border + the bar's own --s1 padding)
+     matches its vertical gap to the bar's top/bottom (also border + --s1) — a nonzero inset
+     here was stacking on top of that padding and left the pill sitting ~4x further from the
+     bar's left/right edge than from its top/bottom. */
+  --pillbar-tab-inset: 0px;
   --kb-over-sab: 0px;
   --pillbar-space: max(0px, calc(var(--pillbar-h) + var(--pillbar-gap) + var(--s2) + var(--sab-in) - var(--kb-over-sab)));
   /* Spacing scale: new rules use these; existing hand-set literals are migrated only
