@@ -206,7 +206,8 @@ export type MessageBlock =
   | { t: "text"; value: string }
   | { t: "list"; items: MessageListItem[] }
   | { t: "code"; value: string }
-  | { t: "heading"; level: number; text: string };
+  | { t: "heading"; level: number; text: string }
+  | { t: "quote"; lines: string[] };
 
 /** `#` through `######` at line start, one or more spaces, then the heading text. A `#`
  * with no following space, or one that isn't the first character on the line, is not a
@@ -219,6 +220,7 @@ export function splitMessageBlocks(text: string): MessageBlock[] {
   const tasksByLine = new Map(taskItems(text).map((t) => [t.line, t]));
   let textLines: string[] = [];
   let list: MessageListItem[] = [];
+  let quote: string[] = [];
   let fence: { marker: string; lines: string[] } | null = null;
   const flushText = () => {
     if (textLines.length) {
@@ -232,6 +234,12 @@ export function splitMessageBlocks(text: string): MessageBlock[] {
       list = [];
     }
   };
+  const flushQuote = () => {
+    if (quote.length) {
+      blocks.push({ t: "quote", lines: quote });
+      quote = [];
+    }
+  };
   for (let n = 0; n < lines.length; n++) {
     const raw = lines[n];
     const f = raw.match(/^\s*(```+|~~~+)(.*)$/);
@@ -242,6 +250,7 @@ export function splitMessageBlocks(text: string): MessageBlock[] {
       } else if (!fence) {
         flushText();
         flushList();
+        flushQuote();
         fence = { marker: f[1][0], lines: [] };
       } else fence.lines.push(raw);
       continue;
@@ -250,6 +259,17 @@ export function splitMessageBlocks(text: string): MessageBlock[] {
       fence.lines.push(raw);
       continue;
     }
+    // Checked ahead of tasks and lists: a bare `>`-prefixed line can never match either of
+    // their regexes (both anchor on optional whitespace then the marker), so this only ever
+    // steals lines nothing else wanted.
+    const q = raw.match(/^>\s?(.*)$/);
+    if (q) {
+      flushText();
+      flushList();
+      quote.push(q[1]);
+      continue;
+    }
+    flushQuote();
     const task = tasksByLine.get(n);
     if (task) {
       flushText();
@@ -275,14 +295,19 @@ export function splitMessageBlocks(text: string): MessageBlock[] {
   if (fence) blocks.push({ t: "code", value: fence.lines.join("\n") });
   flushText();
   flushList();
+  flushQuote();
   return blocks;
 }
 
+/** A quote's attribution line: one bare word (an actor name is a slug) and `said:`. */
+const CITE = /^(\S+) said:$/;
+
 /**
  * Channel messages, comments, resolutions, asks, answers, and decision gists: **message
- * mode**. No headings, no paragraph wrapping, every newline preserved. Bullet lines still
- * become a `<ul>` and fenced code still works (agents paste commands into the channel),
- * everything else is inline nodes in document order. Task items render read-only: there
+ * mode**. No paragraph wrapping, every newline preserved. Bullet lines still become a
+ * `<ul>`, `#` lines a heading, `> ` lines a `<blockquote>`, and fenced code still works
+ * (agents paste commands into the channel); everything else is inline nodes in document
+ * order. Task items render read-only: there
  * is no toggle target for a checkbox typed into a message.
  */
 export function MessageBody({ text }: { text: string }) {
@@ -304,6 +329,27 @@ export function MessageBody({ text }: { text: string }) {
                 </li>
               ))}
             </ul>
+          );
+        }
+        if (b.t === "quote") {
+          // "Add to chat" leads a quote with `<author> said:` (ADR 0014, and no `**` on the
+          // name since card #7 — every hidden character is dead space in the composer's own
+          // highlight of the same text). The renderer is what makes that line read as an
+          // attribution: matched only as the *first* line of a quote, and only as a bare
+          // name, so an ordinary quote that happens to contain "someone said:" further down
+          // is untouched.
+          const cite = b.lines.length > 1 ? CITE.exec(b.lines[0]) : null;
+          const lines = cite ? b.lines.slice(1) : b.lines;
+          return (
+            <blockquote key={i}>
+              {cite && <cite className="quote-cite">{cite[1]}</cite>}
+              {lines.map((l, j) => (
+                <Fragment key={j}>
+                  {j > 0 && <br />}
+                  {inline(l)}
+                </Fragment>
+              ))}
+            </blockquote>
           );
         }
         return <span key={i}>{inline(b.value)}</span>;

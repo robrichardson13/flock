@@ -28,8 +28,11 @@ import { planImage } from "./images.ts";
 import { MessageBody } from "./markdown.tsx";
 import { useImageViewer } from "./Viewer.tsx";
 import { timeAgo } from "./App.tsx";
-import { clearDraft, draftKey, getDraft, saveDraft, shouldSendOnEnter, takeDroppedCount, type DraftAddress, type StagedAttachment } from "./compose.ts";
+import { clearDraft, draftKey, getDraft, saveDraft, shouldSendOnEnter, subscribeInsert, takeDroppedCount, type DraftAddress, type StagedAttachment } from "./compose.ts";
+import { joinDraft } from "./addToChat.tsx";
+import { hasHighlight, highlightDraft } from "./draftHighlight.ts";
 import { useAutoGrow } from "./autogrow.ts";
+import { focusNoScroll } from "./focus.ts";
 import { ActorTap, Avatar, Icons, useHasFinePointer, useIsMobile } from "./ui.tsx";
 
 /** One bubble's worth of thread: what both a channel message and a card comment carry. */
@@ -148,6 +151,7 @@ export function ThreadGroup<T extends ThreadEntry>({
             className={`msg bubble${i > 0 ? " bubble-cont" : ""}${entryClass?.(m) ?? ""}`}
             style={entryStyle?.(m)}
             title={mine ? timeAgo(m.createdAt) : undefined}
+            data-msg-author={m.author}
           >
             {m.body.trim() && <ClampedBody text={m.body} />}
             {m.attachments && m.attachments.length > 0 && (
@@ -379,6 +383,85 @@ export function LineComposer({
   const stagedRef = useRef(staged);
   stagedRef.current = staged;
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // "Add to chat" (ADR 0014): a request arrives with no reference to this component at all,
+  // through `compose.ts`'s insertion channel keyed on the same `key` the draft store uses.
+  // The quote appends to the end of the draft, after the blank line `joinDraft` supplies,
+  // and the caret goes after it. Not at the caret: making a selection in the feed takes
+  // focus off this textarea (a `mousedown` on non-focusable content blurs it), so by the
+  // time a quote is picked there is no live caret in here to insert at — what
+  // `selectionStart` still reports is a position the human left, or 0 once the engine has
+  // reset it, and honouring it put the quote in front of a sentence they were mid-way
+  // through writing (found in review, card #3).
+  // The caret position to restore is stashed in a ref because `setText`'s updater runs before
+  // the DOM value it computes exists to place a selection in.
+  const pendingCaret = useRef<number | null>(null);
+  useEffect(() => subscribeInsert(key, (quote) => {
+    setText((prev) => {
+      const joined = joinDraft(prev, quote);
+      pendingCaret.current = joined.length;
+      return joined;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [key]);
+
+  useEffect(() => {
+    if (pendingCaret.current === null) return;
+    const caret = pendingCaret.current;
+    pendingCaret.current = null;
+    const el = areaRef.current;
+    if (!el) return;
+    focusNoScroll(el);
+    el.setSelectionRange(caret, caret);
+    resize();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text]);
+
+  // The quote's visual treatment (ADR 0014, card #6). The quote stays ordinary text in the
+  // field — that is what lets a reply be typed between two of them — and the treatment is
+  // painted by a mirror layer behind a field whose own glyphs go transparent, the web's
+  // answer to what nib does by colouring the `>` lines of its NSTextView directly. The
+  // draft string is never rewritten, so send, drafts, autogrow and Enter-to-send are all
+  // untouched, and the posted markdown is what it always was.
+  //
+  // The mirror only exists while the draft holds a quoted line: with nothing to paint the
+  // field keeps its own visible text and this costs nothing.
+  const hlLines = useMemo(() => highlightDraft(text), [text]);
+  const highlighted = hasHighlight(hlLines);
+  const hlRef = useRef<HTMLDivElement>(null);
+  // Keeping the picture on its text, in the two ways CSS cannot.
+  //
+  // Scroll: the mirror does not scroll itself (no scrollbar, no pointer events); it is moved
+  // to wherever the field is scrolled to. Both on the field's own scroll and after a text
+  // change, since growing past `max-height` scrolls the field without a scroll event.
+  //
+  // Width: past eight rows the field scrolls, and where the platform draws a classic
+  // scrollbar rather than an overlay one (Windows, Linux) that scrollbar comes out of the
+  // field's content column — while the mirror, `overflow: hidden`, keeps its full width. The
+  // two then wrap at different points and the glyphs you read stop sitting on the glyphs the
+  // caret is in. `clientWidth` is the field's padding box with the scrollbar already taken
+  // off it, and the mirror is borderless and `box-sizing: border-box` like everything else,
+  // so pinning one to the other lines the content columns up exactly. Invisible on macOS,
+  // which is why the browser pass on cards #6/#7 did not catch it.
+  const syncMirror = () => {
+    const hl = hlRef.current;
+    const el = areaRef.current;
+    if (!hl || !el) return;
+    hl.scrollTop = el.scrollTop;
+    hl.style.width = `${el.clientWidth}px`;
+  };
+  useEffect(syncMirror, [text, highlighted]);
+  // The field's width changes without its text changing: a window resize, the pane's own
+  // breakpoint, the composer collapsing on the phone, an attachment strip appearing. One
+  // observer on the field covers all of them, and only while there is a mirror to keep.
+  useEffect(() => {
+    const el = areaRef.current;
+    if (!highlighted || !el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(syncMirror);
+    ro.observe(el);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlighted]);
 
   const showNotice = (message: string) => {
     setNotice(message);
@@ -613,20 +696,39 @@ export function LineComposer({
       <div className="line-composer">
         {leading}
         {expanded && attachControls}
-        <textarea
-          ref={areaRef}
-          className="input textarea line-composer-input"
-          rows={1}
-          placeholder={placeholder}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          enterKeyHint="enter"
-          data-composer
-        />
+        <div className={`composer-field${highlighted ? " has-hl" : ""}`}>
+          {highlighted && (
+            // `aria-hidden`: it is a picture of the textarea's own value, which a screen
+            // reader already reads from the textarea.
+            <div className="composer-hl" ref={hlRef} aria-hidden="true">
+              {hlLines.map((line, i) => (
+                <div
+                  key={i}
+                  className={line.quote ? `hl-line hl-quote${line.start ? " hl-quote-start" : ""}${line.end ? " hl-quote-end" : ""}` : "hl-line"}
+                >
+                  {line.spans.map((span, j) => (
+                    <span key={j} className={span.kind === "hidden" ? "hl-hidden" : undefined}>{span.value}</span>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+          <textarea
+            ref={areaRef}
+            className="input textarea line-composer-input"
+            rows={1}
+            placeholder={placeholder}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            onScroll={syncMirror}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            enterKeyHint="enter"
+            data-composer
+          />
+        </div>
         <button type="submit" className={`icon-btn icon-btn-primary${sendClass ? ` ${sendClass}` : ""}`} disabled={!canSend} aria-label={action}>{Icons.send(18)}</button>
       </div>
     </form>

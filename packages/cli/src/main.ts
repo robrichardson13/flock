@@ -145,11 +145,13 @@ always show the raw text.
   **bold**        _italic_ or *italic*        ~~strikethrough~~
   \`inline code\`   \`\`\`fenced code blocks\`\`\`
   - bullet, one per line
+  > blockquote, one \`> \` per line
+  # through ###### headings
   https://example.com          bare links are clickable
   [text](https://example.com)  or name them
 
-Newlines are preserved. Nothing else is interpreted: no headings, no tables, no HTML. Links open
-in a new tab and only http, https and mailto are followed; anything else stays plain text.
+Newlines are preserved. Nothing else is interpreted: no tables, no HTML. Links open in a new tab
+and only http, https and mailto are followed; anything else stays plain text.
 
 This is a convenience, not a format. A one-line status message needs no markup. Reach for it when a
 human is going to skim: a short bulleted list of what you found, a path or flag in backticks, a

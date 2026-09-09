@@ -52,8 +52,8 @@ When the human answers, the card returns to \`doing\` with you as assignee and t
     flock block ${b} <n> --by <m>                  # add a blocking edge later
 
 Messages, comments and resolutions render light markdown in the web UI: \`**bold**\`, \`_italic_\`,
-\`code\`, \`- \` bullets, and links. Plain text is still plain text; format only when it helps a
-human skim. \`flock help formatting\` has the details.
+\`code\`, \`- \` bullets, \`> \` blockquotes, and links. Plain text is still plain text; format only
+when it helps a human skim. \`flock help formatting\` has the details.
 
 ## Writing for the board
 

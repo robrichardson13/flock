@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { splitDocumentBlocks, splitMessageBlocks } from "./markdown.tsx";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MessageBody, splitDocumentBlocks, splitMessageBlocks } from "./markdown.tsx";
 
 describe("splitDocumentBlocks: document mode block splitting", () => {
   test("a single newline inside a paragraph keeps both lines in one para block, not joined", () => {
@@ -165,5 +167,87 @@ describe("splitMessageBlocks: message mode block splitting", () => {
     expect(splitMessageBlocks("```\n# not a heading\n```")).toEqual([
       { t: "code", value: "# not a heading" },
     ]);
+  });
+
+  test("a run of `> ` lines becomes one quote block", () => {
+    expect(splitMessageBlocks("> ada said:\n> first\n> second")).toEqual([
+      { t: "quote", lines: ["ada said:", "first", "second"] },
+    ]);
+  });
+
+  test("a quote block is followed by ordinary text once the `>` lines end", () => {
+    expect(splitMessageBlocks("> quoted\n\nmy reply")).toEqual([
+      { t: "quote", lines: ["quoted"] },
+      { t: "text", value: "\nmy reply" },
+    ]);
+  });
+
+  test("a `> - x` line stays inside the quote block, not a list", () => {
+    expect(splitMessageBlocks("> - not a bullet")).toEqual([
+      { t: "quote", lines: ["- not a bullet"] },
+    ]);
+  });
+
+  test("a `>` inside a fenced code block is literal, not a quote", () => {
+    expect(splitMessageBlocks("```\n> not a quote\n```")).toEqual([
+      { t: "code", value: "> not a quote" },
+    ]);
+  });
+
+  test("a bare `>` with no space becomes an empty quoted line", () => {
+    expect(splitMessageBlocks(">")).toEqual([{ t: "quote", lines: [""] }]);
+  });
+
+  test("`>` that is not at line start is not a quote", () => {
+    expect(splitMessageBlocks("5 > 3 is true")).toEqual([{ t: "text", value: "5 > 3 is true" }]);
+  });
+
+  // The shape "Add to chat" produces when the composer already had text in it: the human's
+  // own line, a blank line, then the quote. The quote must be its own block either way —
+  // this also pins the no-blank-line case, since a lazy paragraph continuation (what
+  // CommonMark would do) would swallow the `>` lines into the text above them.
+  test("a `> ` run directly under a text line is still its own quote block", () => {
+    expect(splitMessageBlocks("my reply\n> quoted")).toEqual([
+      { t: "text", value: "my reply" },
+      { t: "quote", lines: ["quoted"] },
+    ]);
+  });
+
+  test("a `> ` run under a text line and a blank line is its own quote block", () => {
+    expect(splitMessageBlocks("my reply\n\n> quoted")).toEqual([
+      { t: "text", value: "my reply\n" },
+      { t: "quote", lines: ["quoted"] },
+    ]);
+  });
+});
+
+/** The attribution line "Add to chat" leads a quote with (ADR 0014, card #7): the format
+ *  carries no `**`, so the render is what has to make it read as a cite. */
+describe("MessageBody: a quote's attribution line", () => {
+  const html = (text: string) => renderToStaticMarkup(createElement(MessageBody, { text }));
+
+  test("`<author> said:` as a quote's first line renders as a cite, out of the quoted lines", () => {
+    const out = html("> ada said:\n> the thing she said");
+    expect(out).toContain("<cite class=\"quote-cite\">ada</cite>");
+    expect(out).not.toContain("said:");
+    expect(out).toContain("the thing she said");
+  });
+
+  test("a quote with nothing under the attribution line is left alone — it is the quote", () => {
+    expect(html("> ada said:")).not.toContain("<cite");
+  });
+
+  test("`said:` further down a quote is ordinary quoted text", () => {
+    const out = html("> first\n> ada said:");
+    expect(out).not.toContain("<cite");
+    expect(out).toContain("ada said:");
+  });
+
+  test("only a bare name matches: a sentence ending in `said:` is not a cite", () => {
+    expect(html("> and then he said:\n> nothing")).not.toContain("<cite");
+  });
+
+  test("an ordinary quote gets no cite", () => {
+    expect(html("> just a quote\n> over two lines")).not.toContain("<cite");
   });
 });

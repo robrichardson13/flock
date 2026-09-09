@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { clearDraft, draftCount, draftKey, getDraft, isEmptyDraft, resetDrafts, saveDraft, shouldSendOnEnter, type StagedAttachment } from "./compose.ts";
+import { clearDraft, draftCount, draftKey, getDraft, isEmptyDraft, requestInsert, resetDrafts, resetInsertListeners, saveDraft, shouldSendOnEnter, subscribeInsert, type StagedAttachment } from "./compose.ts";
 
 const key = (overrides: Partial<Parameters<typeof shouldSendOnEnter>[0]> = {}) => ({
   key: "Enter",
@@ -292,5 +292,53 @@ describe("persistence", () => {
     expect(storage.map.has("flock.drafts")).toBe(false);
     // But the draft is still live for the rest of the tab's life.
     expect(mod.getDraft("k").text).toBe("private mode");
+  });
+});
+
+describe("insertion hand-off (\"Add to chat\")", () => {
+  beforeEach(resetInsertListeners);
+
+  it("delivers a request to the listener subscribed at the same key", () => {
+    const received: string[] = [];
+    subscribeInsert("k", (text) => received.push(text));
+    requestInsert("k", "> quoted\n\n");
+    expect(received).toEqual(["> quoted\n\n"]);
+  });
+
+  it("does nothing when no composer is listening at that key", () => {
+    expect(() => requestInsert("nobody-home", "> quoted\n\n")).not.toThrow();
+  });
+
+  it("never delivers to a listener subscribed at a different key", () => {
+    const received: string[] = [];
+    subscribeInsert("other", (text) => received.push(text));
+    requestInsert("k", "> quoted\n\n");
+    expect(received).toEqual([]);
+  });
+
+  it("notifies every listener subscribed at the key", () => {
+    const a: string[] = [];
+    const b: string[] = [];
+    subscribeInsert("k", (text) => a.push(text));
+    subscribeInsert("k", (text) => b.push(text));
+    requestInsert("k", "> quoted\n\n");
+    expect(a).toEqual(["> quoted\n\n"]);
+    expect(b).toEqual(["> quoted\n\n"]);
+  });
+
+  it("delivers the same text twice on two separate requests, not deduplicated", () => {
+    const received: string[] = [];
+    subscribeInsert("k", (text) => received.push(text));
+    requestInsert("k", "> x\n\n");
+    requestInsert("k", "> x\n\n");
+    expect(received).toEqual(["> x\n\n", "> x\n\n"]);
+  });
+
+  it("unsubscribing stops further delivery", () => {
+    const received: string[] = [];
+    const unsubscribe = subscribeInsert("k", (text) => received.push(text));
+    unsubscribe();
+    requestInsert("k", "> quoted\n\n");
+    expect(received).toEqual([]);
   });
 });
