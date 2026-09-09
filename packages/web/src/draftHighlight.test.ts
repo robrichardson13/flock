@@ -25,7 +25,7 @@ describe("highlightDraft", () => {
   });
 
   test("every span concatenates back to the exact line — the mirror never changes the text", () => {
-    const text = "> **ada** said:\n> hello\n\nmy reply";
+    const text = "> ada said:\n> hello\n\nmy reply";
     for (const [i, line] of highlightDraft(text).entries()) {
       expect(whole(line)).toBe(text.split("\n")[i]);
     }
@@ -48,15 +48,22 @@ describe("highlightDraft", () => {
     expect(shown(line)).toBe("  indented");
   });
 
-  test("the `**` around an author is hidden and the name is not", () => {
-    const [line] = highlightDraft("> **robrichardson** said:");
-    expect(shown(line)).toBe("robrichardson said:");
-    expect(line.spans.filter((s) => s.kind === "hidden").map((s) => s.value)).toEqual(["> ", "**", "**"]);
+  test("only the marker is hidden — nothing inside the line, so no dead space in it (card #7)", () => {
+    const [line] = highlightDraft("> conductor said:");
+    expect(shown(line)).toBe("conductor said:");
+    expect(line.spans.filter((s) => s.kind === "hidden").map((s) => s.value)).toEqual(["> "]);
   });
 
-  test("`**` on a plain line is left alone — only quotes are treated", () => {
-    const [line] = highlightDraft("**bold** reply");
-    expect(shown(line)).toBe("**bold** reply");
+  test("an attribution line and the line under it share one left edge: both hide two characters", () => {
+    const [cite, body] = highlightDraft("> conductor said:\n> p wire break");
+    const indent = (l: typeof cite) => l.spans.filter((s) => s.kind === "hidden").map((s) => s.value).join("").length;
+    expect(indent(cite)).toBe(2);
+    expect(indent(body)).toBe(2);
+  });
+
+  test("markdown inside a quote is shown as typed — hiding it would punch a gap", () => {
+    const [line] = highlightDraft("> **still bold** here");
+    expect(shown(line)).toBe("**still bold** here");
   });
 
   test("start and end mark the ends of a run, so a band can round its outer corners", () => {
@@ -70,7 +77,7 @@ describe("highlightDraft", () => {
   });
 
   test("two quotes separated by a typed line are two runs, each with its own ends", () => {
-    const lines = highlightDraft("> **ada** said:\n> first\n\nin between\n\n> **bob** said:\n> second\n\n");
+    const lines = highlightDraft("> ada said:\n> first\n\nin between\n\n> bob said:\n> second\n\n");
     expect(lines.filter((l) => l.start)).toHaveLength(2);
     expect(lines.filter((l) => l.end)).toHaveLength(2);
   });

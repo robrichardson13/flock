@@ -19,8 +19,8 @@
  */
 
 /** A run of characters within one line. `hidden` is drawn in a transparent ink: the `> `
- *  marker and the `**` around an author's name are noise once the line is visibly a quote,
- *  but they still take up their columns. */
+ *  marker is noise once the line is visibly a quote, but it still takes up its columns, so
+ *  every line of a quote — its `<author> said:` line included — shares one left edge. */
 export interface DraftSpan {
   kind: "shown" | "hidden";
   value: string;
@@ -69,18 +69,23 @@ export function hasHighlight(lines: DraftLine[]): boolean {
 
 const MARKER = /^(\s*>\s?)/;
 
-/** A quoted line's spans: the `> ` marker hidden, then the body with any `**` hidden so an
- *  attribution line reads as `robrichardson said:` rather than as bold markdown. Only the
- *  delimiters are hidden — never the name, and never with a bolder or narrower font, which
- *  would shift every glyph after it out from under the real one. */
+/**
+ * A quoted line's spans: the `> ` marker hidden, the rest shown as it is.
+ *
+ * Nothing else is ever hidden. The first cut also hid the `**` around an author's name, and
+ * Rob's screenshot on card #7 is what that costs: four transparent characters before
+ * `conductor` and two more after it, so the attribution line stood a character further
+ * right than the line under it with dead space punched through the middle of it. Hiding
+ * characters cannot close the space they occupy — only *not putting them there* can, which
+ * is why `quoteBlock` dropped the `**` from the format instead (markdown.tsx styles that
+ * line as a cite when the message is rendered). With just the marker hidden, every line of a
+ * quote shares one two-character indent and one left edge.
+ */
 function quoteSpans(line: string): DraftSpan[] {
   const marker = MARKER.exec(line);
   const prefix = marker ? marker[1] : "";
   const body = line.slice(prefix.length);
   const spans: DraftSpan[] = prefix ? [{ kind: "hidden", value: prefix }] : [];
-  for (const part of body.split(/(\*\*)/)) {
-    if (part === "") continue;
-    spans.push({ kind: part === "**" ? "hidden" : "shown", value: part });
-  }
+  if (body !== "") spans.push({ kind: "shown", value: body });
   return spans;
 }

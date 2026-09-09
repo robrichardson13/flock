@@ -1557,9 +1557,13 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
   background: var(--bg-3); color: var(--muted);
   /* The left rule, drawn inside the box: a border would move every glyph on the line. */
   box-shadow: inset 2px 0 0 var(--accent);
-  /* Full-bleed into the field's padding, without moving the text: the negative margin and
-     the padding are the same amount. */
-  margin-inline: calc(-1 * var(--s3)); padding-inline: var(--s3);
+  /* The band is exactly the field's content column — no bleed into its padding (card #7).
+     Bleeding made it a stripe that ran to the field's box edge and stopped dead against the
+     send button beside it; ending on the padding edge reads as a block instead. It also puts
+     the rule right against the text column: the `> ` each quoted line hides is two
+     characters wide, so those hidden columns are the gutter between the rule and the first
+     glyph, which is how a blockquote is set. Nothing here has a margin or a padding, so no
+     glyph moves. */
 }
 .hl-quote-start { border-top-left-radius: var(--r-sm); border-top-right-radius: var(--r-sm); }
 .hl-quote-end { border-bottom-left-radius: var(--r-sm); border-bottom-right-radius: var(--r-sm); }
@@ -1822,6 +1826,14 @@ del { color: var(--muted); }
    the quoted words themselves, so it stays legible without a second `--muted`-on-bubble
    contrast pair the gate does not already cover. */
 .msg-body blockquote, .needs-q blockquote, .decision blockquote { margin: var(--s2) 0; padding-left: var(--s2); border-left: 2px solid var(--line); }
+/* The attribution line "Add to chat" leads a quote with. The format carries no `**` any more
+   (card #7 — every hidden character was dead space in the composer's own highlight of the
+   same text), so the weight has to come from here instead. `--text`, not `--muted`: a quote
+   also renders inside your own `--bg-me` bubble, which the contrast gate does not check
+   `--muted` against. */
+.msg-body blockquote > .quote-cite, .needs-q blockquote > .quote-cite, .decision blockquote > .quote-cite {
+  display: block; font-style: normal; font-weight: var(--w-title); color: var(--text);
+}
 .msg-body pre code, .needs-q pre code, .decision pre code { background: none; padding: 0; font-size: var(--t-foot); line-height: 1.5; }
 .msg-body li.md-task, .needs-q li.md-task, .decision li.md-task { list-style: none; margin-top: 0; margin-bottom: 0; }
 
