@@ -1,6 +1,7 @@
 {
   "name": "flock",
   "private": true,
+  "license": "MIT",
   "workspaces": ["packages/*"],
   "scripts": {
     "dev": "bun run scripts/dev.ts",
