@@ -171,40 +171,47 @@ fi
 echo "flock: installed $ver to $INSTALL_DIR/flock"
 
 # ---- PATH advice -----------------------------------------------------------
-on_path=1
-case ":${PATH:-}:" in
-  *":$INSTALL_DIR:"*) on_path=0 ;;
-esac
-
-if [ "$on_path" -ne 0 ]; then
-  # ${SHELL:-} matters: a container shell often has SHELL unset, and `set -u` would abort here —
-  # after a successful install, which is the worst possible place to fall over.
-  shell_name="${SHELL:-}"
-  shell_name="${shell_name##*/}"
-  # macOS Terminal starts bash as a *login* shell, which reads ~/.bash_profile and never
-  # ~/.bashrc — pointing a mac user at .bashrc is advice that silently does nothing.
-  rc=""
-  case "$shell_name" in
-    zsh)  rc="$HOME/.zshrc" ;;
-    bash) if [ "$os" = darwin ]; then rc="$HOME/.bash_profile"; else rc="$HOME/.bashrc"; fi ;;
-    fish) rc="$HOME/.config/fish/config.fish" ;;
+# `flock setup` (below) now owns PATH: it edits the rc file itself and prints its own fallback
+# advice when it can't. Printing this script's own advice too would say "add this by hand" and
+# "it was added for you" six lines apart. Print it here only when setup is being skipped, so the
+# FLOCK_NO_SETUP=1 path — the one case where nothing else will ever say anything — still does.
+if [ "${FLOCK_NO_SETUP:-}" = 1 ]; then
+  on_path=1
+  case ":${PATH:-}:" in
+    *":$INSTALL_DIR:"*) on_path=0 ;;
   esac
 
-  echo "flock: $INSTALL_DIR is not on your PATH." >&2
-  if [ "$shell_name" = fish ]; then
-    echo "  fish_add_path $INSTALL_DIR" >&2
-  else
-    echo "  export PATH=\"$INSTALL_DIR:\$PATH\"" >&2
+  if [ "$on_path" -ne 0 ]; then
+    # ${SHELL:-} matters: a container shell often has SHELL unset, and `set -u` would abort here —
+    # after a successful install, which is the worst possible place to fall over.
+    shell_name="${SHELL:-}"
+    shell_name="${shell_name##*/}"
+    # macOS Terminal starts bash as a *login* shell, which reads ~/.bash_profile and never
+    # ~/.bashrc — pointing a mac user at .bashrc is advice that silently does nothing.
+    rc=""
+    case "$shell_name" in
+      zsh)  rc="$HOME/.zshrc" ;;
+      bash) if [ "$os" = darwin ]; then rc="$HOME/.bash_profile"; else rc="$HOME/.bashrc"; fi ;;
+      fish) rc="$HOME/.config/fish/config.fish" ;;
+    esac
+
+    echo "flock: $INSTALL_DIR is not on your PATH." >&2
+    if [ "$shell_name" = fish ]; then
+      echo "  fish_add_path $INSTALL_DIR" >&2
+    else
+      echo "  export PATH=\"$INSTALL_DIR:\$PATH\"" >&2
+    fi
+    if [ -n "$rc" ]; then
+      echo "  (add that to $rc)" >&2
+    fi
+    echo "  or run it directly: $INSTALL_DIR/flock" >&2
   fi
-  if [ -n "$rc" ]; then
-    echo "  (add that to $rc)" >&2
-  fi
-  echo "  or run it directly: $INSTALL_DIR/flock" >&2
 fi
 
 # ---- setup -----------------------------------------------------------------
-# One command installs everything, not just a binary: writes the Claude Code skill and starts the
-# daemon. Skippable for a fake-release test or a scripted install that wants to defer it.
+# One command installs everything, not just a binary: writes the Claude Code skill, repairs PATH
+# (or prints the fallback advice above when it can't), and starts the daemon. Skippable for a
+# fake-release test or a scripted install that wants to defer it.
 if [ "${FLOCK_NO_SETUP:-}" != 1 ]; then
   "$INSTALL_DIR/flock" setup
 fi

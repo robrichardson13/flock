@@ -35,8 +35,8 @@ You do not run CLI commands to use flock. The CLI is how agents reach the board.
 
 The one-liner puts the `flock` binary in `~/.flock/bin`, writes the Claude Code skill to
 `~/.claude/skills/flock`, starts the daemon, and prints the URL of the web app. No node, no bun,
-no git, no sudo. If `~/.flock/bin` is not already on your `PATH`, the installer says so and prints
-the line to add.
+no git, no sudo. If `~/.flock/bin` is not already on your `PATH`, the installer adds it to your
+shell's rc file itself; set `FLOCK_NO_MODIFY_PATH=1` to opt out.
 
 An installed flock checks for a new release on its own, at most once a day, in the background, and
 applies it. `FLOCK_NO_UPDATE=1` or `{"autoupdate": false}` in `~/.flock/config.json` turns that

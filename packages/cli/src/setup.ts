@@ -16,9 +16,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { flockHome } from "./daemon.ts";
-import { skillPath, version } from "./runtime.ts";
+import { ensurePathConfigured, isNoModifyPath, type EnsurePathResult } from "./path-setup.ts";
+import { isStandalone, skillPath, version } from "./runtime.ts";
 
 export interface SetupOptions {
   json: boolean;
@@ -40,7 +41,9 @@ export interface SkillRecord {
  */
 export function claudeSkillsDir(): string {
   if (process.env.CLAUDE_SKILLS_DIR) return process.env.CLAUDE_SKILLS_DIR;
-  return join(process.env.HOME ?? homedir(), ".claude", "skills");
+  // `||`, not `??`: an empty-string HOME (real on some systemd units, cron, and stripped-env
+  // containers) must be treated as absent, or join("", ...) silently produces a relative path.
+  return join(process.env.HOME || homedir(), ".claude", "skills");
 }
 
 /** Where `flock setup` would write the skill: `<claudeSkillsDir>/flock/SKILL.md`. */
@@ -49,6 +52,13 @@ export function skillDestPath(): string {
 }
 
 export const skillJsonPath = () => join(flockHome(), "skill.json");
+
+/** Where the installer put the binary: `FLOCK_INSTALL_DIR`, else `<flockHome>/bin` — the same
+ *  formula `scripts/install.sh` uses, so `flock setup` repairs the PATH for the binary it's
+ *  actually running from, whether that's a release install or `FLOCK_INSTALL_DIR` override. */
+function installDir(): string {
+  return process.env.FLOCK_INSTALL_DIR ? resolve(process.env.FLOCK_INSTALL_DIR) : join(flockHome(), "bin");
+}
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -116,12 +126,52 @@ export function writeSkill(): SkillResult {
   return { action: "written", dest };
 }
 
-/** `flock setup`: write the skill, then `flock up` unless `--no-start`/`--skill-only`. */
+function reportPath(result: EnsurePathResult, dir: string, json: boolean): void {
+  if (json) return; // folded into setupCommand's single JSON line below
+  switch (result.action) {
+    case "on-path":
+    case "already-present":
+      return; // nothing changed, nothing to say
+    case "already-on-path-unmarked":
+      console.log(`flock: ${result.rc} already puts ${dir} on your PATH, leaving it alone`);
+      return;
+    case "appended":
+      console.log(`flock: added ${dir} to your PATH in ${result.rc}`);
+      console.log(`  restart your shell or run: export PATH="${dir}:$PATH"`);
+      return;
+    case "printed":
+      console.error(result.message);
+      return;
+  }
+}
+
+/** `flock setup`: write the skill, repair `PATH` if needed, then `flock up` unless
+ *  `--no-start`/`--skill-only`. */
 export async function setupCommand(opts: SetupOptions): Promise<void> {
   const skill = writeSkill();
 
+  const dir = installDir();
+  // Only touch the user's shell rc from an installed binary, for a directory that actually exists:
+  // a checkout's `bun run flock setup` must never add a dev build's directory to a real ~/.zshrc
+  // (the repo's own rule — dev builds are never on PATH), and a non-existent install dir (a
+  // misconfigured FLOCK_INSTALL_DIR) is nothing worth putting on PATH either. `--skill-only` means
+  // skill-and-nothing-else, so it skips this too.
+  const path: EnsurePathResult | undefined =
+    !isStandalone() || opts.skillOnly || !existsSync(dir)
+      ? undefined
+      : ensurePathConfigured(dir, {
+          // `||`, not `??`: HOME="" is real (systemd, cron, a stripped-env container) and must be
+          // treated as absent, never as a relative-path seed for the rc file we're about to write.
+          home: process.env.HOME || homedir(),
+          shell: process.env.SHELL,
+          path: process.env.PATH,
+          platform: process.platform,
+          noModifyPath: isNoModifyPath(process.env.FLOCK_NO_MODIFY_PATH),
+        });
+  if (path) reportPath(path, dir, opts.json);
+
   if (opts.json) {
-    console.log(JSON.stringify({ skill: skill.action, dest: skill.dest }));
+    console.log(JSON.stringify({ skill: skill.action, dest: skill.dest, path: path?.action }));
   } else if (skill.action === "up-to-date") {
     console.log(`skill up to date: ${skill.dest}`);
   } else if (skill.action === "written") {

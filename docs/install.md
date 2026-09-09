@@ -23,11 +23,44 @@ one. If the repo is private, download a release asset by hand instead (see Manua
    `http://127.0.0.1:4747`.
 
 The installer prints the absolute path to the binary on stdout (so a sandboxed agent can run it
-without a second round trip) and, if `$INSTALL_DIR` is not already on `PATH`, prints advice for
-adding it on stderr.
+without a second round trip). If `$INSTALL_DIR` is not already on `PATH`, `flock setup` (below)
+edits your shell's rc file to add it, or prints the line to add by hand when it can't.
 
 A running flock daemon also serves this same script at `GET /install.sh`, so a machine that can
 already reach a flock instance learns only one hostname.
+
+## Adding `~/.flock/bin` to your PATH
+
+`flock setup` — which the installer runs automatically, and which you can re-run any time to
+repair a broken PATH — appends one line to your shell's rc file when `$INSTALL_DIR` isn't already
+on `PATH`:
+
+```sh
+# Added by flock (https://github.com/robrichardson13/flock) — safe to remove
+export PATH="/home/you/.flock/bin:$PATH"
+```
+
+(the path is written expanded, not as the literal string `$HOME/.flock/bin`)
+
+It edits `~/.zshrc`, `~/.bash_profile` (`~/.bashrc` on Linux; macOS Terminal starts bash as a login
+shell, which reads `.bash_profile` and never `.bashrc`), or `~/.config/fish/config.fish`
+(`fish_add_path` instead of `export`), matching `$SHELL`. It never rewrites, reorders, or clobbers
+anything already in the file — only appends. The marker comment makes flock's own line idempotent:
+running `flock setup` again, or reinstalling, never duplicates it. It also recognizes an unmarked
+`.flock/bin` line already in the file — however it's spelled (`$HOME/…`, `${HOME}/…`, `~/…`, or the
+expanded absolute path) — and leaves it alone rather than adding a second one. Removing flock's own
+line by hand is exactly what the uninstall section below covers.
+
+Set `FLOCK_NO_MODIFY_PATH` to opt out — any value other than empty, `0`, or `false` counts, though
+`1` is what the rest of this doc uses. That's an environment variable rather than a flag on
+purpose — flags do not survive `curl | sh`. With the opt-out set, when `$SHELL` isn't set to
+something flock recognizes (a common state in a container), or when the rc file can't be written
+(a read-only `$HOME`, an unwritable rc), `flock setup` falls back to printing the same advice
+`install.sh` always has — the export line to add yourself, and the rc file it would have used, if
+any — and writes nothing.
+
+This logic lives in `flock setup` (not `install.sh`) specifically so it's testable and so a later
+`flock setup` can repair a PATH that never got configured, without re-running the installer.
 
 ## Supported platforms
 
@@ -50,6 +83,7 @@ your platform isn't one of the six above.
 | `FLOCK_INSTALL_DIR` | `$HOME/.flock/bin` | Destination directory for the binary. |
 | `FLOCK_RELEASE_BASE` | GitHub Releases download URL for `FLOCK_VERSION` | Base URL the tarball and checksums are fetched from — override to install from a mirror or a local test server. |
 | `FLOCK_NO_SETUP` | unset | Set to `1` to skip the automatic `flock setup` call after install (so you get just the binary). |
+| `FLOCK_NO_MODIFY_PATH` | unset | Set to `1` to stop `flock setup` from editing your shell rc; it prints the export line instead. |
 
 The installer verifies the download against the release's `SHA256SUMS` (or the per-asset
 `.sha256`) before installing anything. A checksum mismatch is one line on stderr and a non-zero
@@ -113,3 +147,9 @@ rm -rf ~/.flock/bin/flock ~/.claude/skills/flock
 That removes the binary and the skill. Add `rm -rf ~/.flock` to also drop the database, logs, and
 every other piece of state flock keeps under its home directory (`FLOCK_HOME` if you set one) —
 back up `~/.flock/flock.db` first if you want to keep your boards.
+
+Neither command touches your shell rc. If `flock setup` added the `PATH` line described above,
+remove it by hand: look for the `# Added by flock (https://github.com/robrichardson13/flock) —
+safe to remove` comment in `~/.zshrc`, `~/.bash_profile`/`~/.bashrc`, or
+`~/.config/fish/config.fish`, and delete that line and the `export PATH=…` (or `fish_add_path …`)
+line right after it.
