@@ -820,7 +820,18 @@ const RESTORE_WINDOW_MS = 1000;
  * just set false by design, so without this the bottom-anchored restore was a bare clamp
  * that stayed wherever the first frame's height put it.
  */
-export function settleRestore(el: HTMLElement, y: number, windowMs = RESTORE_WINDOW_MS): () => void {
+export interface RestoreWindow {
+  /** End the window immediately (no further re-applies) without asserting how far it got. */
+  release: () => void;
+  /** Whether the window closed on its own — reached `y`, a foreign scroll, or the timeout —
+   *  as opposed to being cut short by `release`. A caller writing the pane's position out
+   *  needs this: while `false`, `el.scrollTop` is still the short clamp from a not-yet-grown
+   *  pane, not the offset that was actually remembered, and writing it would overwrite a good
+   *  stored offset with a worse one (ADR 0013). */
+  settled: () => boolean;
+}
+
+export function settleRestore(el: HTMLElement, y: number, windowMs = RESTORE_WINDOW_MS): RestoreWindow {
   let done = false;
   let applying = false;
   let raf = 0;
@@ -857,7 +868,8 @@ export function settleRestore(el: HTMLElement, y: number, windowMs = RESTORE_WIN
   }
 
   apply();
-  if (done) return finish;
+  const handle: RestoreWindow = { release: finish, settled: () => done };
+  if (done) return handle;
   el.addEventListener("scroll", onScroll);
   if (typeof ResizeObserver !== "undefined") {
     ro = new ResizeObserver(() => apply());
@@ -865,7 +877,7 @@ export function settleRestore(el: HTMLElement, y: number, windowMs = RESTORE_WIN
     for (const child of Array.from(el.children)) ro.observe(child);
   }
   timer = window.setTimeout(finish, windowMs);
-  return finish;
+  return handle;
 }
 
 export interface StickToBottom<T extends HTMLElement> {
@@ -933,8 +945,9 @@ export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], 
   const [pending, setPending] = useState(0);
   // Consumed on the first layout effect only; a later id-driven run must not re-restore.
   const restoreDone = useRef(false);
-  // Closes the restore's settling window early, on unmount.
-  const restoreRelease = useRef<(() => void) | null>(null);
+  // The in-flight settling window, so the exit-writer can tell a short mid-settle clamp from
+  // the offset that was actually reached (ADR 0013).
+  const restoreWindow = useRef<RestoreWindow | null>(null);
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
 
@@ -983,8 +996,6 @@ export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], 
     return () => {
       window.clearTimeout(settleTimer.current);
       resizeObserver.current?.disconnect();
-      restoreRelease.current?.();
-      restoreRelease.current = null;
       // Refs outlive StrictMode's throwaway first mount, so a consumed `restoreDone` would
       // make the real mount skip the restore entirely. Clearing it here re-arms it.
       restoreDone.current = false;
@@ -1007,10 +1018,23 @@ export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], 
   // `bottom: false` offset that yanked the reader up on every later visit. `live.dom.test.tsx`
   // mounts and unmounts the hook for real and asserts the write, which is what makes the
   // difference between the two visible to `bun test`.
+  //
+  // The settling window's release lives in this same effect's cleanup, not a neighbouring
+  // passive one — on purpose, and for the same reason the writer itself is a layout effect.
+  // A passive cleanup here would run after this one, once `ref.current` is already null, so
+  // the window would outlive the write it needs to gate: `write` would read a still-settling
+  // `el.scrollTop` (the short clamp) and overwrite a good stored offset with it. Keeping both
+  // in one layout-effect cleanup, write before release, closes that gap the same way the
+  // blocker fix closed the ref-null one.
   useLayoutEffect(() => {
     const write = () => {
       const el = ref.current;
       if (!el || !onExitRef.current) return;
+      // Mid-settle: `el.scrollTop` is still the short clamp from a not-yet-grown pane, not
+      // the offset that was actually remembered. Skip the write rather than overwrite a good
+      // stored offset with a worse one; the settling window's own outcome (or a later exit)
+      // writes the right value later.
+      if (restoreWindow.current && !restoreWindow.current.settled()) return;
       onExitRef.current({ y: el.scrollTop, bottom: stuck.current });
     };
     const onVisibility = () => { if (document.visibilityState === "hidden") write(); };
@@ -1020,6 +1044,8 @@ export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], 
       window.removeEventListener("pagehide", write);
       document.removeEventListener("visibilitychange", onVisibility);
       write();
+      restoreWindow.current?.release();
+      restoreWindow.current = null;
     };
   }, []);
 
@@ -1069,7 +1095,7 @@ export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], 
         // `settleRestore` applies the clamped offset immediately and then holds it against a
         // growing pane for `RESTORE_WINDOW_MS`. The hook's own growth observer cannot do
         // this job: `repinOnGrow` is gated on `stuck`, which this restore has just set false.
-        restoreRelease.current = settleRestore(el, restoreTop);
+        restoreWindow.current = settleRestore(el, restoreTop);
         return;
       }
     }
@@ -1138,18 +1164,25 @@ export function useScrollRestore<T extends HTMLElement>(y: number | undefined, o
     if (!el) return;
     // The settling window, shared with `useStickToBottom`'s restore. Applied here rather
     // than beside the write-out so it runs before paint, with no visible jump.
-    const release = y !== undefined && y > 0 ? settleRestore(el, y) : null;
+    const restoreWindow = y !== undefined && y > 0 ? settleRestore(el, y) : null;
 
-    const write = () => onExitRef.current(el.scrollTop);
+    const write = () => {
+      // Mid-settle: `el.scrollTop` is still the short clamp from a not-yet-grown pane, not
+      // the offset that was actually remembered. Skip the write rather than overwrite a good
+      // stored offset with a worse one (ADR 0013), symmetric with `useStickToBottom`.
+      if (restoreWindow && !restoreWindow.settled()) return;
+      onExitRef.current(el.scrollTop);
+    };
     const onVisibility = () => { if (document.visibilityState === "hidden") write(); };
     window.addEventListener("pagehide", write);
     document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
-      release?.();
       window.removeEventListener("pagehide", write);
       document.removeEventListener("visibilitychange", onVisibility);
+      // Write before releasing the window, so `write` can still see whether it had settled.
       write();
+      restoreWindow?.release();
     };
     // Mount-only: `y` is the offset this container opened with, not a live prop to track.
     // eslint-disable-next-line react-hooks/exhaustive-deps

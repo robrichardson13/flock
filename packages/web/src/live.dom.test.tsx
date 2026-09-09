@@ -243,6 +243,30 @@ describe("a clamped restore holds its offset while content settles", () => {
 
     expect(pane.el.scrollTop).toBe(100);
   });
+
+  // Negative control for the mid-settle-unmount fix (card #5). The pane mounts with zero
+  // height — no `lay()` yet, as if the content hadn't laid out — so the clamp lands at 0
+  // while the settling window is still open, and the component unmounts before a `resize`,
+  // a reader scroll, or the 1000ms timeout ever closes it. A write that trusts
+  // `el.scrollTop` at that moment writes the short clamp (0) over the offset that was
+  // already correctly stored; the fix must decline to write until the window has settled.
+  it("does not overwrite the stored offset with the short clamp on a mid-settle unmount (useStickToBottom)", () => {
+    const written: Array<{ y: number; bottom: boolean }> = [];
+    const pane = restore(1200, { onExit: (p) => written.push(p) });
+
+    pane.unmount(); // still mid-settle: no lay(), no resize, no timeout
+
+    expect(written).toEqual([]);
+  });
+
+  it("does not overwrite the stored offset with the short clamp on a mid-settle unmount (useScrollRestore)", () => {
+    const written: number[] = [];
+    const pane = mountPane(() => ({ ref: useScrollRestore<HTMLDivElement>(1200, (y) => written.push(y)) }));
+
+    pane.unmount(); // still mid-settle: no lay(), no resize, no timeout
+
+    expect(written).toEqual([]);
+  });
 });
 
 /**
