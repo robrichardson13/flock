@@ -455,6 +455,36 @@
   }
 }
 
+/* "Add to chat" (ADR 0014): a tip over a text selection inside a channel message, quoting it
+   into the composer. Desktop-gated in both places on purpose — `useHasFinePointer`/
+   `useIsMobile` keep it from ever appearing in JS on a touch device, and this media query
+   keeps `.add-to-chat` unstyled (so effectively inert) should it somehow render outside
+   that gate. Portalled straight to `document.body` (`addToChat.tsx`), not inside `.pane` —
+   `position: fixed` needs the real viewport as its containing block, and `.pane`'s own
+   crossfade/push transforms would otherwise steal that. */
+@media (min-width: 900px) {
+  .add-to-chat {
+    position: fixed;
+    z-index: 30; /* over the pane (15) and the "N new" pill (15/20), under the card
+                    drawer's scrim (40) and the swipe readout (90). */
+    padding: var(--s1) var(--s2);
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    box-shadow: var(--shadow);
+    color: var(--text);
+    font-size: var(--t-foot);
+    font-weight: var(--w-head);
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+  }
+  @media (hover: hover) {
+    .add-to-chat:hover { background: var(--surface-hover); }
+  }
+  .add-to-chat:active { background: var(--surface-press); }
+}
+
 /* The skip link: the board's first tab stop, and invisible until it has focus. It exists
    because even with the redundant faces demoted, the right column's composer sits after
    the whole channel in reading order — 89 Tabs from the top bar on a busy board (#17 B4).

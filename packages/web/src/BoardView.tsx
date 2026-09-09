@@ -49,12 +49,14 @@ import {
 import { groupMessages, splitByDay } from "./grouping.ts";
 import { matchShortcut, SHORTCUT_HINT, type Shortcut } from "./shortcuts.ts";
 import { failPending, LineComposer, mergeThread, nextTempId, resolvePending, ThreadGroup, type PendingSend } from "./thread.tsx";
+import { AddToChatTip, quoteBlock, useAddToChat } from "./addToChat.tsx";
+import { draftKey, requestInsert } from "./compose.ts";
 import { ActivitySkeleton, BoardSideSkeleton, CardPageSkeleton, CardsSkeleton, KanbanSkeleton, Line } from "./Skeleton.tsx";
 import { ActorSheet } from "./ActorView.tsx";
 import { clearSnapshot, readSnapshot, snapKey, writeSnapshot } from "./snapshot.ts";
 import { forgetView, readScroll, rememberedTab, rememberScroll, rememberTab } from "./viewstate.ts";
 import { useTopBarSlot } from "./TopBar.tsx";
-import { Avatar, D_BASE, D_SLOW, EMPTY_TEXT, Icons, prefersReducedMotion, RuntimeTag, Sheet, setEdgeSwipePeek, skipNextPushAnimation, STATUS_LABEL, StatusPill, TeamSheet, TeamStack, useAnyOverlayOpen, useEdgeSwipeBack, useIsMobile, Menu } from "./ui.tsx";
+import { Avatar, D_BASE, D_SLOW, EMPTY_TEXT, Icons, prefersReducedMotion, RuntimeTag, Sheet, setEdgeSwipePeek, skipNextPushAnimation, STATUS_LABEL, StatusPill, TeamSheet, TeamStack, useAnyOverlayOpen, useEdgeSwipeBack, useHasFinePointer, useIsMobile, Menu } from "./ui.tsx";
 
 export type BoardTab = "cards" | "channel" | "activity" | "decisions";
 
@@ -1599,10 +1601,15 @@ function Channel({ boardId, snap, onSent }: { boardId: string; snap: Snapshot; o
     onExit: (pos) => rememberScroll(snap.board.slug, "channel", pos),
   });
   const mobile = useIsMobile();
+  const hasFinePointer = useHasFinePointer();
   // The `.pane` ancestor `--composer-h` is already published onto (thread.tsx's
   // LineComposer) — `useScrollCollapse` writes its own continuous `--composer-collapse`
   // custom property on the same element, so styles.css can read both off one ancestor.
   const paneRef = useRef<HTMLDivElement>(null);
+  // Desktop only (ADR 0014): "Add to chat" watches the selection inside `ref` (the same
+  // scroller `useStickToBottom` already owns) and offers a tip that quotes it into this
+  // pane's own composer.
+  const addToChat = useAddToChat(ref, !mobile && hasFinePointer);
   // Phone only (#2, continuous per #4): scrolling up toward older messages continuously
   // shrinks the chin toward the card detail composer's resting footprint; scrolling back
   // down, or being pinned to the bottom (`atBottom`, reusing `useStickToBottom`'s own notion
@@ -1643,6 +1650,13 @@ function Channel({ boardId, snap, onSent }: { boardId: string; snap: Snapshot; o
         </div>
         <NewPill count={pending} onClick={toBottom} />
       </div>
+      <AddToChatTip
+        info={addToChat}
+        onPick={(info) => {
+          const quote = quoteBlock(info.text, info.author);
+          if (quote) requestInsert(draftKey({ board: boardId, pane: "channel" }), quote);
+        }}
+      />
       <LineComposer
         className="card-composer"
         compact={mobile && scrollCollapse.collapsed}

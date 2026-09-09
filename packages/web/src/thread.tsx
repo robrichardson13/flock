@@ -28,8 +28,10 @@ import { planImage } from "./images.ts";
 import { MessageBody } from "./markdown.tsx";
 import { useImageViewer } from "./Viewer.tsx";
 import { timeAgo } from "./App.tsx";
-import { clearDraft, draftKey, getDraft, saveDraft, shouldSendOnEnter, takeDroppedCount, type DraftAddress, type StagedAttachment } from "./compose.ts";
+import { clearDraft, draftKey, getDraft, saveDraft, shouldSendOnEnter, subscribeInsert, takeDroppedCount, type DraftAddress, type StagedAttachment } from "./compose.ts";
+import { joinDraft } from "./addToChat.tsx";
 import { useAutoGrow } from "./autogrow.ts";
+import { focusNoScroll } from "./focus.ts";
 import { ActorTap, Avatar, Icons, useHasFinePointer, useIsMobile } from "./ui.tsx";
 
 /** One bubble's worth of thread: what both a channel message and a card comment carry. */
@@ -148,6 +150,7 @@ export function ThreadGroup<T extends ThreadEntry>({
             className={`msg bubble${i > 0 ? " bubble-cont" : ""}${entryClass?.(m) ?? ""}`}
             style={entryStyle?.(m)}
             title={mine ? timeAgo(m.createdAt) : undefined}
+            data-msg-author={m.author}
           >
             {m.body.trim() && <ClampedBody text={m.body} />}
             {m.attachments && m.attachments.length > 0 && (
@@ -379,6 +382,37 @@ export function LineComposer({
   const stagedRef = useRef(staged);
   stagedRef.current = staged;
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // "Add to chat" (ADR 0014): a request arrives with no reference to this component at all,
+  // through `compose.ts`'s insertion channel keyed on the same `key` the draft store uses.
+  // Insert at the caret when the field is actually focused (so a quote picked while mid-edit
+  // lands where the cursor was, not wherever it happened to sit last); otherwise append after
+  // whatever is already there, `joinDraft` supplying the separating blank line either way.
+  // The caret position to restore is stashed in a ref because `setText`'s updater runs before
+  // the DOM value it computes exists to place a selection in.
+  const pendingCaret = useRef<number | null>(null);
+  useEffect(() => subscribeInsert(key, (quote) => {
+    setText((prev) => {
+      const el = areaRef.current;
+      const caret = el && document.activeElement === el && typeof el.selectionStart === "number" ? el.selectionStart : prev.length;
+      const joined = joinDraft(prev.slice(0, caret), quote) + prev.slice(caret);
+      pendingCaret.current = joined.length - prev.slice(caret).length;
+      return joined;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [key]);
+
+  useEffect(() => {
+    if (pendingCaret.current === null) return;
+    const caret = pendingCaret.current;
+    pendingCaret.current = null;
+    const el = areaRef.current;
+    if (!el) return;
+    focusNoScroll(el);
+    el.setSelectionRange(caret, caret);
+    resize();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text]);
 
   const showNotice = (message: string) => {
     setNotice(message);
