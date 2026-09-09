@@ -24,9 +24,16 @@ The app already persists five things — `flock.kbh`, `flock.brief.<slug>`, `flo
 One record per board, at `flock.view.1.<slug>`, alongside `flock.brief.<slug>`:
 
 ```ts
-{ tab: BoardTab, at: number, scroll: { cards?: number, channel?: Pos, activity?: Pos, decisions?: number } }
+{ tab: BoardTab, at: number, scrollAt?: number, scroll: { cards?: number, channel?: Pos, activity?: Pos, decisions?: number } }
 type Pos = { y: number; bottom: boolean }
 ```
+
+`at` is when the record was last written and drives the 50-key prune. `scrollAt` is when an
+offset was last written and is the only clock `SCROLL_TTL_MS` reads. They are separate because
+the tab has no TTL and `rememberTab` fires on entry and on every tab the router settles on: a
+single shared timestamp meant walking into a board refreshed the offsets' age too, so a
+nine-hour-old offset came back to life for the rest of the session. A record without `scrollAt`
+predates the split and falls back to `at`, so the version does not have to move.
 
 Slots are named by surface, not by tab, so a surface that is not a tab can be added without reshaping the record. `kanban` is reserved and deliberately unwritten: the desktop kanban never unmounts on a pane switch, scrolls on a different axis from the mobile Cards list, and would collide with the `cards` slot at the same key across a window resize.
 
@@ -80,11 +87,15 @@ Content that shrank below the remembered offset needs no special case — the cl
 
 Writes happen on **unmount** (the cleanup of the same layout effect, covering a tab switch, leaving the board, and opening a card) and on **`pagehide`** plus `visibilitychange → hidden` (covering a reload and an app switch, neither of which unmounts). Not on scroll. A process killed without `pagehide` loses the last offset, which costs one scroll.
 
+The layout effect is load-bearing, not incidental. React 18 runs a deleted subtree's layout destroys in the mutation phase, before it detaches host refs, but defers its passive destroys until *after* the mutation phase has already set `ref.current = null`. An exit-writer in a passive `useEffect` therefore reads a null ref and writes nothing on any unmount — leaving `pagehide` as the only writer, so one backgrounding while scrolled up freezes a `bottom: false` offset that yanks the reader on every later visit. The first implementation of this ADR did exactly that on the bottom-anchored panes. Because the difference is invisible to a pure test, both hooks are mounted and unmounted for real in `packages/web/src/live.dom.test.tsx`, against the hand-written DOM in `testdom.ts`.
+
+Both surfaces reach the settling window through one shared `settleRestore(el, y, windowMs)`. `useStickToBottom`'s own growth observer cannot stand in for it: `repinOnGrow` is gated on `stuck`, which a restore has just set false by design.
+
 ## Consequences
 
 - Retention is entirely client-side: no schema change, no core rule, no CLI or server surface. It is a cache — every access `try`/`catch`ed, every reader correct when it returns nothing (private mode, a cleared store, a first visit).
 - A bookmark of `#/b/<slug>` now opens on the remembered tab rather than always Cards. `#/b/<slug>/cards` is the route that pins Cards, and it already parses.
 - The URL always names the surface on screen, so a link copied out of a restored board is a link to what the sender was looking at.
 - The desktop kanban's scroll is not retained. The slot exists if that turns out to matter.
-- A record for a deleted board is harmless — nothing reads it — and ages out of the 50-key cap.
+- A record for a deleted board is *not* inert: `entryRedirect` reads it, so `#/b/<gone>` would keep redirecting and a slug reused later would inherit the dead board's tab and offsets. `BoardView` drops the record on a 404, beside the snapshot cache it already clears there.
 - The pure parts are unit-testable and are what the tests should cover: `entryRedirect`, the record's read/write/prune, and the TTL. Scroll pixels are not.

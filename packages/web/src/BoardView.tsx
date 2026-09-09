@@ -52,7 +52,7 @@ import { failPending, LineComposer, mergeThread, nextTempId, resolvePending, Thr
 import { ActivitySkeleton, BoardSideSkeleton, CardPageSkeleton, CardsSkeleton, KanbanSkeleton, Line } from "./Skeleton.tsx";
 import { ActorSheet } from "./ActorView.tsx";
 import { clearSnapshot, readSnapshot, snapKey, writeSnapshot } from "./snapshot.ts";
-import { readScroll, rememberedTab, rememberScroll, rememberTab } from "./viewstate.ts";
+import { forgetView, readScroll, rememberedTab, rememberScroll, rememberTab } from "./viewstate.ts";
 import { useTopBarSlot } from "./TopBar.tsx";
 import { Avatar, D_BASE, D_SLOW, EMPTY_TEXT, Icons, prefersReducedMotion, RuntimeTag, Sheet, setEdgeSwipePeek, skipNextPushAnimation, STATUS_LABEL, StatusPill, TeamSheet, TeamStack, useAnyOverlayOpen, useEdgeSwipeBack, useIsMobile, Menu } from "./ui.tsx";
 
@@ -158,7 +158,10 @@ export function displayTabWhileClosing(tab: BoardTab, cardClosing: boolean, last
  * here rather than replaced, so a card landing above the reader still holds their place.
  */
 function CardsScrollBody({ boardSlug, listRef, children }: { boardSlug: string; listRef: (el: HTMLElement | null) => void; children: ReactNode }) {
-  const restoreRef = useScrollRestore<HTMLDivElement>(readScroll(boardSlug, "cards"), (y) => rememberScroll(boardSlug, "cards", y));
+  // Read once per board, not once per render: only the mount effect inside the hook ever
+  // uses it, and a coalesced refetch re-renders this pane freely.
+  const restored = useMemo(() => readScroll(boardSlug, "cards"), [boardSlug]);
+  const restoreRef = useScrollRestore<HTMLDivElement>(restored, (y) => rememberScroll(boardSlug, "cards", y));
   const combinedRef = useCallback(
     (el: HTMLDivElement | null) => {
       listRef(el);
@@ -228,6 +231,10 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
       // 404 is the server saying the cache is wrong: drop it and let the error through.
       if (e instanceof ApiError && e.status === 404) {
         clearSnapshot(snapKey.board(boardRef));
+        // Same reasoning for the remembered tab and offsets: ADR 0013 assumed a dead board's
+        // record was inert, but `entryRedirect` reads it, so `#/b/<gone>` would keep
+        // redirecting and a slug reused later would inherit the dead board's positions.
+        forgetView(boardRef);
         setSnap(null);
       }
       setErr((e as Error).message);
@@ -1586,7 +1593,7 @@ function Channel({ boardId, snap, onSent }: { boardId: string; snap: Snapshot; o
   // A remembered position that left the reader pinned to the bottom restores nothing — the
   // hook's own bottom-pin already gives the same "where I left off" for a live log — so only
   // a `bottom: false` position is ever handed in as `restoreTop` (ADR 0013).
-  const restored = readScroll(snap.board.slug, "channel");
+  const restored = useMemo(() => readScroll(snap.board.slug, "channel"), [snap.board.slug]);
   const { ref, onScroll, pending, toBottom, stick } = useStickToBottom<HTMLDivElement>(messages.map((m) => m.id), {
     restoreTop: restored && !restored.bottom ? restored.y : null,
     onExit: (pos) => rememberScroll(snap.board.slug, "channel", pos),
@@ -1680,7 +1687,7 @@ const ACTIVITY_EMPTY_TEXT = "No activity yet. Claims, comments and closes land h
  */
 function Activity({ events: loaded, boardSlug, cards, desktop }: { events: Event[] | null; boardSlug: string; cards: Card[]; desktop?: boolean }) {
   const events = loaded ?? [];
-  const restored = readScroll(boardSlug, "activity");
+  const restored = useMemo(() => readScroll(boardSlug, "activity"), [boardSlug]);
   const { ref, onScroll, pending, toBottom } = useStickToBottom<HTMLDivElement>(events.map((e) => e.seq), {
     restoreTop: restored && !restored.bottom ? restored.y : null,
     onExit: (pos) => rememberScroll(boardSlug, "activity", pos),
@@ -1743,7 +1750,8 @@ function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap:
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollCollapse = useScrollCollapse(scrollRef, mobile, paneRef);
   // Top-anchored, same as Cards: restored and remembered directly, no bottom pin to defer to.
-  const restoreRef = useScrollRestore<HTMLDivElement>(readScroll(snap.board.slug, "decisions"), (y) => rememberScroll(snap.board.slug, "decisions", y));
+  const restored = useMemo(() => readScroll(snap.board.slug, "decisions"), [snap.board.slug]);
+  const restoreRef = useScrollRestore<HTMLDivElement>(restored, (y) => rememberScroll(snap.board.slug, "decisions", y));
   const combinedScrollRef = useCallback(
     (el: HTMLDivElement | null) => {
       (scrollRef as { current: HTMLDivElement | null }).current = el;

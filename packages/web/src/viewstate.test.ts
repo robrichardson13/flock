@@ -25,6 +25,15 @@ async function load(storage: unknown) {
   return await import(`./viewstate.ts?${Math.random()}`) as typeof import("./viewstate.ts");
 }
 
+/** Backdate a record's offsets by `ms`, the way a long gap between sessions would. */
+function age(s: ReturnType<typeof fakeStorage>, slug: string, ms: number) {
+  const key = `flock.view.1.${slug}`;
+  const rec = JSON.parse(s.map.get(key)!);
+  rec.at -= ms;
+  rec.scrollAt = rec.at;
+  s.map.set(key, JSON.stringify(rec));
+}
+
 afterEach(() => {
   Object.defineProperty(globalThis, "localStorage", { value: undefined, configurable: true, writable: true });
 });
@@ -107,9 +116,7 @@ describe("scroll retention", () => {
     const s = fakeStorage();
     const { rememberScroll, readScroll, rememberedTab, SCROLL_TTL_MS } = await load(s);
     rememberScroll("retain-tab", "cards", 500);
-    const rec = JSON.parse(s.map.get("flock.view.1.retain-tab")!);
-    rec.at = Date.now() - SCROLL_TTL_MS - 1000;
-    s.map.set("flock.view.1.retain-tab", JSON.stringify(rec));
+    age(s, "retain-tab", SCROLL_TTL_MS + 1000);
     expect(readScroll("retain-tab", "cards")).toBeUndefined();
     expect(rememberedTab("retain-tab")).toBe("cards"); // tab itself is unaffected by the offset's age
   });
@@ -118,10 +125,37 @@ describe("scroll retention", () => {
     const s = fakeStorage();
     const { rememberScroll, readScroll, SCROLL_TTL_MS } = await load(s);
     rememberScroll("retain-tab", "cards", 500);
-    const rec = JSON.parse(s.map.get("flock.view.1.retain-tab")!);
-    rec.at = Date.now() - SCROLL_TTL_MS + 1000;
-    s.map.set("flock.view.1.retain-tab", JSON.stringify(rec));
+    age(s, "retain-tab", SCROLL_TTL_MS - 1000);
     expect(readScroll("retain-tab", "cards")).toBe(500);
+  });
+
+  /**
+   * The offset's age is its own clock. It used to share `at` with the tab, and `rememberTab`
+   * fires on entry and on every tab the router settles on — so walking into a board was enough
+   * to make a nine-hour-old offset young again and yank the reader to it for the rest of the
+   * session. The ADR says an offset expires after one working session; this is what makes that
+   * true rather than nearly true.
+   */
+  it("does not let a tab write make a stale offset young again", async () => {
+    const s = fakeStorage();
+    const { rememberScroll, rememberTab, readScroll, SCROLL_TTL_MS } = await load(s);
+    rememberScroll("retain-tab", "channel", { y: 1234, bottom: false });
+    age(s, "retain-tab", SCROLL_TTL_MS + 1000);
+    expect(readScroll("retain-tab", "channel")).toBeUndefined();
+
+    rememberTab("retain-tab", "channel"); // entering the board
+    expect(readScroll("retain-tab", "channel")).toBeUndefined();
+
+    // Writing an offset is what refreshes it, and only for the surface written.
+    rememberScroll("retain-tab", "channel", { y: 77, bottom: false });
+    expect(readScroll("retain-tab", "channel")).toEqual({ y: 77, bottom: false });
+  });
+
+  it("reads a record written before the split by its only timestamp", async () => {
+    const s = fakeStorage();
+    s.map.set("flock.view.1.old", JSON.stringify({ tab: "channel", at: Date.now(), scroll: { cards: 42 } }));
+    const { readScroll } = await load(s);
+    expect(readScroll("old", "cards")).toBe(42);
   });
 });
 
@@ -151,6 +185,43 @@ describe("housekeeping", () => {
     expect(s.map.has("flock.view.1.b1")).toBe(true);
     expect(s.map.has("flock.view.1.newest")).toBe(true);
     expect(s.map.size).toBe(50);
+  });
+
+  /**
+   * `prune` only ever ran after a *successful* write, so a store that had filled up could
+   * never shed anything again — the one write failure worth retrying.
+   */
+  it("prunes and retries once when the store is full", async () => {
+    const s = fakeStorage();
+    // Refuses a write while it is over the record cap, accepts one once pruning has freed room.
+    const full = {
+      get length() { return s.map.size; },
+      key: (i: number) => [...s.map.keys()][i] ?? null,
+      getItem: (k: string) => s.map.get(k) ?? null,
+      removeItem: (k: string) => void s.map.delete(k),
+      setItem: (k: string, v: string) => { if (s.map.size > 50) throw new Error("quota exceeded"); s.map.set(k, v); },
+    };
+    const { rememberTab } = await load(full);
+    for (let i = 0; i < 55; i++) s.map.set(`flock.view.1.b${i}`, JSON.stringify({ tab: "cards", at: i, scroll: {} }));
+    rememberTab("newest", "channel");
+    expect(s.map.has("flock.view.1.newest")).toBe(true);
+    expect(s.map.has("flock.view.1.b0")).toBe(false);
+  });
+
+  /**
+   * ADR 0013 assumed a deleted board's record was inert. `entryRedirect` reads it, so
+   * `#/b/<gone>` kept redirecting and a slug reused later inherited the dead board's tab and
+   * offsets. `BoardView` calls this on a 404, beside the snapshot cache it already clears.
+   */
+  it("forgets a board's record outright", async () => {
+    const s = fakeStorage();
+    const { rememberTab, rememberScroll, rememberedTab, readScroll, forgetView } = await load(s);
+    rememberTab("gone", "channel");
+    rememberScroll("gone", "cards", 800);
+    forgetView("gone");
+    expect(rememberedTab("gone")).toBeNull();
+    expect(readScroll("gone", "cards")).toBeUndefined();
+    expect([...s.map.keys()]).toEqual([]);
   });
 
   it("never throws when storage is entirely unavailable", async () => {
@@ -189,6 +260,13 @@ describe("entryRedirect", () => {
   it("redirects when entering a different board than the one last rendered", async () => {
     const { entryRedirect } = await load(fakeStorage());
     expect(entryRedirect("#/b/board-b", "board-a", () => "activity")).toBe("#/b/board-b/activity");
+  });
+
+  it("keeps the hash's own spelling of the slug, so there is only one spelling in play", async () => {
+    const { entryRedirect } = await load(fakeStorage());
+    // The redirect edits the hash it was handed rather than re-encoding a decoded slug, so it
+    // can never disagree with `paneHref`'s spelling of the same board.
+    expect(entryRedirect("#/b/a%20b", undefined, () => "channel")).toBe("#/b/a%20b/channel");
   });
 
   it("never overrides an explicit deep link: a card route", async () => {

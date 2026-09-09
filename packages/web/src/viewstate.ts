@@ -44,9 +44,16 @@ interface ViewScroll {
 
 interface ViewRecord {
   tab: BoardTab;
-  /** When this record was last written, ms since epoch. Drives both scroll TTL and the
-   *  store's oldest-first pruning. */
+  /** When this record was last written, ms since epoch. Drives the store's oldest-first
+   *  pruning, and nothing else — the tab has no TTL, so a tab write must not be able to
+   *  refresh the offsets' age. */
   at: number;
+  /** When an offset was last written, ms since epoch — the only clock `SCROLL_TTL_MS` reads.
+   *  Separate from `at` because `rememberTab` fires on entry and on every tab the router
+   *  settles on: sharing one timestamp let a tab write resurrect a nine-hour-old offset
+   *  mid-session. Absent on records written before the split, where `at` is the best (and
+   *  only) estimate available, so no version bump is needed. */
+  scrollAt?: number;
   scroll: ViewScroll;
 }
 
@@ -99,7 +106,8 @@ function parseRecord(raw: string): ViewRecord | null {
     if (typeof s.decisions === "number") scroll.decisions = s.decisions;
     if (isPos(s.channel)) scroll.channel = s.channel;
     if (isPos(s.activity)) scroll.activity = s.activity;
-    return { tab: v.tab, at, scroll };
+    const scrollAt = typeof v.scrollAt === "number" ? v.scrollAt : undefined;
+    return { tab: v.tab, at, scrollAt, scroll };
   } catch {
     return null;
   }
@@ -134,11 +142,32 @@ function prune(s: Storage) {
 function writeView(slug: string, record: ViewRecord): void {
   const s = store();
   if (!s) return;
+  const raw = JSON.stringify(record);
   try {
-    s.setItem(PREFIX + slug, JSON.stringify(record));
+    s.setItem(PREFIX + slug, raw);
     prune(s);
   } catch {
-    // Private mode, or storage full. Retention is a convenience, not a requirement.
+    // A full store is the one failure worth a second try: pruning is what keeps this store
+    // bounded and it only ever ran *after* a successful write, so a store that filled up
+    // could never shed anything again. Private mode still throws both times, which is fine
+    // — retention is a convenience, not a requirement.
+    try {
+      prune(s);
+      s.setItem(PREFIX + slug, raw);
+    } catch {
+      /* nothing more to do */
+    }
+  }
+}
+
+/** Drop a board's record entirely — for a board the server says is gone, so a slug reused
+ *  later does not inherit a dead board's tab and offsets (ADR 0013 assumed the record was
+ *  inert; `entryRedirect` reads it, so it is not). */
+export function forgetView(slug: string): void {
+  try {
+    store()?.removeItem(PREFIX + slug);
+  } catch {
+    /* nothing to do */
   }
 }
 
@@ -152,7 +181,9 @@ export function rememberedTab(slug: string): BoardTab | null {
  *  (never while a card page or actor sheet is merely borrowing "cards" as its route tab). */
 export function rememberTab(slug: string, tab: BoardTab): void {
   const prev = readView(slug);
-  writeView(slug, { tab, at: Date.now(), scroll: prev?.scroll ?? {} });
+  // `scrollAt` is carried through untouched: a tab write must never make a stale offset
+  // young again.
+  writeView(slug, { tab, at: Date.now(), scrollAt: prev?.scrollAt ?? prev?.at, scroll: prev?.scroll ?? {} });
 }
 
 export function readScroll(slug: string, surface: "cards" | "decisions"): number | undefined;
@@ -160,7 +191,7 @@ export function readScroll(slug: string, surface: "channel" | "activity"): Pos |
 export function readScroll(slug: string, surface: ScrollSurface): number | Pos | undefined {
   const v = readView(slug);
   if (!v) return undefined;
-  if (Date.now() - v.at > SCROLL_TTL_MS) return undefined;
+  if (Date.now() - (v.scrollAt ?? v.at) > SCROLL_TTL_MS) return undefined;
   return v.scroll[surface] as number | Pos | undefined;
 }
 
@@ -168,9 +199,11 @@ export function rememberScroll(slug: string, surface: "cards" | "decisions", val
 export function rememberScroll(slug: string, surface: "channel" | "activity", value: Pos): void;
 export function rememberScroll(slug: string, surface: ScrollSurface, value: number | Pos): void {
   const prev = readView(slug);
+  const now = Date.now();
   writeView(slug, {
     tab: prev?.tab ?? "cards",
-    at: Date.now(),
+    at: now,
+    scrollAt: now,
     scroll: { ...(prev?.scroll ?? {}), [surface]: value },
   });
 }
@@ -198,5 +231,8 @@ export function entryRedirect(hash: string, prevBoard: string | undefined, remem
   if (slug === prevBoard) return null;
   const tab = remembered(slug);
   if (!tab || tab === "cards") return null;
-  return `#/b/${encodeURIComponent(slug)}/${tab}`;
+  // `m[1]` verbatim, not a re-encode of the decoded slug: the redirect then spells the board
+  // exactly the way the hash it replaces did, so there is only ever one spelling of a route
+  // in play and nothing has to agree with `paneHref`'s.
+  return `#/b/${m[1]}/${tab}`;
 }

@@ -797,6 +797,77 @@ export function isSelfScroll(args: { expected: number; scrollTop: number }): boo
   return args.expected >= 0 && args.scrollTop === args.expected;
 }
 
+/* ---------- a clamped restore's settling window ---------- */
+
+/** A restore's settling window: how long a clamped restore keeps re-applying itself as
+ *  content grows underneath it before giving up (ADR 0013). */
+const RESTORE_WINDOW_MS = 1000;
+
+/**
+ * Hold a scroll container at a remembered offset `y` while its content is still settling,
+ * and let go at the first of: the clamp reaching `y`, a scroll the restore did not itself
+ * cause, or `windowMs` elapsing. Returns the disposer for whichever of those has not
+ * happened yet.
+ *
+ * The clamp (`min(y, scrollHeight - clientHeight)`) is what makes a shrunk pane need no
+ * special case; the window is what makes a pane that mounts against the cached `flock.snap`
+ * frame, or with late-sizing images, still land on `y` once the real content arrives.
+ *
+ * Shared by both scroll surfaces on purpose. The top-anchored ones (Cards, Decisions) reach
+ * it through `useScrollRestore`; the bottom-anchored ones (Channel, Activity) reach it from
+ * inside `useStickToBottom`, which owns their `stuck` state. `useStickToBottom`'s own growth
+ * observer cannot stand in for this: `shouldRepin` is gated on `stuck`, which a restore has
+ * just set false by design, so without this the bottom-anchored restore was a bare clamp
+ * that stayed wherever the first frame's height put it.
+ */
+export function settleRestore(el: HTMLElement, y: number, windowMs = RESTORE_WINDOW_MS): () => void {
+  let done = false;
+  let applying = false;
+  let raf = 0;
+  let timer = 0;
+  let ro: ResizeObserver | null = null;
+
+  function onScroll() {
+    // Our own assignment's echo, not the reader moving: `apply` sets `applying` right before
+    // it, and this fires — asynchronously — before the next frame clears it.
+    if (applying) return;
+    finish();
+  }
+  function finish() {
+    if (done) return;
+    done = true;
+    if (raf) cancelAnimationFrame(raf);
+    window.clearTimeout(timer);
+    ro?.disconnect();
+    el.removeEventListener("scroll", onScroll);
+  }
+  function apply() {
+    if (done) return;
+    const target = Math.min(y, Math.max(0, el.scrollHeight - el.clientHeight));
+    if (Math.abs(el.scrollTop - target) > 0.5) {
+      applying = true;
+      // One frame in flight at a time: an earlier frame clearing `applying` from under a
+      // later assignment would let that assignment's own echo read as a reader scroll and
+      // close the window early.
+      if (raf) cancelAnimationFrame(raf);
+      el.scrollTop = target;
+      raf = requestAnimationFrame(() => { applying = false; raf = 0; });
+    }
+    if (target >= y - 0.5) finish();
+  }
+
+  apply();
+  if (done) return finish;
+  el.addEventListener("scroll", onScroll);
+  if (typeof ResizeObserver !== "undefined") {
+    ro = new ResizeObserver(() => apply());
+    ro.observe(el);
+    for (const child of Array.from(el.children)) ro.observe(child);
+  }
+  timer = window.setTimeout(finish, windowMs);
+  return finish;
+}
+
 export interface StickToBottom<T extends HTMLElement> {
   ref: RefObject<T>;
   onScroll: () => void;
@@ -862,6 +933,8 @@ export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], 
   const [pending, setPending] = useState(0);
   // Consumed on the first layout effect only; a later id-driven run must not re-restore.
   const restoreDone = useRef(false);
+  // Closes the restore's settling window early, on unmount.
+  const restoreRelease = useRef<(() => void) | null>(null);
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
 
@@ -910,15 +983,31 @@ export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], 
     return () => {
       window.clearTimeout(settleTimer.current);
       resizeObserver.current?.disconnect();
+      restoreRelease.current?.();
+      restoreRelease.current = null;
+      // Refs outlive StrictMode's throwaway first mount, so a consumed `restoreDone` would
+      // make the real mount skip the restore entirely. Clearing it here re-arms it.
+      restoreDone.current = false;
     };
   }, []);
 
   // Write the pane's position out on the two moments that can end this mount without
   // running React's own unmount cleanup — `pagehide` (navigating away, closing the tab) and
   // the tab being backgrounded (`visibilitychange` -> hidden), covering a reload or an app
-  // switch — plus the unmount cleanup itself (a tab switch, leaving the board). Never on
-  // scroll: the offset is worth remembering only once the reader is done moving.
-  useEffect(() => {
+  // switch — plus the unmount cleanup itself (a tab switch, leaving the board, opening a
+  // card from the channel). Never on scroll: the offset is worth remembering only once the
+  // reader is done moving.
+  //
+  // A *layout* effect, and not negotiable (ADR 0013: "the cleanup of the same layout
+  // effect"). React 18 runs a deleted subtree's layout destroys in the mutation phase,
+  // before it detaches host refs, but defers its passive destroys until after the mutation
+  // phase has already run `ref.current = null`. As a passive effect this cleanup saw a null
+  // ref and wrote nothing on every unmount — so the channel and activity offsets were only
+  // ever written by `pagehide`, and one backgrounding while scrolled up left a permanent
+  // `bottom: false` offset that yanked the reader up on every later visit. `live.dom.test.tsx`
+  // mounts and unmounts the hook for real and asserts the write, which is what makes the
+  // difference between the two visible to `bun test`.
+  useLayoutEffect(() => {
     const write = () => {
       const el = ref.current;
       if (!el || !onExitRef.current) return;
@@ -975,10 +1064,12 @@ export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], 
     if (!restoreDone.current) {
       restoreDone.current = true;
       if (restoreTop != null) {
-        const max = Math.max(0, el.scrollHeight - el.clientHeight);
-        el.scrollTop = Math.min(restoreTop, max);
         stuck.current = false;
         first.current = false;
+        // `settleRestore` applies the clamped offset immediately and then holds it against a
+        // growing pane for `RESTORE_WINDOW_MS`. The hook's own growth observer cannot do
+        // this job: `repinOnGrow` is gated on `stuck`, which this restore has just set false.
+        restoreRelease.current = settleRestore(el, restoreTop);
         return;
       }
     }
@@ -1021,10 +1112,6 @@ export function useStickToBottom<T extends HTMLElement>(ids: readonly ItemId[], 
 
 /* ---------- restore a top-anchored pane's scroll position ---------- */
 
-/** A restore's settling window: how long a clamped restore keeps re-applying itself as
- *  content grows underneath it before giving up (ADR 0013). */
-const RESTORE_WINDOW_MS = 1000;
-
 /**
  * Restore a top-anchored scroll container (Cards, Decisions) to a remembered offset on
  * mount, and write the offset back out on unmount and on `pagehide` / `visibilitychange`
@@ -1049,47 +1136,9 @@ export function useScrollRestore<T extends HTMLElement>(y: number | undefined, o
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    let done = y === undefined || y <= 0;
-    let applying = false;
-    let raf = 0;
-    let timer = 0;
-    let ro: ResizeObserver | null = null;
-
-    const finish = () => {
-      if (done) return;
-      done = true;
-      if (raf) cancelAnimationFrame(raf);
-      window.clearTimeout(timer);
-      ro?.disconnect();
-      el.removeEventListener("scroll", onScroll);
-    };
-    const apply = () => {
-      if (done) return;
-      const target = Math.min(y as number, Math.max(0, el.scrollHeight - el.clientHeight));
-      if (Math.abs(el.scrollTop - target) > 0.5) {
-        applying = true;
-        el.scrollTop = target;
-        raf = requestAnimationFrame(() => { applying = false; });
-      }
-      if (target >= (y as number) - 0.5) finish();
-    };
-    const onScroll = () => {
-      // Our own assignment's echo, not the reader moving: `apply` sets `applying` right
-      // before it, and this fires — asynchronously — before the next frame clears it.
-      if (applying) return;
-      finish();
-    };
-
-    if (!done) {
-      apply();
-      el.addEventListener("scroll", onScroll);
-      if (typeof ResizeObserver !== "undefined") {
-        ro = new ResizeObserver(() => apply());
-        ro.observe(el);
-        for (const child of Array.from(el.children)) ro.observe(child);
-      }
-      timer = window.setTimeout(finish, RESTORE_WINDOW_MS);
-    }
+    // The settling window, shared with `useStickToBottom`'s restore. Applied here rather
+    // than beside the write-out so it runs before paint, with no visible jump.
+    const release = y !== undefined && y > 0 ? settleRestore(el, y) : null;
 
     const write = () => onExitRef.current(el.scrollTop);
     const onVisibility = () => { if (document.visibilityState === "hidden") write(); };
@@ -1097,7 +1146,7 @@ export function useScrollRestore<T extends HTMLElement>(y: number | undefined, o
     document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
-      finish();
+      release?.();
       window.removeEventListener("pagehide", write);
       document.removeEventListener("visibilitychange", onVisibility);
       write();
