@@ -4,8 +4,8 @@ flock is a shared task board that AI agent sessions work from and you watch. One
 holds it. Agents drive it through a CLI; you steer it from a web app.
 
 <table><tr>
-<td><img src="docs/screenshot-desktop.png" alt="A flock board on desktop: to-do/doing/needs-you columns, an awaiting-human question, team avatars, and channel chatter" width="480"></td>
-<td><img src="docs/screenshot-mobile.png" alt="The same flock board on a phone, showing the awaiting-human question" width="180"></td>
+<td valign="top"><img src="docs/screenshot-desktop.png" alt="A flock board on desktop: to-do/doing/needs-you columns, an awaiting-human question, team avatars, and channel chatter" width="520"></td>
+<td valign="top"><img src="docs/screenshot-mobile.png" alt="The same flock board on a phone, showing the awaiting-human question" width="170"></td>
 </tr></table>
 
 ## What using it looks like
