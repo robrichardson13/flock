@@ -133,3 +133,88 @@ describe("a blurred draft's peek reads as a window, not a cut", () => {
     }
   });
 });
+
+describe("the collapsed peek never paints the draft under the send button or the paperclip", () => {
+  const peekInput = () =>
+    rules(CSS).filter((r) => inMobileMediaQuery(r) && /\.line-composer-input\b/.test(r.selector) && isPeekGate(r.selector));
+
+  /**
+   * Card #15: `--btn-lift` seats the attach/send row *inside* the field's box as collapse
+   * progresses, and a round button only paints inside its circle — the corners of its own box
+   * stay transparent — so the collapsed line's tail showed through and under the send button.
+   * The fix is on the textarea, not behind the buttons (#12 rejected an opaque backdrop): one
+   * extra mask layer per button, a radial hole shaped and positioned like that button, on top
+   * of the existing vertical fade.
+   */
+  it("punches a radial hole per button into the textarea's mask, keeping the vertical fade", () => {
+    const peek = peekInput();
+    expect(peek.length).toBeGreaterThan(0);
+    for (const r of peek) {
+      for (const prop of ["mask-image", "-webkit-mask-image"]) {
+        const decl = r.body.match(new RegExp(`(?:^|[;\\s])${prop}\\s*:\\s*([^;]+);`))?.[1] ?? "";
+        // The bottom fade #6 shipped, plus one radial per button — a declaration carrying only
+        // the fade would silently drop the button holes in whichever engine reads that property.
+        expect(decl).toMatch(/linear-gradient\(\s*to bottom[^)]*var\(--peek-fade\)/);
+        expect(decl.match(/radial-gradient\(/g)?.length).toBe(2);
+        expect(decl).toMatch(/radial-gradient\([^;]*at right[^;]*var\(--peek-clear-send\)/);
+        expect(decl).toMatch(/radial-gradient\([^;]*at left[^;]*var\(--peek-clear-attach\)/);
+      }
+    }
+  });
+
+  /**
+   * The hole has to sit on the button, so its centre is derived from the same arithmetic
+   * `--btn-lift` uses — the lift, minus the row-gap, minus half a `--tap` — not from a
+   * hand-tuned constant that would drift the moment either endpoint moves. It is negative
+   * (below the field, clearing nothing) until the lift has actually pulled the row into the
+   * field, which is what makes a progress gate unnecessary.
+   */
+  it("centres each hole on the button, from --btn-lift's own arithmetic", () => {
+    const peek = peekInput();
+    for (const r of peek) {
+      const cy = r.body.match(/--peek-btn-cy\s*:\s*([\s\S]*?);/)?.[1] ?? "";
+      expect(cy).toMatch(/var\(--lh-body\)/);
+      expect(cy).toMatch(/var\(--composer-collapse/);
+      expect(cy).toMatch(/var\(--tap\)\s*\/\s*2/);
+      // Horizontally: half a --tap in from each end, the button's own centre.
+      for (const decl of ["mask-image"]) {
+        const body = r.body.match(new RegExp(`(?:^|[;\\s])${decl}\\s*:\\s*([^;]+);`))?.[1] ?? "";
+        expect(body).toMatch(/at right calc\(var\(--tap\) \/ 2\) bottom var\(--peek-btn-cy\)/);
+        expect(body).toMatch(/at left calc\(var\(--tap\) \/ 2\) bottom var\(--peek-btn-cy\)/);
+      }
+    }
+  });
+
+  /** The paperclip is `scale(1 - collapse)`d away, so its hole must close on the same curve —
+   *  at full collapse there is no paperclip and the draft's opening characters must be whole. */
+  it("closes the paperclip's hole on the paperclip's own fade curve", () => {
+    const peek = peekInput();
+    for (const r of peek) {
+      for (const name of ["--peek-clear-attach", "--peek-feather-attach"]) {
+        const decl = r.body.match(new RegExp(`${name}\\s*:\\s*([^;]+);`))?.[1] ?? "";
+        expect(decl).toMatch(/1\s*-\s*var\(--composer-collapse/);
+      }
+      // Send keeps --tap throughout, so its hole must not shrink with progress.
+      const send = r.body.match(/--peek-clear-send\s*:\s*([^;]+);/)?.[1] ?? "";
+      expect(send).toMatch(/var\(--tap\)/);
+      expect(send).not.toMatch(/var\(--composer-collapse/);
+    }
+  });
+
+  it("composites the layers so any one of them can hide a pixel", () => {
+    const peek = peekInput();
+    for (const r of peek) {
+      expect(r.body).toMatch(/mask-composite\s*:\s*intersect/);
+      expect(r.body).toMatch(/-webkit-mask-composite\s*:\s*source-in/);
+    }
+  });
+
+  /** No backdrop behind a button: the round `--tap` shape and its transparent corners are the
+   *  approved look (#12 rejected an opaque square), so the clear has to stay on the textarea. */
+  it("adds no opaque backdrop behind the composer's buttons", () => {
+    const offenders = rules(CSS)
+      .filter((r) => inMobileMediaQuery(r) && /\.icon-btn-fill\b/.test(r.selector))
+      .map((r) => r.selector);
+    expect(offenders).toEqual([]);
+  });
+});

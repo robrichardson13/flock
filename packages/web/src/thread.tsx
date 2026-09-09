@@ -105,19 +105,6 @@ export function failPending<T extends ThreadEntry>(pending: readonly PendingSend
 }
 
 /**
- * How many lines a grown textarea holds, from its measured `scrollHeight` (border-box) minus
- * the vertical padding it was measured with, divided by its line-height — rounded rather than
- * floored, since sub-pixel layout can leave `scrollHeight` a fraction under an exact multiple.
- * Pulled out of `LineComposer` so the `+N` hidden-line hint (#6) has a pure, unit-testable
- * core; the DOM measurement around it (happy-dom computes neither `scrollHeight` nor a real
- * `lineHeight`) is not.
- */
-export function measuredLineCount(scrollHeight: number, paddingY: number, lineHeight: number): number {
-  if (lineHeight <= 0) return 1;
-  return Math.max(1, Math.round((scrollHeight - paddingY) / lineHeight));
-}
-
-/**
  * A run of entries from one actor under a single header: avatar and name and time on the
  * first line, then the bubbles. `mine` mirrors the whole group to the right on a tinted
  * ground — avatar, header and all (#45). Both speakers are named and faced: a thread where
@@ -591,23 +578,6 @@ export function LineComposer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focused]);
 
-  // #6: how many lines of the draft are hidden once the mobile peek collapses to one line —
-  // the `+N` hint in the slot the paperclip vacates. Measured, not counted from `\n`s: wrapped
-  // lines count too, and this is the same `scrollHeight` `useAutoGrow` already reads, just
-  // divided back out into lines with the field's own computed line-height and padding so it
-  // survives a font-size or padding change without going stale.
-  const [lineCount, setLineCount] = useState(1);
-  useLayoutEffect(() => {
-    const el = areaRef.current;
-    if (!el) return;
-    const cs = getComputedStyle(el);
-    const lh = parseFloat(cs.lineHeight) || 24;
-    const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
-    setLineCount(measuredLineCount(el.scrollHeight, padY, lh));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text]);
-  const hiddenLines = Math.max(0, lineCount - 1);
-
   const submit = async (e?: FormEvent) => {
     e?.preventDefault();
     if (!canSend) return;
@@ -747,19 +717,6 @@ export function LineComposer({
       <div className="line-composer">
         {leading}
         {expanded && attachControls}
-        {/* #6: the `+N` hidden-line hint, in the slot the paperclip fades out of as
-           `--composer-collapse` rises. A sibling, not a child of the attach button or a
-           wrapping element around it — `.line-composer > .icon-btn` is a *direct*-child
-           selector several existing rules (order, the collapsed-row merge, the paperclip's
-           own fade) depend on, so the attach button stays a direct child of `.line-composer`
-           and the hint overlaps it purely in CSS (a negative margin pulling it back onto the
-           same slot; see styles.css). Only rendered once there is something to hide, so the
-           DOM stays honest even though the CSS opacity would hide it anyway while focused. */}
-        {expanded && hiddenLines > 0 && (
-          <span className="composer-linecount" aria-hidden>
-            +{hiddenLines}
-          </span>
-        )}
         <div className={`composer-field${highlighted ? " has-hl" : ""}`}>
           {highlighted && (
             // `aria-hidden`: it is a picture of the textarea's own value, which a screen

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { failPending, measuredLineCount, mergeThread, nextTempId, resolvePending, type PendingSend, type ThreadEntry } from "./thread.tsx";
+import { failPending, mergeThread, nextTempId, resolvePending, type PendingSend, type ThreadEntry } from "./thread.tsx";
 
 /** A minimal `ThreadEntry` for the merge tests: only `id` and `body` matter to them. */
 function entry(id: string, body = id): ThreadEntry {
@@ -94,31 +94,5 @@ describe("nextTempId", () => {
 
   it("cannot collide with a real (short base36) id", () => {
     expect(nextTempId().startsWith("optimistic-")).toBe(true);
-  });
-});
-
-describe("measuredLineCount", () => {
-  // #6: the `+N` hidden-line hint's pure core — see thread.tsx's LineComposer, which pairs
-  // this with a DOM measurement (scrollHeight, computed padding/line-height) that happy-dom
-  // cannot produce, so only the arithmetic is unit-tested here.
-  it("counts one line for a field exactly one line-height plus its padding tall", () => {
-    expect(measuredLineCount(48, 24, 24)).toBe(1);
-  });
-
-  it("counts multiple lines for a taller field", () => {
-    expect(measuredLineCount(24 * 4 + 24, 24, 24)).toBe(4);
-  });
-
-  it("rounds rather than floors, so a sub-pixel-short measurement still counts the line it clearly holds", () => {
-    expect(measuredLineCount(24 * 3 + 24 - 1, 24, 24)).toBe(3);
-  });
-
-  it("never reports fewer than one line, however short the measurement", () => {
-    expect(measuredLineCount(0, 24, 24)).toBe(1);
-    expect(measuredLineCount(10, 24, 24)).toBe(1);
-  });
-
-  it("falls back to one line rather than dividing by zero if line-height cannot be read", () => {
-    expect(measuredLineCount(200, 24, 0)).toBe(1);
   });
 });
