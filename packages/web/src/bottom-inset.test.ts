@@ -8,13 +8,24 @@ import { readFileSync } from "node:fs";
  * to scroll it clear of — the bug is specifically that content *just short of* needing a scroll
  * gets none, so the overlay covers it with no way to reveal it.
  *
- * The mechanism already in this tree fixes that by giving every scroller under the tab bar a
- * `padding-bottom` that folds the chrome's height into `scrollHeight` itself, so as soon as
- * content would touch the overlay, the container becomes scrollable by exactly enough to clear
- * it (verified by hand at the mobile width across Cards, Channel, Activity and Decisions, at
- * content lengths straddling the scrollable/non-scrollable boundary, with the composer both at
- * rest and grown — see card #4's resolution). This test pins that the three scrollers keep their
- * padding wired to the right reservation:
+ * The mechanism fixes that by giving every scroller under the tab bar a trailing reservation
+ * that folds the chrome's height into `scrollHeight` itself, so as soon as content would touch
+ * the overlay, the container becomes scrollable by exactly enough to clear it.
+ *
+ * Card #18: that reservation is a `::after` *box*, not `padding-bottom`. It was padding until
+ * #18, which is correct in every engine except the one this bug lives in: iOS WebKit folds a
+ * scroll container's trailing padding into its scrollable overflow only once the boxes inside
+ * have already overflowed the padding box on their own. Below that threshold the padding is not
+ * scrollable space at all — `scrollHeight === clientHeight`, no scroll, and the tail of the feed
+ * stays under the composer with no gesture that can reveal it, which is card #4 again. The
+ * human's phone reported exactly that: nine short messages, no scroll; ten, and the whole 228px
+ * appeared at once (`scrollHeight` 1034 = content 806 + 228). Desktop WebKit counts the padding
+ * either way, which is why three harness-verified fixes were rejected on device.
+ *
+ * A generated box has no such rule: it is laid out, it is in the flex flow, and it is in the
+ * scrollable overflow rect unconditionally. So the three rules below now zero their
+ * `padding-bottom` and publish the same expression as `--bottom-reserve`, which the shared
+ * `::after` spends as its own height. This test pins that wiring:
  *
  * - Cards (`.screen-body`) and Activity (a `.pane` with no `.pane-foot`) only ever pay the tab
  *   bar's own clearance, `--pillbar-space` (itself `--pillbar-h + --pillbar-gap + --s2 +
@@ -25,6 +36,10 @@ import { readFileSync } from "node:fs";
  *   continuously-moving `--composer-h`) is deliberately what a bottom inset should key off: the
  *   live height chases the composer through scroll-collapse and auto-grow and fighting that is
  *   what card #6 in this codebase's own history had to fix for `scrollHeight` once already.
+ *
+ * The spacer cancels one flex `gap` with a negative `margin-top`, so the reserved distance is
+ * the same number the padding reserved rather than that plus a gap — which is only expressible
+ * because every `gap` on these two scrollers is now named `--scroll-gap`.
  *
  * Uses the styles.css-as-text pattern from `hover-gate.test.ts` / `composer-clamp.test.ts`
  * rather than a CSSOM walk (untrustworthy for nested rules) or asserting real layout: happy-dom
@@ -88,19 +103,62 @@ describe("mobile scroll containers reserve bottom space for the tab bar and comp
   it("Cards' .screen-body pays --pillbar-space", () => {
     const r = all.find((x) => x.selector === ".screen:has(.tabbar) .screen-body");
     expect(r).toBeDefined();
-    expect(declares(r!.body, "padding-bottom", /--pillbar-space/)).toBe(true);
+    expect(declares(r!.body, "--bottom-reserve", /--pillbar-space/)).toBe(true);
   });
 
   it("Activity's composer-less .pane-scroll pays --pillbar-space", () => {
     const r = all.find((x) => x.selector === ".screen:has(.tabbar) .pane:not(:has(> .pane-foot)) .pane-scroll");
     expect(r).toBeDefined();
-    expect(declares(r!.body, "padding-bottom", /--pillbar-space/)).toBe(true);
+    expect(declares(r!.body, "--bottom-reserve", /--pillbar-space/)).toBe(true);
   });
 
   it("Channel/Decisions' .pane-scroll (a pane that has a .pane-foot) pays --composer-space, not raw --composer-h", () => {
     const r = all.find((x) => x.selector === ".screen:has(.tabbar) .pane:has(> .pane-foot) .pane-scroll");
     expect(r).toBeDefined();
-    expect(declares(r!.body, "padding-bottom", /--composer-space/)).toBe(true);
+    expect(declares(r!.body, "--bottom-reserve", /--composer-space/)).toBe(true);
+  });
+
+  // #18: the reservation is spent as a box, and the padding it used to be spent as is gone.
+  // Trailing padding on these scrollers is the exact thing iOS WebKit refuses to make
+  // scrollable until it is already too late, so a reservation must never live there again.
+  it("no scroller under the tab bar spends its reservation as trailing padding", () => {
+    for (const selector of [
+      ".screen:has(.tabbar) .screen-body",
+      ".screen:has(.tabbar) .pane:not(:has(> .pane-foot)) .pane-scroll",
+      ".screen:has(.tabbar) .pane:has(> .pane-foot) .pane-scroll",
+    ]) {
+      const r = all.find((x) => x.selector === selector);
+      expect(r).toBeDefined();
+      expect(declares(r!.body, "padding-bottom", /0/)).toBe(true);
+      expect(declares(r!.body, "padding-bottom", /--pillbar-space|--composer-space/)).toBe(false);
+    }
+  });
+
+  it("the ::after spacer is a real, unshrinkable box whose height is that reservation", () => {
+    const r = all.find(
+      (x) => x.selector === ".screen:has(.tabbar) .screen-body::after,\n.screen:has(.tabbar) .pane .pane-scroll::after",
+    );
+    expect(r).toBeDefined();
+    // Without `content` there is no box at all, and without `flex: none` a flex item with no
+    // content shrinks to nothing — which is the reservation quietly evaporating.
+    expect(declares(r!.body, "content", /""/)).toBe(true);
+    expect(declares(r!.body, "flex", /none/)).toBe(true);
+    expect(declares(r!.body, "height", /--bottom-reserve/)).toBe(true);
+  });
+
+  it("the spacer cancels exactly one flex gap, and every gap on these scrollers is nameable", () => {
+    const spacer = all.find((x) => /\.pane-scroll::after$/.test(x.selector));
+    expect(declares(spacer!.body, "margin-top", /calc\(\s*-1\s*\*\s*var\(--scroll-gap\)/)).toBe(true);
+    // If any rule set `gap` to something other than `--scroll-gap`, the spacer would cancel a
+    // gap of the wrong size on the scroller that rule applies to.
+    const strays = all.filter(
+      (x) => /(^|,|\s)(\.pane-scroll|\.screen-body)([.:][^\s,]*)?$/.test(x.selector.trim()) &&
+        declares(x.body, "gap", /.*/) && !declares(x.body, "gap", /var\(--scroll-gap\)/),
+    );
+    expect(strays.map((x) => x.selector)).toEqual([]);
+    // And every one of them names the value it uses.
+    const named = all.filter((x) => declares(x.body, "--scroll-gap", /.*/));
+    expect(named.length).toBeGreaterThanOrEqual(5);
   });
 
   it("--composer-space itself folds in --pillbar-space and the composer's measured height", () => {

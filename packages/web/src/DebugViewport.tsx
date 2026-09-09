@@ -112,6 +112,18 @@ function readLive(refs: {
     scrollHeight: refs.scroller?.scrollHeight ?? -1,
     scrollOffsetTop: refs.scroller?.offsetTop ?? -1,
     scrollPaddingBottom: scrollerCs?.paddingBottom ?? "-",
+    // #18: the reservation is a `::after` spacer now, not trailing padding — iOS WebKit only
+    // counts trailing padding once the content has already overflowed the padding box, so the
+    // number that says whether the tail of the feed is reachable is where the last *box* ends
+    // relative to the scroller's own scrollable height, not what the padding claims.
+    scrollContentBottom: refs.scroller
+      ? Math.round(
+          (refs.scroller.lastElementChild?.getBoundingClientRect().bottom ?? 0) -
+            refs.scroller.getBoundingClientRect().top +
+            refs.scroller.scrollTop,
+        )
+      : -1,
+    scrollReserve: resolvePx(refs.scroller, "--bottom-reserve"),
   };
 }
 
@@ -217,6 +229,8 @@ export function DebugViewport() {
         ["scroll.scrollHeight", `${l.scrollHeight}`],
         ["scroll.offsetTop", `${l.scrollOffsetTop}`],
         ["scroll pad-bottom", l.scrollPaddingBottom],
+        ["scroll reserve", `${l.scrollReserve}`],
+        ["scroll content-bottom", `${l.scrollContentBottom}`],
         ["vvH − (innerH − below)", `${shortfall}`],
       ]
     : [];

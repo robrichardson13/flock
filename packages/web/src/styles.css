@@ -790,7 +790,10 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 .screen { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
 .screen-body {
   flex: 1; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
-  padding: var(--s3) var(--edge-x) var(--s5); display: flex; flex-direction: column; gap: var(--s4);
+  padding: var(--s3) var(--edge-x) var(--s5); display: flex; flex-direction: column;
+  /* Named, not literal, because the trailing spacer below (#18) cancels exactly one of these
+     gaps with a negative margin, and it can only do that if it can name the value. */
+  --scroll-gap: var(--s4); gap: var(--scroll-gap);
   touch-action: pan-y;
 }
 /* These scrollers are flex columns, so their children are flex items and shrink by
@@ -913,8 +916,8 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
    scope and the guard in one: the card page and Home have no tab bar and are untouched, and so
    is every desktop rule, which never renders one (the phone and desktop shells are separate
    trees — `.app-mobile` / `.app-desktop` in App.tsx — and only the phone one has a `.tabbar`). */
-.screen:has(.tabbar) .screen-body { padding-bottom: calc(var(--s5) + var(--pillbar-space)); }
-.screen:has(.tabbar) .pane:not(:has(> .pane-foot)) .pane-scroll { padding-bottom: calc(var(--s3) + var(--pillbar-space)); }
+.screen:has(.tabbar) .screen-body { padding-bottom: 0; --bottom-reserve: calc(var(--s5) + var(--pillbar-space)); }
+.screen:has(.tabbar) .pane:not(:has(> .pane-foot)) .pane-scroll { padding-bottom: 0; --bottom-reserve: calc(var(--s3) + var(--pillbar-space)); }
 
 /* #1: the Channel and Decisions composer joins the floating bottom layer. #38 lifted the tab
    bar out of the flow but left the chin in it, so those two tabs ended in an opaque band that
@@ -979,7 +982,37 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 .screen:has(.tabbar) .pane:has(> .pane-foot) {
   --composer-space: calc(var(--pillbar-space) + max(var(--composer-h, 56px), var(--composer-h-rest, 0px)));
 }
-.screen:has(.tabbar) .pane:has(> .pane-foot) .pane-scroll { padding-bottom: calc(var(--s3) + var(--composer-space)); }
+.screen:has(.tabbar) .pane:has(> .pane-foot) .pane-scroll { padding-bottom: 0; --bottom-reserve: calc(var(--s3) + var(--composer-space)); }
+
+/* #18: the reservation is a real box, not trailing padding.
+   The three rules above used to spend their reservation as `padding-bottom`, which is right in
+   every engine except the one that matters. iOS WebKit only folds a scroll container's *trailing
+   padding* into its scrollable overflow once the content has already overflowed the padding box
+   on its own; while the content still fits, the padding is not scrollable space, it is just
+   space the reader cannot reach. Measured on the human's phone via the #17 readout, and
+   reproduced at 393x793: nine short messages left the content ending inside the padding box, so
+   `scrollHeight === clientHeight` and there was no scroll at all — with the tail of the feed
+   sitting under the composer, which is precisely card #4's bug wearing a different hat. Ten
+   messages pushed the content past the padding box's bottom edge, at which point the whole 228px
+   appeared at once (scrollHeight 1034 = content 806 + 228) and the feed scrolled. Desktop WebKit
+   counts the padding either way, which is why the harness kept passing what the phone rejected.
+
+   A generated box is content. It is laid out, it is in the flex flow, and every engine puts it
+   in the scrollable overflow rect unconditionally — so the reservation now becomes scrollable at
+   exactly the moment the content would touch the chrome, which is what the mechanism always
+   claimed to do. The negative `margin-top` cancels the one flex `gap` the spacer would otherwise
+   add after the last row, so the reserved distance is the same number the padding reserved.
+
+   `--bottom-reserve` is set on the scroller and inherited by the pseudo-element; `--scroll-gap`
+   is the scroller's own `gap`, named so this can subtract it. Desktop renders no `.tabbar`, so
+   none of this exists there. */
+.screen:has(.tabbar) .screen-body::after,
+.screen:has(.tabbar) .pane .pane-scroll::after {
+  content: "";
+  flex: none;
+  height: var(--bottom-reserve, 0px);
+  margin-top: calc(-1 * var(--scroll-gap));
+}
 /* "N new" is anchored to the bottom of `.pane-body`, which now runs the full height of the
    pane rather than stopping at the chin's top edge — so it has to be lifted clear itself,
    or it sits behind the composer. */
@@ -1111,7 +1144,7 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
    .card-row); and between groups 28px, more than any distance inside a group, which is what
    lets a faded 13px heading mark a boundary at all. The large title sits 24px above its first
    group, closer than the groups sit to each other, because it names them. */
-.screen-body.home, .screen-body:has(> .section-todo) { gap: var(--s5); }
+.screen-body.home, .screen-body:has(> .section-todo) { --scroll-gap: var(--s5); gap: var(--scroll-gap); }
 .screen-body.home > section:not(.inbox) > h2 { margin-bottom: 0; }
 .screen-body > section:has(> .section-head) + section:has(> .section-head) { margin-top: var(--s1); }
 .team-stack { flex: none; display: flex; align-items: center; min-height: var(--tap); padding: 0; background: none; border: none; cursor: pointer; }
@@ -1522,11 +1555,11 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 /* overflow-anchor: none — Chrome's scroll anchoring otherwise fights useStickToBottom: it can
    claw the pane back when content above the viewport resizes, firing a scroll event that flips
    `stuck` false before the ResizeObserver re-pin runs and permanently defeats it (see #3). */
-.pane-scroll { flex: 1; overflow: auto; overflow-anchor: none; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: var(--s3) var(--edge-x); display: flex; flex-direction: column; gap: var(--s4); }
+.pane-scroll { flex: 1; overflow: auto; overflow-anchor: none; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: var(--s3) var(--edge-x); display: flex; flex-direction: column; --scroll-gap: var(--s4); gap: var(--scroll-gap); }
 .pane-foot { flex: none; padding: var(--s2) var(--s3); border-top: 1px solid var(--line); background: var(--bg-chrome); }
 /* Activity groups into day separators and actor runs (#2 design review), each their own flex
    column, so the pane's own --s4 gap belongs between days rather than between every row. */
-.pane-scroll:has(> .evt-day) { gap: var(--s2); }
+.pane-scroll:has(> .evt-day) { --scroll-gap: var(--s2); gap: var(--scroll-gap); }
 .line-composer { display: flex; align-items: flex-end; gap: var(--s2); }
 .line-composer-input {
   flex: 1; resize: none; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere;
@@ -1626,7 +1659,7 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 .msg-group.mine .msg-head { flex-direction: row-reverse; }
 /* Group-to-group is 16px on both sides and at both widths. The generic .pane-scroll drops
    to 10px on desktop, which would put the between-group gap below the within-group one. */
-.pane-scroll.chan-scroll { gap: var(--s4); }
+.pane-scroll.chan-scroll { --scroll-gap: var(--s4); gap: var(--scroll-gap); }
 .msg-head { display: flex; gap: var(--s2); align-items: baseline; font-size: var(--t-foot); line-height: var(--lh-foot); margin-bottom: 2px; }
 .msg-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: var(--lh-body); }
 .bubble {
@@ -3152,7 +3185,7 @@ html[data-topbar] .sheet { max-height: 100%; }
     position: absolute; top: 3px; right: 3px;
     width: 5px; height: 5px; border-radius: var(--r-full); background: var(--muted);
   }
-  .pane-scroll { padding: var(--s2) var(--s3); gap: var(--s2); }
+  .pane-scroll { padding: var(--s2) var(--s3); --scroll-gap: var(--s2); gap: var(--scroll-gap); }
   /* #25/C5: a scrolled pane used to clip its first row mid-glyph right under the head, which
      reads as a rendering fault rather than as scroll. A 24px mask on the scroller itself lets
      that row dissolve instead — the same trick `.brief-clamped` already uses at its cut, just
@@ -3200,7 +3233,7 @@ html[data-topbar] .sheet { max-height: 100%; }
      their own, and 12 inside a group against 16 between them is not a difference the eye
      reads at this width. One turn to the next is now a clear step above one paragraph to the
      next within a turn — which is the only thing grouping was ever meant to say. */
-  .pane-scroll.chan-scroll { gap: var(--s5); }
+  .pane-scroll.chan-scroll { --scroll-gap: var(--s5); gap: var(--scroll-gap); }
   /* Same rounded, bordered chin as mobile (#3): the field, attach and send sit on one raised
      surface rather than a bare field on the pane's own floor. A docked pane has width to
      spare, so unlike the phone's stacked rows this stays a single row — the container just
