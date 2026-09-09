@@ -120,3 +120,51 @@ describe("mobile scroll containers reserve bottom space for the tab bar and comp
     expect(r).toBeDefined();
   });
 });
+
+/**
+ * Card #16: the precondition every assertion above silently assumes — that the shell fills the
+ * glass, so a reservation measured from its bottom edge is measured from the bottom of the
+ * screen.
+ *
+ * In the iOS home-screen app with `viewport-fit=cover` it did not. The page is laid out over
+ * the whole display, but `window.innerHeight` comes back with the top safe-area inset already
+ * subtracted, while `document.documentElement.clientHeight` — and the containing block every
+ * `position: fixed` box is laid out against — stay the full display: **793 against 852** on the
+ * human's phone. A shell sized from `innerHeight` therefore ended 59pt above the bottom of the
+ * glass, which is one geometry with three faces: a band of dark under the tab bar, every
+ * scroller 59pt short, and content sized to the real screen overflowing by a few tens of pixels
+ * — a rubber-band rather than a scroll, with the last message left under the composer.
+ *
+ * No emulator produces that condition on its own: they set `innerHeight`,
+ * `documentElement.clientHeight` and `visualViewport.height` from the single viewport they were
+ * given, so the shell fills the glass by construction. Reproducing it takes a context of one
+ * height with `innerHeight` overridden to a different one. The arithmetic side of the fix is
+ * covered by `shellHeight` in `vv.test.ts`; this pins the CSS half and, crucially, its two
+ * scopes.
+ */
+describe("the standalone shell fills the glass (#16)", () => {
+  const all = rules(CSS);
+  const floor = all.find((x) => /^html\[data-standalone\]:not\(\[data-keyboard\]\) \.app$/.test(x.selector));
+
+  it("floors .app at the layout engine's own viewport, not only at the JS reading", () => {
+    expect(floor).toBeDefined();
+    // `dvh` is resolved against the very viewport the engine places this fixed box in, so it
+    // cannot be short the way `innerHeight` is; `max()` keeps --vvh whenever it is the taller.
+    expect(declares(floor!.body, "height", /max\(/)).toBe(true);
+    expect(declares(floor!.body, "height", /--vvh/)).toBe(true);
+    expect(declares(floor!.body, "height", /100dvh/)).toBe(true);
+  });
+
+  it("is scoped to standalone and to no-keyboard, and nothing else floors .app", () => {
+    // Standalone only: in a Safari tab `100dvh` is the toolbars-retracted *large* viewport and
+    // this would grow the shell under Safari's own chrome. No-keyboard only: a keyboard is
+    // exactly when the visible strip is genuinely shorter than the viewport.
+    const others = all.filter(
+      (x) => /(^|,)\s*\.app\s*$/.test(x.selector) && declares(x.body, "height", /max\(/),
+    );
+    expect(others).toHaveLength(0);
+    // The unscoped rules still size the shell from --vvh alone.
+    const plain = all.filter((x) => /(^|,)\s*\.app\s*$/.test(x.selector) && declares(x.body, "height", /--vvh/));
+    expect(plain.length).toBeGreaterThan(0);
+  });
+});

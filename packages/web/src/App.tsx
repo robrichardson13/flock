@@ -13,7 +13,7 @@ import { NewBoard } from "./NewBoard.tsx";
 import { focusFromUserGesture } from "./focus.ts";
 import { enterDelay, enterOrders, GLOBAL_EVENT_TYPES, STAGGER_SLOW_MS, useAnchorScroll, useCoalescedRefetch, useEntranceIds, useLiveStream, useNewIds } from "./live.ts";
 import { TopBar, TopBarProvider } from "./TopBar.tsx";
-import { readoutRequested } from "./vv.ts";
+import { keyboardShrunk, readoutRequested, shellHeight } from "./vv.ts";
 import { VVReadout } from "./VVReadout.tsx";
 import { ActorLinks, Avatar, Icons, OverlayProvider, PromptProvider, PushStack, useEdgeSwipePeek, useIsMobile, usePrompt } from "./ui.tsx";
 
@@ -96,8 +96,21 @@ export function App() {
  * page, and bottom sheets can size themselves against what is actually visible instead
  * of being covered by the keyboard.
  */
-/** The iOS keyboard's accessory pill, which the home-screen app reports as visible page. */
-const ACCESSORY_PILL = 37;
+/**
+ * #16: what counts as evidence that a keyboard is up.
+ *
+ * The status-bar/accessory-pill correction below used to take its evidence from the very
+ * quantity it was correcting — `raw < rest - 1` — so any short `visualViewport.height` read as
+ * a keyboard. The device's resting reading is exactly that (417 against an `innerHeight` of
+ * 793 with nothing focused), and the correction then laid the whole app out into the top 40%
+ * of the glass. Focus is the evidence instead: a form field holds it, or lost it within the
+ * grace, which spans the keyboard's own exit animation so the shell does not snap to full
+ * height underneath a keyboard that is still on its way out.
+ */
+const KB_GRACE_MS = 500;
+
+const isField = (el: Element | null): boolean =>
+  !!el && (/^(INPUT|TEXTAREA)$/.test(el.tagName) || (el as HTMLElement).isContentEditable === true);
 
 /**
  * #10: the height the shell settles at while a keyboard is up, remembered per orientation.
@@ -166,7 +179,13 @@ function useVisualViewportHeight() {
     // one that no keyboard turned up to confirm.
     let predictTimer: ReturnType<typeof setTimeout> | undefined;
     // The last height the viewport actually settled at with a keyboard up, learned and kept.
+    // #16: `shrunk` is keyboard-gated now, so this no longer learns a resting height as if it
+    // were the keyboard's and then predicts every later focus down to it.
     let measured = 0;
+    // #16: when a form field last lost focus, and the timer that re-runs `set` once the
+    // keyboard's exit grace has expired (the frame loop settles long before it does).
+    let fieldBlurAt = -Infinity;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
     const set = () => {
       const o = `${window.screen?.width ?? 0}x${window.screen?.height ?? 0}`;
       if (o !== orientation) { orientation = o; rest = 0; }
@@ -183,9 +202,19 @@ function useVisualViewportHeight() {
       // It also draws the keyboard's accessory pill (arrows and checkmark, 37pt) inside
       // that viewport, where Safari counts it as keyboard. Taking the pill off too puts a
       // sheet on top of the pill with its normal chin, which is the Safari look.
-      const shrunk = raw < rest - 1;
-      const gap = standalone && shrunk ? Math.max(0, (window.screen?.height ?? 0) - rest) : 0;
-      const real = gap > 0 && gap < 100 ? raw - gap - ACCESSORY_PILL : raw;
+      // #16: `shellHeight` owns both halves of this — the correction under a real keyboard, and
+      // the floor that makes the standalone shell fill the glass when there is none. See vv.ts.
+      const input = {
+        raw,
+        innerHeight: window.innerHeight,
+        clientHeight: document.documentElement.clientHeight,
+        rest,
+        screenHeight: window.screen?.height ?? 0,
+        standalone,
+        keyboard: isField(document.activeElement) || performance.now() - fieldBlurAt < KB_GRACE_MS,
+      };
+      const shrunk = keyboardShrunk(input);
+      const real = shellHeight(input);
       // #10: while a prediction is standing and the viewport has not actually shrunk yet,
       // the prediction *is* the height — that is the point of it. The first real report of a
       // shrunk viewport retires it, and so does its own deadline; from then on this is the
@@ -307,9 +336,14 @@ function useVisualViewportHeight() {
       set();
       track();
     };
-    const onFocusOut = () => {
+    const onFocusOut = (e: FocusEvent) => {
       predicted = 0;
       clearTimeout(predictTimer);
+      if (isField(e.target as Element | null)) {
+        fieldBlurAt = performance.now();
+        clearTimeout(graceTimer);
+        graceTimer = setTimeout(() => { set(); track(); }, KB_GRACE_MS + 30);
+      }
       // Learn on the way out, when the number has had the whole of the keyboard's life to
       // settle, rather than from some frame in the middle of it.
       if (measured > 100) writeKbHeight(measured);
@@ -326,6 +360,7 @@ function useVisualViewportHeight() {
     return () => {
       if (raf) cancelAnimationFrame(raf);
       clearTimeout(predictTimer);
+      clearTimeout(graceTimer);
       delete root.dataset.vvMoving;
       vv?.removeEventListener("resize", on);
       vv?.removeEventListener("scroll", on);

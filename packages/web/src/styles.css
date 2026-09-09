@@ -478,6 +478,20 @@ html { overscroll-behavior: none; }
      sheet backdrop, which was already anchored to --vvt and stayed put. The bar has to hold
      still under a keyboard, so the shell sits on the same edge the sheets do. */
   .app { position: fixed; top: var(--vvt, 0px); left: 0; right: 0; height: var(--vvh, 100dvh); }
+  /* #16: and in the home-screen app with no keyboard up, the shell fills the glass — said
+     here as well as in JS, because `dvh` is resolved by the layout engine against the very
+     viewport it places this box in, so it cannot be wrong about it the way a JS reading can.
+     With `viewport-fit=cover` iOS hands the page the whole display but reports
+     `window.innerHeight` with the top safe-area inset already subtracted (793 against an
+     852pt display on the human's phone); a shell sized from that ends 59pt above the bottom
+     of the glass, which is the band of dark under the tab bar, the too-short scrollers, and
+     the last message stuck under the composer with no scroll to clear it.
+
+     Scoped to standalone: in a Safari tab `100dvh` is the toolbars-retracted *large*
+     viewport, and flooring at it would grow the shell under Safari's own chrome. Scoped to
+     `:not([data-keyboard])`: a keyboard is exactly when the visible strip is genuinely
+     shorter than the viewport, and only --vvh knows by how much. */
+  html[data-standalone]:not([data-keyboard]) .app { height: max(var(--vvh, 100dvh), 100dvh); }
   /* #9: while iOS is moving the viewport under us — `data-vv-moving` is on the document for
      exactly as long as App.tsx is resampling it, from focus until it has held still — nothing
      the app owns may add motion of its own on top. There is no transition on the shell's
