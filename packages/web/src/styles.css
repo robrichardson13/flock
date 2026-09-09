@@ -1709,6 +1709,12 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 
 /* ---------- brief / markdown ---------- */
 .brief { background: var(--bg-2); border-radius: var(--radius); padding: var(--s3) var(--s4); box-shadow: var(--elev-1); }
+/* An unbreakable run (a hash, an id, a long path, an inline `code` span) that isn't a link has
+   no wrapping rule anywhere in this block, so it pushes .screen-body.card-body wider than its
+   container and the page grows a horizontal scroll bar. `anywhere`, not `break-word`: only
+   `anywhere` also lowers the element's min-content width, which is what lets `.md-task-label`
+   (a flex row) shrink below its text's min-content instead of flooring the row at that width. */
+.md { overflow-wrap: anywhere; }
 /* A heading inside a card body has to outrank the 17px body it sits in. */
 .md h2 { color: var(--text); font-size: 20px; line-height: 26px; font-weight: var(--w-title); margin: var(--s3) 0 var(--s1); padding: 0; }
 .md h3, .md h4 { color: var(--text); font-size: var(--t-head); line-height: var(--lh-head); font-weight: var(--w-head); margin: var(--s3) 0 var(--s1); padding: 0; }
