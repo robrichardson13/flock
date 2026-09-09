@@ -48,9 +48,9 @@ no git, no sudo. If `~/.flock/bin` is not already on your `PATH`, the installer 
 shell's rc file itself; set `FLOCK_NO_MODIFY_PATH=1` to opt out.
 
 An installed flock checks for a new release in the background, at most once a day, and applies it.
-`FLOCK_NO_UPDATE=1` or `{"autoupdate": false}` in `~/.flock/config.json` turns that off; `flock
-upgrade` does it deliberately. See `docs/install.md` for platforms, env overrides, and how to
-uninstall.
+`FLOCK_NO_UPDATE=1` or `{"autoupdate": false}` in `~/.flock/config.json` turns that off;
+`flock upgrade` does it deliberately. See `docs/install.md` for platforms, env overrides, and
+how to uninstall.
 
 ## The model
 
