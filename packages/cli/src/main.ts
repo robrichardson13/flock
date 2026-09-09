@@ -143,6 +143,7 @@ always show the raw text.
   **bold**        _italic_ or *italic*        ~~strikethrough~~
   \`inline code\`   \`\`\`fenced code blocks\`\`\`
   - bullet, one per line
+  > blockquote, one \`> \` per line
   https://example.com          bare links are clickable
   [text](https://example.com)  or name them
 
