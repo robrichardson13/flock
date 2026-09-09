@@ -45,6 +45,12 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - run: bun install --frozen-lockfile
       - run: bun test
+        env:
+          # Turns on the self-update end-to-end in packages/cli/src/update.test.ts. It builds two
+          # real release binaries and updates one into the other over a file:// release base:
+          # hermetic, no network, ~7s total. This job gates the release chain, so it must not skip
+          # this coverage.
+          FLOCK_E2E: "1"
       - run: bun run typecheck
 
   # Computes and pushes the CalVer tag. Only on a push to main — never on the tag push this job
