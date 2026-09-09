@@ -45,6 +45,14 @@ directory), every command below is `bun run flock ...` instead. Always act as a 
    body as a checklist. `flock cards --frontier` is what can run now.
 4. Arm the listener (next section) before the first delegation.
 5. `flock say "Conductor online: <one-line plan>"` so the channel shows the human the run has started.
+6. Give the human the board's URL before you delegate anything, so they can watch the run in the
+   web UI rather than the terminal. `flock up` is idempotent and prints the URL (it reports
+   "already running" when the daemon is already up), so run it and take the first line of
+   `flock url` as the base — it is the right one for an installed binary and for a checkout's
+   dev server alike; the lines after it are LAN and Tailscale addresses for another device.
+   The board's own page is that base plus `#/b/<slug>`, with the slug from
+   `flock board show --json`. Say it here as one line — `Board: <url>/#/b/<slug>` — and say it
+   again whenever the human asks where the board is, or when a resumed session starts up.
 
 ## Listen to the board
 
