@@ -19,8 +19,11 @@ one. If the repo is private, download a release asset by hand instead (see Manua
    automatically as its last step (unless `FLOCK_NO_SETUP=1`). If that path is already a symlink
    — a contributor pointing it at a checkout with `scripts/setup.sh` (the default there) — `flock setup`
    leaves it alone and says so on stderr.
-3. The daemon, started by that same `flock setup` call, serving the web app and the API at
-   `http://127.0.0.1:4747`.
+3. The daemon, started by that same `flock setup` call, serving the web app and the API on every
+   interface by default (`0.0.0.0:4747`) — so `http://127.0.0.1:4747` works, and so do the LAN and
+   Tailscale addresses `flock url`/`flock status` print. Set `FLOCK_HOST=127.0.0.1` (or pass
+   `flock up --host 127.0.0.1`) for loopback-only; see
+   [ADR 0015](adr/0015-bind-to-all-interfaces-by-default-and-advertise-only-reachable-urls.md).
 
 The installer prints the absolute path to the binary on stdout (so a sandboxed agent can run it
 without a second round trip). If `$INSTALL_DIR` is not already on `PATH`, `flock setup` (below)
@@ -84,6 +87,7 @@ your platform isn't one of the six above.
 | `FLOCK_RELEASE_BASE` | GitHub Releases download URL for `FLOCK_VERSION` | Base URL the tarball and checksums are fetched from — override to install from a mirror or a local test server. |
 | `FLOCK_NO_SETUP` | unset | Set to `1` to skip the automatic `flock setup` call after install (so you get just the binary). |
 | `FLOCK_NO_MODIFY_PATH` | unset | Set to `1` to stop `flock setup` from editing your shell rc; it prints the export line instead. |
+| `FLOCK_HOST` | `0.0.0.0` | Bind host for `flock serve`/`flock up`; `--host` overrides it. `127.0.0.1` restricts the daemon to loopback. |
 
 The installer verifies the download against the release's `SHA256SUMS` (or the per-asset
 `.sha256`) before installing anything. A checksum mismatch is one line on stderr and a non-zero

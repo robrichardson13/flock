@@ -27,6 +27,8 @@ export interface DevOptions {
   json: boolean;
   port?: number;
   webPort?: number;
+  /** Bind host; not used by planCheckout (ports/db only) but shared with DaemonOptions callers. */
+  host?: string;
   db?: string;
   /** Use an isolated .flock/flock.db inside this checkout instead of the shared global database. */
   isolated?: boolean;
@@ -92,6 +94,37 @@ export function resolveCheckout(opts: Partial<DevOptions> = {}): Checkout {
 }
 
 export const devUrl = (c: Checkout) => `http://localhost:${c.webPort}`;
+
+/**
+ * Bind-host resolution shared by `flock serve`, `flock up` (binary and checkout mode) and
+ * `flock setup`: an explicit `--host` wins, then `FLOCK_HOST`, then the default of every
+ * interface. See ADR 0015 for why the default is `0.0.0.0` rather than loopback.
+ */
+export const DEFAULT_HOST = "0.0.0.0";
+
+export function resolveHost(host: string | undefined, env: Record<string, string | undefined>): string {
+  return host ?? (env.FLOCK_HOST || undefined) ?? DEFAULT_HOST;
+}
+
+/** Hosts that only ever mean "this machine, to itself". */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+/** Hosts that mean "every interface". */
+const WILDCARD_HOSTS = new Set(["0.0.0.0", "::", ""]);
+
+/**
+ * What to advertise for a daemon bound to `host`:`port`. Pure over an injected interface list
+ * (`networkHosts()` in production) so it's testable without touching the network. ADR 0015:
+ * - loopback bind: just the loopback URL, plus a hint on how to reach it from elsewhere.
+ * - wildcard bind: loopback first (what the skill and `flock url`'s first line use), then every
+ *   LAN/Tailscale address `interfaces` names.
+ * - any other specific host: only that host's URL — it's the one address we know is bound.
+ */
+export function advertisedUrls(host: string, port: number, interfaces: string[] = networkHosts()): string[] {
+  const loopback = `http://localhost:${port}`;
+  if (LOOPBACK_HOSTS.has(host)) return [loopback, "to reach from other devices: flock up --host 0.0.0.0"];
+  if (WILDCARD_HOSTS.has(host)) return [loopback, ...interfaces.map((h) => `http://${h}:${port}`)];
+  return [`http://${host}:${port}`];
+}
 
 /** Addresses another device can reach this machine on: LAN IPv4s and, when present, Tailscale. */
 export function networkHosts(): string[] {

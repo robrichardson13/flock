@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { FlockError } from "@flock/core";
-import { CANONICAL_API_PORT, CANONICAL_WEB_PORT, planCheckout, portOffset } from "./dev.ts";
+import { CANONICAL_API_PORT, CANONICAL_WEB_PORT, DEFAULT_HOST, advertisedUrls, planCheckout, portOffset, resolveHost } from "./dev.ts";
 
 describe("portOffset", () => {
   test("is stable for a given path", () => {
@@ -83,6 +83,54 @@ describe("planCheckout — worktree", () => {
     } catch (e) {
       expect((e as FlockError).code).toBe("invalid");
     }
+  });
+});
+
+describe("resolveHost", () => {
+  test("defaults to every interface", () => {
+    expect(resolveHost(undefined, {})).toBe(DEFAULT_HOST);
+    expect(DEFAULT_HOST).toBe("0.0.0.0");
+  });
+
+  test("FLOCK_HOST overrides the default", () => {
+    expect(resolveHost(undefined, { FLOCK_HOST: "127.0.0.1" })).toBe("127.0.0.1");
+  });
+
+  test("--host wins over FLOCK_HOST", () => {
+    expect(resolveHost("192.168.1.5", { FLOCK_HOST: "127.0.0.1" })).toBe("192.168.1.5");
+  });
+
+  test("an empty-string FLOCK_HOST is treated as absent", () => {
+    expect(resolveHost(undefined, { FLOCK_HOST: "" })).toBe(DEFAULT_HOST);
+  });
+});
+
+describe("advertisedUrls", () => {
+  const interfaces = ["10.0.0.5", "my-machine.tailnet.ts.net"];
+
+  test("loopback bind: just the loopback URL, plus a hint", () => {
+    for (const host of ["127.0.0.1", "localhost", "::1"]) {
+      expect(advertisedUrls(host, 4747, interfaces)).toEqual(["http://localhost:4747", "to reach from other devices: flock up --host 0.0.0.0"]);
+    }
+  });
+
+  test("wildcard bind: loopback first, then every interface", () => {
+    for (const host of ["0.0.0.0", "::", ""]) {
+      expect(advertisedUrls(host, 4747, interfaces)).toEqual(["http://localhost:4747", "http://10.0.0.5:4747", "http://my-machine.tailnet.ts.net:4747"]);
+    }
+  });
+
+  test("wildcard bind with no other interfaces: just the loopback URL", () => {
+    expect(advertisedUrls("0.0.0.0", 4747, [])).toEqual(["http://localhost:4747"]);
+  });
+
+  test("a specific non-loopback host: only that host's URL, not the interface list", () => {
+    expect(advertisedUrls("192.168.1.5", 4747, interfaces)).toEqual(["http://192.168.1.5:4747"]);
+  });
+
+  test("the first entry is always the loopback/localhost base URL the skill uses, except for a specific host", () => {
+    expect(advertisedUrls("0.0.0.0", 4747, interfaces)[0]).toBe("http://localhost:4747");
+    expect(advertisedUrls("127.0.0.1", 4747, interfaces)[0]).toBe("http://localhost:4747");
   });
 });
 

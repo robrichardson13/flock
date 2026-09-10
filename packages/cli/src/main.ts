@@ -27,6 +27,7 @@ import {
   type HookDescribe,
 } from "@flock/core";
 import { bool, list, parseArgs, str } from "./args.ts";
+import { resolveHost } from "./dev.ts";
 import { handoffMarkdown } from "./handoff.ts";
 import { resolveActor } from "./identity.ts";
 import { embeddedAssets, installScriptPath, versionLine } from "./runtime.ts";
@@ -46,8 +47,10 @@ SETUP
   init [TITLE] [--body MD | --body-file F] [--local]
                                       Create this directory's board (title defaults to the dir name).
                                       --local also creates an isolated .flock/ database here.
-  serve [--port 4747] [--host 127.0.0.1] [--open]
-                                      Run the web UI + HTTP API in the foreground
+  serve [--port 4747] [--host 0.0.0.0] [--open]
+                                      Run the web UI + HTTP API in the foreground. Binds every
+                                      interface by default; --host 127.0.0.1 (or FLOCK_HOST) for
+                                      loopback only.
   setup [--no-start] [--skill-only]   Write ~/.claude/skills/flock/SKILL.md, then \`flock up\`
                                       (a symlinked destination is left alone). --skill-only
                                       does just the skill; --no-start skips starting the daemon.
@@ -63,7 +66,9 @@ SETUP
   restart                             Stop it and start it again
   status                              This directory's daemon, plus every other one running
   logs [-f] [-n 40]                   Tail ~/.flock/logs/<name>.log
-  url                                 Print the URL, plus LAN and Tailscale addresses
+  url                                 Print the URL. Bound to 0.0.0.0 (the default): loopback,
+                                      then LAN and Tailscale addresses. Bound to loopback only:
+                                      just the loopback URL, plus a hint to reach it elsewhere.
   upgrade [--version=V]               Reinstall flock: re-runs the installer beside this binary,
                                       refreshes the skill and restarts a running daemon. An
                                       installed flock also does this on its own once a day; set
@@ -131,6 +136,8 @@ IDENTITY
   --effort LEVEL   Reasoning effort, e.g. high. Env: FLOCK_EFFORT. Auto-detected from CLAUDE_EFFORT when present.
   --json           Machine-readable output
   --db PATH        Database file. Env: FLOCK_DB. Default: ~/.flock/flock.db, or a .flock/ found walking up from cwd
+  --host H         Bind host for serve/up. Env: FLOCK_HOST. Default: 0.0.0.0 (every interface);
+                    use 127.0.0.1 to bind loopback only. See docs/adr/0015.
 `;
 
 /** Top-level daemon verbs, handled before the database is opened. `start`/`stop` alias `up`/`down`. */
@@ -503,7 +510,7 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       // via runtime.ts) is the only source; a checkout falls back to the built dist off disk.
       const staticDir = resolve(import.meta.dir, "../../web/dist");
       const assets = await embeddedAssets();
-      const server = serve({ flock, dbPath: ctx.dbPath, port, hostname: str(flags.host) ?? "127.0.0.1", staticDir, assets, installScriptPath });
+      const server = serve({ flock, dbPath: ctx.dbPath, port, hostname: resolveHost(str(flags.host), process.env), staticDir, assets, installScriptPath });
       const url = `http://${server.hostname}:${server.port}`;
       const ui = assets?.["/index.html"] ? "embedded" : existsSync(join(staticDir, "index.html")) ? "built" : "not built (run `bun run build`, or use `bun run dev`)";
       console.log(`flock serving ${url}\n  db: ${ctx.dbPath}\n  ui: ${ui}`);

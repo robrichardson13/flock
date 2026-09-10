@@ -41,9 +41,11 @@ hook path, counts as "no hook installed" rather than an error.
 If the file exists but fails any of those checks, flock refuses to run it and says so, rather than
 silently ignoring it or running it anyway.
 
-This is deliberately strict: `flock serve` binds to `127.0.0.1` by default, but `--host` and
-`flock up` publish the server on the LAN and Tailscale, and flock has no authentication (see the
-README's Status section). A hook is a local program the server executes on an HTTP request — the
+This is deliberately strict: `flock serve` binds to `0.0.0.0` (every interface) by default — see
+[ADR 0015](../adr/0015-bind-to-all-interfaces-by-default-and-advertise-only-reachable-urls.md) —
+so the server is reachable from the LAN and Tailscale out of the box, not only when `--host` opts
+into it, and flock has no authentication (see the README's Status section). A hook is a local
+program the server executes on an HTTP request — the
 ownership and permission guard is the only thing standing between "a local convenience" and "a
 remote shell" once the API is reachable from anywhere on the network. The API stays CORS-open
 (`Access-Control-Allow-Origin: *`) on purpose — the Vite dev server and reaching a checkout over

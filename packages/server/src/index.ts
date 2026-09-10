@@ -459,6 +459,8 @@ export interface ServeOptions extends ServerOptions {
 
 export function serve(opts: ServeOptions) {
   const app = createApp(opts);
-  const server = Bun.serve({ port: opts.port ?? 4747, hostname: opts.hostname ?? "127.0.0.1", fetch: app.fetch, idleTimeout: 255 });
+  // Default matches the CLI's: every interface, so a caller that skips `resolveHost` (dev.ts) still
+  // gets ADR 0015's default rather than silently falling back to loopback.
+  const server = Bun.serve({ port: opts.port ?? 4747, hostname: opts.hostname ?? "0.0.0.0", fetch: app.fetch, idleTimeout: 255 });
   return server;
 }

@@ -99,14 +99,21 @@ describe("readRunfile / listRunfiles pruning", () => {
 describe("planDaemon — installed binary", () => {
   const base = { mode: "binary" as const, serveCmd: ["/home/me/.flock/bin/flock"], cwd: "/home/me/work", db: "/home/me/.flock/flock.db", env: {} };
 
-  test("one serve child on :4747, named flock", () => {
+  test("one serve child on :4747, named flock, bound to every interface by default", () => {
     const p = planDaemon({ ...base, opts: {} });
     expect(p.name).toBe("flock");
     expect(p.apiPort).toBe(4747);
     expect(p.webPort).toBeUndefined();
-    expect(p.url).toBe("http://127.0.0.1:4747");
+    expect(p.host).toBe("0.0.0.0");
+    expect(p.url).toBe("http://localhost:4747");
     expect(p.children).toHaveLength(1);
-    expect(p.children[0]).toMatchObject({ key: "api", cmd: ["/home/me/.flock/bin/flock", "serve", "--port", "4747", "--host", "127.0.0.1"], cwd: "/home/me/work" });
+    expect(p.children[0]).toMatchObject({ key: "api", cmd: ["/home/me/.flock/bin/flock", "serve", "--port", "4747", "--host", "0.0.0.0"], cwd: "/home/me/work" });
+  });
+
+  test("FLOCK_HOST moves the default when no --host is given", () => {
+    const p = planDaemon({ ...base, env: { FLOCK_HOST: "127.0.0.1" }, opts: {} });
+    expect(p.host).toBe("127.0.0.1");
+    expect(p.url).toBe("http://127.0.0.1:4747");
   });
 
   test("--port and --host win over FLOCK_PORT", () => {
@@ -141,11 +148,19 @@ describe("planDaemon — checkout", () => {
     expect(p.apiPort).toBe(CANONICAL_API_PORT);
     expect(p.webPort).toBe(CANONICAL_WEB_PORT);
     expect(p.url).toBe(`http://localhost:${CANONICAL_WEB_PORT}`);
+    expect(p.host).toBe("0.0.0.0");
     expect(p.children.map((c) => c.key)).toEqual(["api", "web"]);
-    expect(p.children[0].cmd).toEqual(["/opt/bun/bin/bun", "--watch", join(root, "packages/cli/src/main.ts"), "serve", "--port", "4747", "--host", "127.0.0.1"]);
+    expect(p.children[0].cmd).toEqual(["/opt/bun/bin/bun", "--watch", join(root, "packages/cli/src/main.ts"), "serve", "--port", "4747", "--host", "0.0.0.0"]);
     expect(p.children[0].cwd).toBe(root);
-    expect(p.children[1].cmd).toEqual(["/opt/bun/bin/bun", "x", "vite", "--port", "5173", "--strictPort"]);
+    expect(p.children[1].cmd).toEqual(["/opt/bun/bin/bun", "x", "vite", "--port", "5173", "--strictPort", "--host", "0.0.0.0"]);
     expect(p.children[1].cwd).toBe(join(root, "packages/web"));
+  });
+
+  test("--host / FLOCK_HOST flow through to both children", () => {
+    const p = plan({ host: "127.0.0.1" });
+    expect(p.host).toBe("127.0.0.1");
+    expect(p.children[0].cmd).toContain("127.0.0.1");
+    expect(p.children[1].cmd.slice(-2)).toEqual(["--host", "127.0.0.1"]);
   });
 
   test("a worktree gets its ADR 0003 ports and its directory name, so runfiles do not collide", () => {
@@ -316,7 +331,7 @@ describe("settingsDiffer", () => {
 
   test("a different port, host, database or mode is a restart", () => {
     expect(settingsDiffer({ ...live, apiPort: 4800 }, p)).toBe(true);
-    expect(settingsDiffer({ ...live, host: "0.0.0.0" }, p)).toBe(true);
+    expect(settingsDiffer({ ...live, host: "127.0.0.1" }, p)).toBe(true);
     expect(settingsDiffer({ ...live, db: "/other.db" }, p)).toBe(true);
     expect(settingsDiffer({ ...live, mode: "checkout", webPort: 5173 }, p)).toBe(true);
   });

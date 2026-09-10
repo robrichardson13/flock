@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { DB_DIRNAME, DB_FILENAME, FlockError, globalDbPath, resolveDbPath } from "@flock/core";
-import { CANONICAL_API_PORT, CANONICAL_WEB_PORT, REPO_ROOT, devUrl, networkHosts, portOffset, resolveCheckout, type Checkout } from "./dev.ts";
+import { CANONICAL_API_PORT, CANONICAL_WEB_PORT, DEFAULT_HOST, REPO_ROOT, advertisedUrls, devUrl, portOffset, resolveCheckout, resolveHost, type Checkout } from "./dev.ts";
 import { flockHome } from "./paths.ts";
 import { isStandalone, version } from "./runtime.ts";
 
@@ -196,7 +196,7 @@ export function announceListening(live: { apiPort?: number; host?: string; db: s
     webPid: existing?.pid === process.pid ? existing.webPid : undefined,
     pid: process.pid,
     apiPort: live.apiPort ?? 4747,
-    host: live.host ?? "127.0.0.1",
+    host: live.host ?? DEFAULT_HOST,
     db: live.db,
     startedAt: existing?.pid === process.pid && existing.startedAt ? existing.startedAt : new Date().toISOString(),
     version: version(),
@@ -257,7 +257,7 @@ export function planDaemon(args: {
 }): DaemonPlan {
   const { mode, serveCmd, cwd, db, checkout, opts, env } = args;
   const bun = args.bun ?? "bun";
-  const host = opts.host ?? "127.0.0.1";
+  const host = resolveHost(opts.host, env);
   if (mode === "binary") {
     const apiPort = opts.port ?? (env.FLOCK_PORT ? Number(env.FLOCK_PORT) : 4747);
     const name = BINARY_RUNFILE_NAME;
@@ -305,7 +305,7 @@ export function planDaemon(args: {
     canonical: c.canonical,
     children: [
       { key: "api", cmd: [bun, "--watch", join(c.root, "packages", "cli", "src", "main.ts"), "serve", "--port", String(c.apiPort), "--host", host], cwd: c.root, env: childEnv },
-      { key: "web", cmd: [bun, "x", "vite", "--port", String(c.webPort), "--strictPort"], cwd: join(c.root, "packages", "web"), env: childEnv },
+      { key: "web", cmd: [bun, "x", "vite", "--port", String(c.webPort), "--strictPort", "--host", host], cwd: join(c.root, "packages", "web"), env: childEnv },
     ],
   };
 }
@@ -359,14 +359,14 @@ export function canonicalFallbackPlan(
   const explicitPort = opts.port !== undefined || env.FLOCK_PORT !== undefined;
   const explicitWebPort = opts.webPort !== undefined || env.FLOCK_WEB_PORT !== undefined;
   if (explicitPort || explicitWebPort) return { checkout };
-  const host = opts.host ?? "127.0.0.1";
+  const host = resolveHost(opts.host, env);
   const ownName = checkoutRunfileName(checkout.name);
   const mine = runfiles.find((r) => r.name === ownName);
   const heldByMe = mine ? portsOf(mine) : [];
   const heldElsewhere = [checkout.apiPort, checkout.webPort].some((port) => {
     if (heldByMe.includes(port)) return false;
     if (runfiles.some((o) => o.name !== ownName && portsOf(o).includes(port))) return true;
-    return !isPortFree(port, host);
+    return probeHosts(host).some((h) => !isPortFree(port, h));
   });
   if (!heldElsewhere) return { checkout };
   const offset = portOffset(checkout.root);
@@ -483,17 +483,27 @@ export function portFree(port: number, host: string): boolean {
   }
 }
 
-/** The daemon's addresses: its own URL first, then the LAN and Tailscale ones another device can use. */
-function urls(d: { mode: Mode; apiPort: number; webPort?: number; url: string }): string[] {
-  const port = d.mode === "checkout" ? d.webPort : d.apiPort;
-  return [d.url, ...networkHosts().map((h) => `http://${h}:${port}`)];
+/**
+ * Hosts to probe availability against for a bind host: itself, plus loopback too when it's the
+ * wildcard. A squatter on 127.0.0.1 does not reliably block a later 0.0.0.0 bind on the same port
+ * (SO_REUSEADDR lets both coexist on some platforms), so treating that port as free would still
+ * crash the child on startup; probing loopback as well catches it up front.
+ */
+function probeHosts(host: string): string[] {
+  return host === "0.0.0.0" || host === "::" || host === "" ? [host || "0.0.0.0", "127.0.0.1"] : [host];
+}
+
+/** The daemon's addresses, host-aware: see `advertisedUrls` in dev.ts (ADR 0015). */
+function urls(d: { mode: Mode; apiPort: number; webPort?: number; host: string }): string[] {
+  const port = d.mode === "checkout" ? (d.webPort ?? d.apiPort) : d.apiPort;
+  return advertisedUrls(d.host, port);
 }
 
 /**
  * Where, on what ports, against which database. Takes the live runfile when there is one, so
  * `status` describes what is actually running rather than what `up` would start.
  */
-function describe(d: { name: string; mode: Mode; canonical?: boolean; apiPort: number; webPort?: number; url: string; root: string; db: string }): string {
+function describe(d: { name: string; mode: Mode; canonical?: boolean; apiPort: number; webPort?: number; host: string; root: string; db: string }): string {
   const where =
     d.mode === "binary"
       ? "installed daemon"
@@ -517,8 +527,10 @@ function guardPorts(plan: DaemonPlan, held: number[]) {
   if (conflict) throw new FlockError(conflict, "invalid");
   for (const port of portsOf(plan)) {
     if (held.includes(port)) continue;
-    if (!portFree(port, plan.host)) {
-      throw new FlockError(`Port ${port} is already in use by another process (not a flock daemon).\nStop it, or start this one on another port.`, "invalid");
+    for (const host of probeHosts(plan.host)) {
+      if (!portFree(port, host)) {
+        throw new FlockError(`Port ${port} is already in use by another process (not a flock daemon).\nStop it, or start this one on another port.`, "invalid");
+      }
     }
   }
 }

@@ -50,6 +50,9 @@ open (see Consequences).
 - An HTTP request can execute a local program. `flock serve` binds 127.0.0.1 by default, but
   `--host` and `flock up` publish on the LAN and Tailscale; the ownership and permission guard is
   the only thing between those and a shell, and flock remains unauthenticated (README, Status).
+  (**Superseded by [ADR 0015](0015-bind-to-all-interfaces-by-default-and-advertise-only-reachable-urls.md):**
+  the default bind host is now `0.0.0.0`, not `127.0.0.1` — every point below about the LAN and
+  Tailscale exposure applies by default now, not only when `--host`/`flock up` opt into it.)
   The 127.0.0.1 default is less of a boundary than it looks: the API is CORS-open
   (`Access-Control-Allow-Origin: *`, needed for the Vite dev server and for reaching a checkout over
   Tailscale), so before this hook that bought an attacker only a junk board; now it would buy them
