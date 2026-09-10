@@ -37,6 +37,8 @@ export interface Snapshot {
   team: TeamMember[];
   counts: Record<CardStatus, number>;
   frontier: number[];
+  /** Cards a human has parked, excluded from `frontier`. */
+  held: number[];
 }
 
 export type NeedsHuman = Card & { boardSlug: string; boardTitle: string };
@@ -134,6 +136,8 @@ export const api = {
   updateCard: (b: string, n: number, patch: { title?: string; body?: string; addLabels?: string[]; removeLabels?: string[] }) => req<Card>("PATCH", `/boards/${b}/cards/${n}`, patch),
   claim: (b: string, n: number, force = false) => req<Card>("POST", `/boards/${b}/cards/${n}/claim`, { force }),
   release: (b: string, n: number) => req<Card>("POST", `/boards/${b}/cards/${n}/release`),
+  hold: (b: string, n: number, reason?: string) => req<Card>("POST", `/boards/${b}/cards/${n}/hold`, { reason }),
+  unhold: (b: string, n: number) => req<Card>("POST", `/boards/${b}/cards/${n}/unhold`),
   toggleTask: (b: string, n: number, index: number, checked: boolean) =>
     req<Card>("POST", `/boards/${b}/cards/${n}/toggle-task`, { index, checked }),
   move: (b: string, n: number, status: CardStatus, reason?: string, attachments?: string[]) =>

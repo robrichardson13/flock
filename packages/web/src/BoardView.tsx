@@ -13,6 +13,7 @@ import {
 import { createPortal } from "react-dom";
 import { api, ApiError, getActorName, streamPath, type ActorInfo, type BoardSummary, type Card, type CardStatus, type Event, type Message, type NeedsHuman, type Snapshot } from "./api.ts";
 import { closedOrder } from "./closedOrder.ts";
+import { holdTitle } from "./details.ts";
 import { autoFocusField } from "./focus.ts";
 import { ROSTER_NAV_INITIAL, rosterNav } from "./rosterNav.ts";
 import { CardPage } from "./CardPage.tsx";
@@ -1408,12 +1409,15 @@ function CardRow({ card, boardSlug, actors, isNew, moved, tint, style }: { card:
       data-anchor
       data-flip={card.id}
       href={`#/b/${boardSlug}/c/${card.num}`}
-      className={`list-row card-row status-${card.status} ${card.blocked ? "blocked" : ""}${enterClass(!!isNew)}${moved ? " moved" : ""}${tint ? " replay-tint" : ""}`}
+      className={`list-row card-row status-${card.status} ${card.blocked ? "blocked" : ""}${card.held ? " on-hold" : ""}${enterClass(!!isNew)}${moved ? " moved" : ""}${tint ? " replay-tint" : ""}`}
       style={style}
     >
       <div className="list-main">
         <div className="card-row-line">
           <span className="list-title">{card.title}</span>
+          {card.held && (
+            <span className="card-hold" title={holdTitle(card)} aria-label={holdTitle(card)}>{Icons.pause(13)}</span>
+          )}
           {card.blocked && (
             <span className="card-lock" title={`Blocked by #${card.blockedBy.join(" #")}`} aria-label={`Blocked by #${card.blockedBy.join(" #")}`}>{Icons.lock(13)}</span>
           )}
@@ -1466,9 +1470,12 @@ function CardTile({ card, boardSlug, actors, isNew, moved, style }: { card: Card
   const runtime = card.assignee ? actors.get(card.assignee) : undefined;
   const kind = runtime?.kind === "human" ? "human" : "agent";
   return (
-    <a data-anchor data-flip={card.id} href={`#/b/${boardSlug}/c/${card.num}`} className={`card-tile ${card.blocked ? "blocked" : ""} status-${card.status}${enterClass(!!isNew)}${moved ? " moved" : ""}`} style={style}>
+    <a data-anchor data-flip={card.id} href={`#/b/${boardSlug}/c/${card.num}`} className={`card-tile ${card.blocked ? "blocked" : ""}${card.held ? " on-hold" : ""} status-${card.status}${enterClass(!!isNew)}${moved ? " moved" : ""}`} style={style}>
       <div className="card-title">{card.title}</div>
       <div className="card-tile-meta">
+        {card.held && (
+          <span className="card-hold" title={holdTitle(card)} aria-label={holdTitle(card)}>{Icons.pause(12)}</span>
+        )}
         {card.blocked && (
           <span className="card-lock" title={`Blocked by #${card.blockedBy.join(" #")}`} aria-label={`Blocked by #${card.blockedBy.join(" #")}`}>{Icons.lock(12)}</span>
         )}
