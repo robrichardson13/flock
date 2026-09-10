@@ -18,6 +18,28 @@ describe("handoffMarkdown", () => {
     expect(text).toContain("never past a hold");
     expect(text).toContain("flock unhold");
   });
+
+  test("the filing section is the first heading, ahead of the working-agent sections", () => {
+    const text = handoffMarkdown({ board: "b", project: "/tmp/p", actor: "scout", model: "sonnet", dbPath: "/tmp/db" });
+    const headings = [...text.matchAll(/^## .+$/gm)].map((m) => m[0]);
+    expect(headings[0]).toBe("## Just filing a card?");
+    expect(text.indexOf("## Just filing a card?")).toBeLessThan(text.indexOf("## Orient"));
+    expect(text).toContain('flock card new [BOARD] "<title>" --body "<markdown>" --as <your-name>');
+    expect(text).toContain("No `claim`/`done` cycle needed");
+  });
+
+  test("a normally-attributed actor gets the plain identity line, not the defaulted warning", () => {
+    const text = handoffMarkdown({ board: "b", project: "/tmp/p", actor: "scout", model: "sonnet", dbPath: "/tmp/db" });
+    expect(text).toContain("You are **scout**, an agent on a shared Flock board.");
+    expect(text).not.toContain("ran as **scout**, the OS user");
+  });
+
+  test("a defaulted actor is warned it ran as the OS user and told to pick a name", () => {
+    const text = handoffMarkdown({ board: "b", project: "/tmp/p", actor: "robrichardson", model: "sonnet", dbPath: "/tmp/db", defaulted: true });
+    expect(text).toContain("ran as **robrichardson**, the OS user");
+    expect(text).toContain("Pick a name for yourself");
+    expect(text).not.toContain("You are **robrichardson**, an agent on a shared Flock board.");
+  });
 });
 
 describe("flock help formatting", () => {

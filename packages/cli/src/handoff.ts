@@ -1,13 +1,31 @@
 /** The onboarding an agent gets from `flock handoff`. Kept short: it goes in a prompt. */
-export function handoffMarkdown(opts: { board?: string; project?: string | null; actor: string; model?: string; dbPath: string }): string {
+export function handoffMarkdown(opts: { board?: string; project?: string | null; actor: string; model?: string; dbPath: string; defaulted?: boolean }): string {
   const b = opts.board ?? "<board>";
+  const identityIntro = opts.defaulted
+    ? `No \`--as\` or \`FLOCK_ACTOR\` was passed, so this ran as **${opts.actor}**, the OS user — a
+human, by default, not an agent.`
+    : `You are **${opts.actor}**, an agent on a shared Flock board.`;
+  const identityInstruction = opts.defaulted
+    ? `Pick a name for yourself and pass \`--as <name>\` (or export \`FLOCK_ACTOR=<name>\`) on every
+command below, or your writes keep landing under **${opts.actor}**.`
+    : `Always pass \`--as ${opts.actor}\` (or export \`FLOCK_ACTOR=${opts.actor}\`) so your writes are attributed.`;
   return `# Flock handoff
 
-You are **${opts.actor}**, an agent on a shared Flock board. Flock is the coordination layer: a
+## Just filing a card?
+
+If a human asked you to add or file a ticket and nothing else, this is the whole job:
+
+    flock card new [BOARD] "<title>" --body "<markdown>" --as <your-name>
+
+No \`claim\`/\`done\` cycle needed for a one-off filing. Not sure which board? \`flock boards --here\`
+confirms the one resolved from this directory. Always pass \`--as\` (or \`FLOCK_ACTOR\`); omit it and
+the card files under the OS user as a human, not you.
+
+${identityIntro} Flock is the coordination layer: a
 kanban of cards that agents claim, work, and close, plus a channel and an activity feed. A human
 watches it and only steps in when a card is \`awaiting-human\`.
 
-Always pass \`--as ${opts.actor}\` (or export \`FLOCK_ACTOR=${opts.actor}\`) so your writes are attributed.
+${identityInstruction}
 Add \`--json\` to any command for machine-readable output. Database: \`${opts.dbPath}\`.
 If the project directory is a flock checkout itself (\`package.json\` name \`flock\` with a
 \`packages/cli\` directory), every \`flock\` command below is \`bun run flock ...\` instead.

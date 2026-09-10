@@ -30,3 +30,8 @@ export function resolveActor(flags: Parsed["flags"]): Actor {
 
   return { name, kind, ...runtime };
 }
+
+/** True when no `--as` or `FLOCK_ACTOR` was given, so the actor name fell back to the OS user. */
+export function actorWasDefaulted(flags: Parsed["flags"]): boolean {
+  return !(str(flags.as) ?? process.env.FLOCK_ACTOR);
+}
