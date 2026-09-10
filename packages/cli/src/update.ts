@@ -177,9 +177,15 @@ export function stampIsStale(stamp: UpdateStamp | undefined, now = Date.now(), m
 
 // ---------------------------------------------------------------------------- config and guards
 
-/** `~/.flock/config.json`. One key so far; unknown keys are ignored, junk is treated as absent. */
+/**
+ * `~/.flock/config.json`. Unknown keys are ignored, junk is treated as absent.
+ * `host` (ADR 0015): the bind host `flock serve`/`flock up` fall back to when there is no
+ * `--host` and no `FLOCK_HOST` — below `FLOCK_HOST` and above the built-in `0.0.0.0` default in
+ * `resolveHost` (dev.ts). See `docs/config.md`.
+ */
 export interface FlockConfig {
   autoupdate?: boolean;
+  host?: string;
 }
 
 export function readConfig(file = configPath()): FlockConfig {
@@ -187,7 +193,10 @@ export function readConfig(file = configPath()): FlockConfig {
     const raw: unknown = JSON.parse(readFileSync(file, "utf8"));
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
     const o = raw as Record<string, unknown>;
-    return typeof o.autoupdate === "boolean" ? { autoupdate: o.autoupdate } : {};
+    const config: FlockConfig = {};
+    if (typeof o.autoupdate === "boolean") config.autoupdate = o.autoupdate;
+    if (typeof o.host === "string" && o.host) config.host = o.host;
+    return config;
   } catch {
     return {};
   }

@@ -59,10 +59,14 @@ directory), every command below is `bun run flock ...` instead. Always act as a 
    web UI rather than the terminal. `flock up` is idempotent and prints the URL (it reports
    "already running" when the daemon is already up), so run it and take the first line of
    `flock url` as the base — it is the right one for an installed binary and for a checkout's
-   dev server alike; the lines after it are LAN and Tailscale addresses for another device.
-   The board's own page is that base plus `#/b/<slug>`, with the slug from
-   `flock board show --json`. Say it here as one line — `Board: <url>/#/b/<slug>` — and say it
-   again whenever the human asks where the board is, or when a resumed session starts up.
+   dev server alike, always loopback/localhost form (`flock up` binds every interface by default,
+   ADR 0015, but the base URL stays the one that works from this machine either way). What follows
+   the base line depends on the daemon's bind host: LAN and Tailscale addresses for another device
+   when it's reachable from the network (the default), or one hint line on how to make it so
+   (`flock up --host 0.0.0.0`) when someone deliberately restricted it to loopback. The board's own
+   page is that base plus `#/b/<slug>`, with the slug from `flock board show --json`. Say it here
+   as one line — `Board: <url>/#/b/<slug>` — and say it again whenever the human asks where the
+   board is, or when a resumed session starts up.
 
 ## Invoked with no goal
 
