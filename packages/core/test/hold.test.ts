@@ -279,4 +279,58 @@ describe("markdown export / import", () => {
     expect(held.held).toBe(true);
     expect(held.holdReason).toBeNull();
   });
+
+  test("F3: a multi-line hold reason round-trips intact on a card that also has a question", () => {
+    const { f, board } = fresh();
+    const c = f.createCard(ada, board.id, { title: "Asking and held" });
+    f.askHuman(scout, board.id, c.num, "which way?");
+    f.holdCard(ada, board.id, c.num, { reason: "line one\nline two" });
+
+    const md = exportBoard(f, board.id);
+    const imported = importBoard(f, builder, md, { slug: "imported3" });
+    const row = f.snapshot(imported.id).cards.find((x) => x.title === "Asking and held")!;
+    expect(row.question).toBe("which way?");
+    expect(row.holdReason).toBe("line one\nline two");
+  });
+
+  test("F4: a hand-written (on hold) on a closed card is skipped, with a warning, not aborted mid-import", () => {
+    const md = [
+      "# Hand-written",
+      "",
+      "## Done",
+      "",
+      "- [x] #1 Closed but held (on hold)",
+      "- [x] #2 Second card",
+      "",
+    ].join("\n");
+    const f = new Flock(":memory:");
+    const warnings: string[] = [];
+    const imported = importBoard(f, builder, md, { slug: "handwritten", warnings });
+    const cards = f.snapshot(imported.id).cards;
+    expect(cards.length).toBe(2);
+    const first = cards.find((c) => c.num === 1)!;
+    expect(first.status).toBe("done");
+    expect(first.held).toBe(false);
+    expect(warnings.some((w) => w.includes("#1") && w.includes("on hold"))).toBe(true);
+  });
+
+  test("F5: assign <n> self on a held card conflicts like claim; assigning someone else is unaffected", () => {
+    const { f, board } = fresh();
+    const c = f.createCard(ada, board.id, { title: "Held card" });
+    f.holdCard(ada, board.id, c.num, { reason: "waiting" });
+
+    expect(() => f.assignCard(scout, board.id, c.num, "scout")).toThrow(FlockError);
+    try {
+      f.assignCard(scout, board.id, c.num, "scout");
+    } catch (e) {
+      expect((e as FlockError).code).toBe("conflict");
+      expect((e as FlockError).message).toBe(holdConflictMessage(f.card(board.id, c.num)));
+    }
+
+    // Assigning it to someone else, or clearing the assignee, is unaffected.
+    const reassigned = f.assignCard(ada, board.id, c.num, "builder");
+    expect(reassigned.assignee).toBe("builder");
+    const cleared = f.assignCard(ada, board.id, c.num, null);
+    expect(cleared.assignee).toBeNull();
+  });
 });

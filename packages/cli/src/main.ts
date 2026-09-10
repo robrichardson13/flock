@@ -96,7 +96,7 @@ CARDS   (BOARD optional, see SCOPE; N is the card number, "#12" or "12")
   card check [BOARD] N TASK [--uncheck]   Tick a "- [ ] " item in the body; TASK is its number in card show
   card uncheck [BOARD] N TASK
   claim [BOARD] N [--force]             Compare-and-swap claim (409 if taken, blocked or held;
-                                      --force claims past a blocker, never past a hold)
+                                        --force claims past a blocker, never past a hold)
   release [BOARD] N
   hold [BOARD] N [--reason TEXT]        Park a card: no agent may claim it until it is unheld
   unhold [BOARD] N                      Lift the hold; the card is claimable again
@@ -228,8 +228,7 @@ function fmtEvent(e: Event): string {
     e.type === "comment.posted" ? `: ${String(d.body ?? "").split("\n")[0] || (d.attachments ? `sent ${d.attachments} image${d.attachments === 1 ? "" : "s"}` : "")}` :
     e.type === "decision.recorded" ? `: ${d.gist}` :
     e.type === "card.blocked" || e.type === "card.unblocked" ? ` by #${d.by}` :
-    e.type === "card.held" ? `${d.reason ? `: ${d.reason}` : ""}` :
-    e.type === "card.unheld" ? "" : "";
+    e.type === "card.held" ? `${d.reason ? `: ${d.reason}` : ""}` : "";
   return `${String(e.seq).padStart(5)}  ${e.createdAt.slice(11, 19)}  ${who.padEnd(14)} ${e.type}${card}${detail}`;
 }
 
@@ -639,7 +638,9 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
         const file = need(0, "file");
         const md = readFileSync(file === "-" ? 0 : file, "utf8");
         const project = str(flags.project) ? resolve(str(flags.project)!) : null;
-        const b = importBoard(flock, actor, md, { slug: str(flags.slug), title: str(flags.title), project });
+        const warnings: string[] = [];
+        const b = importBoard(flock, actor, md, { slug: str(flags.slug), title: str(flags.title), project, warnings });
+        for (const w of warnings) console.error(`warning: ${w}`);
         return out(ctx, flock.snapshot(b.id), () => console.log(`Imported board "${b.title}" (${b.slug}) with ${flock.listCards(b.id).length} cards`));
       }
       throw new FlockError(`Unknown board subcommand "${sub}"`);

@@ -700,6 +700,9 @@ export class Flock {
 
   assignCard(actor: Actor, boardRef: string, ref: string | number, assignee: string | null): Card {
     const c = this.card(boardRef, ref);
+    // Assigning a held card to yourself reproduces claim's effect one step away; gate it the
+    // same way. Assigning it to someone else, or clearing the assignee, is unaffected.
+    if (c.held && assignee === actor.name) throw new FlockError(holdConflictMessage(c), "conflict");
     this.touchActor(actor);
     this.db.query("UPDATE cards SET assignee = ?, updated_at = ? WHERE id = ?").run(assignee, now(), c.id);
     this.touchBoard(c.boardId);

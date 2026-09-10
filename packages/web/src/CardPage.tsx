@@ -862,9 +862,9 @@ function DetailValue({ row }: { row: DetailRow }) {
       return <>{row.tokens.map((t) => <span key={t.num} className="detail-token">#{t.num}</span>)}</>;
     case "hold":
       return (
-        <span className="detail-hold">
+        <span>
           {row.reason ?? `held by ${row.heldBy}`}
-          <span className="muted tiny detail-hold-meta"> · held by {row.heldBy} · {timeAgo(row.heldAt)}</span>
+          <span className="muted tiny"> · held by {row.heldBy} · {timeAgo(row.heldAt)}</span>
         </span>
       );
   }
