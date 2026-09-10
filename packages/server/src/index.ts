@@ -300,6 +300,8 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath 
     });
   cardAction("claim", (a, b, n, body) => flock.claimCard(a, b, n, { force: !!body.force }));
   cardAction("release", (a, b, n) => flock.releaseCard(a, b, n));
+  cardAction("hold", (a, b, n, body) => flock.holdCard(a, b, n, { reason: body.reason }));
+  cardAction("unhold", (a, b, n) => flock.unholdCard(a, b, n));
   cardAction("toggle-task", (a, b, n, body) =>
     flock.toggleCardTask(a, b, n, Number(body.index), typeof body.checked === "boolean" ? body.checked : undefined),
   );

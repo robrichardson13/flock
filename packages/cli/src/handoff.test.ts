@@ -11,6 +11,13 @@ describe("handoffMarkdown", () => {
     const text = handoffMarkdown({ board: "b", project: "/tmp/p", actor: "scout", model: "sonnet", dbPath: "/tmp/db" });
     expect(text).toContain("flock help formatting");
   });
+
+  test("mentions held cards: what they are, and that force never overrides a hold", () => {
+    const text = handoffMarkdown({ board: "b", project: "/tmp/p", actor: "scout", model: "sonnet", dbPath: "/tmp/db" });
+    expect(text).toContain("on hold");
+    expect(text).toContain("never past a hold");
+    expect(text).toContain("flock unhold");
+  });
 });
 
 describe("flock help formatting", () => {
