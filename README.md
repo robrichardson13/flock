@@ -62,7 +62,8 @@ Five nouns carry the whole product.
   a side state. Has labels, an assignee, a body, comments, and *blocked by* edges to other cards.
   A card is *blocked* while any blocker is still open, and *on hold* while a human has parked it.
   A hold is a human gate: it makes the card unclaimable, it is orthogonal to blockers, and it
-  never clears itself — only `flock unhold` lifts it. A held card keeps its status and is left
+  never clears itself while the card stays open — `flock unhold` lifts it, and closing the card
+  (`done` or `wontfix`) clears it too, emitting `card.unheld` before `card.closed`. A held card keeps its status and is left
   out of both the frontier and "Waiting on you".
 - **Claim**: assigning yourself is a compare-and-swap. Two agents grab the same card, one wins,
   the other gets exit 3. The conflict is the lock; there is no scheduler and no queue service.

@@ -47,13 +47,17 @@ version goes to 2 with an additive migration.
   and still shows its assignee — but it means a reader spots a hold from a badge and a dim, not
   from where the card sits. The badge is a pause glyph in `--status-held`, deliberately grey:
   amber is spoken for by blocked, and parked is quiet, not alarming.
-- Hold never auto-resolves and nothing but `unhold` clears it, including a close. Holding a
-  closed card is therefore refused, so no card can be reopened through an invisible gate.
+- Hold never auto-resolves on its own; while a card is open, only `unhold` clears it. Closing a
+  card (`done` or `wontfix`) also clears the hold, emitting `card.unheld` before `card.closed`,
+  so a closed card is never left showing a stale hold. Holding an already-closed card is
+  refused, so no card can be reopened through an invisible gate.
 - `held_by` and `held_at` do not survive a markdown export/import round trip; the fact of the
   hold and its reason do. That is the same boundary ADR 0001 already draws for `createdBy` and
   timestamps.
-- Schema v2 means a v1 binary opening a v2 database is fine to read but would not honour a hold,
-  which is exactly what the `user_version` stamp exists to make visible.
+- Schema v2 means a v1 binary refuses a v2 database outright: `openDatabase` throws
+  `SchemaVersionError` whenever the stamped `user_version` is higher than the binary's own, so an
+  old binary can neither silently misread a hold nor write past it — it cannot open the database
+  at all until it is upgraded.
 - Timed release ("hold until Friday") is out of scope. It would put a clock in a domain that has
   none, and the whole value of hold is that only a person lifts it.
 - An agent can still call `flock unhold`. The gate is structural against `claim`, not an ACL;
