@@ -74,15 +74,68 @@ describe("holdCard", () => {
     expect(heldAsking.held).toBe(true);
   });
 
-  test("a held doing card can still be commented, moved and closed by its assignee", () => {
+  test("a held doing card can still be commented and moved by its assignee", () => {
     const { f, board } = fresh();
     const c = f.createCard(ada, board.id, { title: "A" });
     f.claimCard(scout, board.id, c.num);
     f.holdCard(ada, board.id, c.num, { reason: "pause" });
     expect(() => f.addComment(scout, board.id, c.num, "still working")).not.toThrow();
+    const moved = f.moveCard(scout, board.id, c.num, "awaiting-human", { reason: "checking in" });
+    expect(moved.status).toBe("awaiting-human");
+    expect(moved.held).toBe(true);
+  });
+
+  test("closing a held card (done or wontfix) clears the hold", () => {
+    const { f, board } = fresh();
+    const c = f.createCard(ada, board.id, { title: "A" });
+    f.claimCard(scout, board.id, c.num);
+    f.holdCard(ada, board.id, c.num, { reason: "pause" });
     const closed = f.closeCard(scout, board.id, c.num, { resolution: "done despite hold" });
     expect(closed.status).toBe("done");
-    expect(closed.held).toBe(true);
+    expect(closed.held).toBe(false);
+    expect(closed.heldAt).toBeNull();
+    expect(closed.heldBy).toBeNull();
+    expect(closed.holdReason).toBeNull();
+
+    const d = f.createCard(ada, board.id, { title: "B" });
+    f.holdCard(ada, board.id, d.num, { reason: "not this one either" });
+    const wontfixed = f.moveCard(ada, board.id, d.num, "wontfix");
+    expect(wontfixed.held).toBe(false);
+    expect(wontfixed.heldAt).toBeNull();
+  });
+
+  test("closing a held card emits card.unheld with the prior hold's fields, before card.closed", () => {
+    const { f, board } = fresh();
+    const c = f.createCard(ada, board.id, { title: "A" });
+    f.holdCard(ada, board.id, c.num, { reason: "pause" });
+    f.closeCard(ada, board.id, c.num, { resolution: "done" });
+
+    const events = f.events({ boardId: board.id }).filter((e) => e.cardNum === c.num);
+    const unheldIdx = events.findIndex((e) => e.type === "card.unheld");
+    const closedIdx = events.findIndex((e) => e.type === "card.closed");
+    expect(unheldIdx).toBeGreaterThan(-1);
+    expect(closedIdx).toBeGreaterThan(-1);
+    expect(unheldIdx).toBeLessThan(closedIdx);
+    const unheldEvent = events[unheldIdx];
+    expect((unheldEvent.data as { heldBy: string; reason: string }).heldBy).toBe("ada");
+    expect((unheldEvent.data as { heldBy: string; reason: string }).reason).toBe("pause");
+  });
+
+  test("closing an unheld card emits no card.unheld", () => {
+    const { f, board } = fresh();
+    const c = f.createCard(ada, board.id, { title: "A" });
+    f.closeCard(ada, board.id, c.num, { resolution: "done" });
+    expect(f.events({ boardId: board.id }).filter((e) => e.type === "card.unheld")).toHaveLength(0);
+  });
+
+  test("holdCard on a closed card remains a conflict, so a held-then-closed card can never round-trip through export as (on hold)", () => {
+    const { f, board } = fresh();
+    const c = f.createCard(ada, board.id, { title: "A" });
+    f.holdCard(ada, board.id, c.num, { reason: "pause" });
+    f.closeCard(ada, board.id, c.num, { resolution: "done" });
+    expect(() => f.holdCard(ada, board.id, c.num)).toThrow(FlockError);
+    const md = exportBoard(f, board.id);
+    expect(md).not.toContain("(on hold)");
   });
 });
 

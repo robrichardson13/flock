@@ -729,14 +729,29 @@ export class Flock {
     let commentId: string | null = null;
     this.db.transaction(() => {
       this.db
-        .query("UPDATE cards SET status = ?, closed_at = ?, question = CASE WHEN ? = 'awaiting-human' THEN question ELSE NULL END, question_by = CASE WHEN ? = 'awaiting-human' THEN question_by ELSE NULL END, updated_at = ? WHERE id = ?")
-        .run(status, closed ? ts : null, status, status, ts, c.id);
+        .query(
+          `UPDATE cards SET status = ?, closed_at = ?,
+             question = CASE WHEN ? = 'awaiting-human' THEN question ELSE NULL END,
+             question_by = CASE WHEN ? = 'awaiting-human' THEN question_by ELSE NULL END,
+             held_at = CASE WHEN ? THEN NULL ELSE held_at END,
+             held_by = CASE WHEN ? THEN NULL ELSE held_by END,
+             hold_reason = CASE WHEN ? THEN NULL ELSE hold_reason END,
+             updated_at = ? WHERE id = ?`,
+        )
+        .run(status, closed ? ts : null, status, status, closed ? 1 : 0, closed ? 1 : 0, closed ? 1 : 0, ts, c.id);
       if (reason) {
         commentId = shortId();
         this.db
           .query("INSERT INTO comments(id, card_id, author, author_kind, kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
           .run(commentId, c.id, actor.name, actor.kind, "comment", reason, ts);
         this.bindAttachments(c.boardId, "comment_id", commentId, attachmentIds);
+      }
+      // Closing a card also lifts any hold on it: a closed card is not on the frontier, so a
+      // hold gates nothing further, and it would otherwise be impossible to hold it again
+      // later without the stale metadata (and holdCard already refuses closed cards). Emit
+      // card.unheld first so an activity feed reads "unheld, then closed" in event order.
+      if (closed && c.held) {
+        this.emit(actor, c.boardId, "card.unheld", c.num, { title: c.title, reason: c.holdReason, heldSince: c.heldAt, heldBy: c.heldBy });
       }
       this.emit(actor, c.boardId, closed ? "card.closed" : "card.moved", c.num, { from: c.status, to: status });
       if (reason) {
