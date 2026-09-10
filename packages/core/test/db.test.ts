@@ -58,6 +58,38 @@ describe("openDatabase / schema_version", () => {
     }
   });
 
+  test("opening a v1 database adds the hold columns and re-stamps user_version to the current version", () => {
+    const { dir, path } = freshPath();
+    try {
+      // Simulate a v1 database: a cards table with no hold_* columns, stamped at v1.
+      const legacy = new Database(path, { create: true });
+      legacy.exec(`
+        CREATE TABLE boards (
+          id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+          project TEXT, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE cards (
+          id TEXT PRIMARY KEY, board_id TEXT NOT NULL, num INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'todo', assignee TEXT, labels TEXT NOT NULL DEFAULT '[]', question TEXT, question_by TEXT,
+          position INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          closed_at TEXT, UNIQUE(board_id, num)
+        );
+      `);
+      legacy.exec("PRAGMA user_version = 1;");
+      legacy.close();
+
+      const db = openDatabase(path);
+      const cols = new Set((db.query("PRAGMA table_info(cards)").all() as { name: string }[]).map((c) => c.name));
+      expect(cols.has("held_at")).toBe(true);
+      expect(cols.has("held_by")).toBe(true);
+      expect(cols.has("hold_reason")).toBe(true);
+      expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION);
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("the error names both versions and tells the user to upgrade", () => {
     const { dir, path } = freshPath();
     try {

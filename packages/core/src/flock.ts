@@ -53,6 +53,13 @@ export function shortId(len = 8): string {
   return out;
 }
 
+/** The one sentence a claim on a held card fails with, everywhere. */
+export function holdConflictMessage(c: Pick<Card, "num" | "heldBy" | "holdReason">): string {
+  const who = c.heldBy ? ` by ${c.heldBy}` : "";
+  const why = c.holdReason ? `: ${c.holdReason}` : "";
+  return `#${c.num} is on hold${who}${why}. Lift it with \`flock unhold ${c.num}\` — force does not override a hold`;
+}
+
 export function slugify(s: string): string {
   return s
     .toLowerCase()
@@ -68,6 +75,7 @@ type CardRow = {
   id: string; board_id: string; num: number; title: string; body: string; status: CardStatus; assignee: string | null;
   labels: string; question: string | null; question_by: string | null; position: number; created_by: string;
   created_at: string; updated_at: string; closed_at: string | null;
+  held_at: string | null; held_by: string | null; hold_reason: string | null;
 };
 type CommentRow = { id: string; card_id: string; author: string; author_kind: string; kind: string; body: string; created_at: string };
 type MessageRow = { id: string; board_id: string; author: string; author_kind: string; body: string; created_at: string };
@@ -85,9 +93,11 @@ export interface CardFilter {
   status?: CardStatus | CardStatus[];
   assignee?: string;
   label?: string;
-  /** Only open, unblocked, unclaimed cards. */
+  /** Only open, unblocked, unheld, unclaimed cards. */
   frontier?: boolean;
   open?: boolean;
+  /** true: only held cards. false: only unheld. Omitted: both. */
+  held?: boolean;
 }
 
 export interface NewCard {
@@ -543,6 +553,10 @@ export class Flock {
       closedAt: r.closed_at,
       blockedBy: blockers.map((b) => b.num),
       blocked: blockers.some((b) => b.open),
+      heldAt: r.held_at,
+      heldBy: r.held_by,
+      holdReason: r.hold_reason,
+      held: r.held_at !== null,
     };
   }
 
@@ -575,7 +589,8 @@ export class Flock {
     if (filter.open) cards = cards.filter((c) => !CLOSED_STATUSES.includes(c.status));
     if (filter.assignee) cards = cards.filter((c) => c.assignee === filter.assignee);
     if (filter.label) cards = cards.filter((c) => c.labels.includes(filter.label!));
-    if (filter.frontier) cards = cards.filter((c) => c.status === "todo" && !c.assignee && !c.blocked);
+    if (filter.frontier) cards = cards.filter((c) => c.status === "todo" && !c.assignee && !c.blocked && !c.held);
+    if (filter.held !== undefined) cards = cards.filter((c) => c.held === filter.held);
     return cards;
   }
 
@@ -653,6 +668,7 @@ export class Flock {
     const c = this.card(boardRef, ref);
     this.touchActor(actor);
     if (CLOSED_STATUSES.includes(c.status)) throw new FlockError(`#${c.num} is ${c.status}`, "conflict");
+    if (c.held) throw new FlockError(holdConflictMessage(c), "conflict");
     if (c.blocked && !opts.force) {
       throw new FlockError(`#${c.num} is blocked by #${c.blockedBy.join(", #")}; pass force to claim anyway`, "conflict");
     }
@@ -771,6 +787,39 @@ export class Flock {
     return this.card(c.boardId, c.num);
   }
 
+  // ---------- hold ----------
+
+  /**
+   * Park a card: a human gate on claiming. Orthogonal to blockers — a blocker is a
+   * card-to-card dependency that resolves when the blocker closes, a hold resolves only
+   * when someone calls `unholdCard`. Holding an already-held card re-stamps it (that is
+   * how a reason is changed) and emits a second `card.held`.
+   */
+  holdCard(actor: Actor, boardRef: string, ref: string | number, opts: { reason?: string } = {}): Card {
+    const c = this.card(boardRef, ref);
+    if (CLOSED_STATUSES.includes(c.status)) throw new FlockError(`#${c.num} is ${c.status}; there is nothing to hold`, "conflict");
+    this.touchActor(actor);
+    const reason = opts.reason?.trim() || null;
+    const ts = now();
+    this.db.query("UPDATE cards SET held_at = ?, held_by = ?, hold_reason = ?, updated_at = ? WHERE id = ?")
+      .run(ts, actor.name, reason, ts, c.id);
+    this.touchBoard(c.boardId);
+    this.emit(actor, c.boardId, "card.held", c.num, { title: c.title, reason, heldAt: ts });
+    return this.card(c.boardId, c.num);
+  }
+
+  /** Lift a hold. A no-op on a card that is not held: no write, no event, no error. */
+  unholdCard(actor: Actor, boardRef: string, ref: string | number): Card {
+    const c = this.card(boardRef, ref);
+    if (!c.held) return c;
+    this.touchActor(actor);
+    this.db.query("UPDATE cards SET held_at = NULL, held_by = NULL, hold_reason = NULL, updated_at = ? WHERE id = ?")
+      .run(now(), c.id);
+    this.touchBoard(c.boardId);
+    this.emit(actor, c.boardId, "card.unheld", c.num, { title: c.title, reason: c.holdReason, heldSince: c.heldAt, heldBy: c.heldBy });
+    return this.card(c.boardId, c.num);
+  }
+
   /** Cards that this card blocks. */
   dependents(boardRef: string, ref: string | number): Card[] {
     const c = this.card(boardRef, ref);
@@ -816,7 +865,7 @@ export class Flock {
     const rows = this.db
       .query(
         `SELECT c.*, b.slug AS board_slug, b.title AS board_title FROM cards c JOIN boards b ON b.id = c.board_id
-         WHERE c.status = 'awaiting-human' AND b.status = 'active' ORDER BY c.updated_at`,
+         WHERE c.status = 'awaiting-human' AND c.held_at IS NULL AND b.status = 'active' ORDER BY c.updated_at`,
       )
       .all() as (CardRow & { board_slug: string; board_title: string })[];
     return rows.map((r) => ({ ...this.rowToCard(r), boardSlug: r.board_slug, boardTitle: r.board_title }));
@@ -1079,7 +1128,8 @@ export class Flock {
       lastSeq: this.lastSeq(board.id),
       team: this.boardActors(board.id),
       counts: Object.fromEntries(CARD_STATUSES.map((s) => [s, cards.filter((c) => c.status === s).length])) as Record<CardStatus, number>,
-      frontier: cards.filter((c) => c.status === "todo" && !c.assignee && !c.blocked).map((c) => c.num),
+      frontier: cards.filter((c) => c.status === "todo" && !c.assignee && !c.blocked && !c.held).map((c) => c.num),
+      held: cards.filter((c) => c.held).map((c) => c.num),
     };
   }
 }
