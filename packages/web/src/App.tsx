@@ -15,7 +15,6 @@ import { enterDelay, enterOrders, GLOBAL_EVENT_TYPES, STAGGER_SLOW_MS, useAnchor
 import { TopBar, TopBarProvider } from "./TopBar.tsx";
 import { keyboardShrunk, readoutRequested, shellHeight } from "./vv.ts";
 import { VVReadout } from "./VVReadout.tsx";
-import { debugViewportRequested, DebugViewport } from "./DebugViewport.tsx";
 import { ActorLinks, Avatar, Icons, OverlayProvider, PromptProvider, PushStack, useEdgeSwipePeek, useIsMobile, usePrompt } from "./ui.tsx";
 
 /**
@@ -458,15 +457,6 @@ function Shell() {
     ? boards.find((b) => b.slug === route.board || b.id === route.board)?.title ?? route.board
     : undefined;
 
-  // Card #7: a temporary diagnostic, reachable at `#/debug/viewport` so it stays inside the
-  // installed PWA's scope (and therefore in standalone display-mode) rather than opening a
-  // separate page Safari might take out of it. All hooks above still ran — `useVisualViewportHeight`
-  // included — so the CSS custom properties it reads are the same live ones the real shell
-  // uses. See `DebugViewport.tsx`; delete this branch and that file once card #4 is resolved.
-  if (debugViewportRequested(hash)) {
-    return <DebugViewport />;
-  }
-
   if (mobile) {
     // Home and a board are two levels of one stack: the push layer keeps whichever you are
     // leaving on screen, sliding, while the one you asked for comes in over it.
@@ -558,10 +548,6 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
   const { active: activeBoards, idle: idleBoards } = groupBoardsByActivity(boards, now);
   return (
     <div className="screen screen-home">
-      {/* Card #7 diagnostic entry point — the only way into #/debug/viewport from the
-          installed PWA, which launches at its start URL and discards any route, leaving no
-          address bar to type one into. Delete this block once card #4 is resolved. */}
-      <a className="debug-entry" href="#/debug/viewport">viewport debug</a>
       {!mobile && (
         <AppTopBar actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename}
           action={<button className="btn btn-primary" onClick={onNewBoard}>{Icons.plus(16)} New board</button>} />
