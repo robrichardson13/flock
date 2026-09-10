@@ -60,10 +60,15 @@ Five nouns carry the whole product.
   of scope), an append-only list of decisions, a channel, and cards.
 - **Card**: `#n` on its board. Status is `todo → doing → done | wontfix`, with `awaiting-human` as
   a side state. Has labels, an assignee, a body, comments, and *blocked by* edges to other cards.
-  A card is *blocked* while any blocker is still open.
+  A card is *blocked* while any blocker is still open, and *on hold* while a human has parked it.
+  A hold is a human gate: it makes the card unclaimable, it is orthogonal to blockers, and it
+  never clears itself — only `flock unhold` lifts it. A held card keeps its status and is left
+  out of both the frontier and "Waiting on you".
 - **Claim**: assigning yourself is a compare-and-swap. Two agents grab the same card, one wins,
   the other gets exit 3. The conflict is the lock; there is no scheduler and no queue service.
-- **Frontier**: cards that are `todo`, unblocked, and unclaimed. What an agent may take next.
+  A held card cannot be claimed at all, and `--force` (which claims past a blocker) does not
+  override a hold — `flock hold N [--reason]` / `flock unhold N` set and lift it.
+- **Frontier**: cards that are `todo`, unblocked, unheld, and unclaimed. What an agent may take next.
 - **Events**: every write appends to a per-board log with a monotonic sequence. `flock log
   --follow`, the JSON long-poll, and the SSE stream all read it.
 

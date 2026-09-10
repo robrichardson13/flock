@@ -46,7 +46,7 @@ Seed data for eyeballing a UI change never goes on the shared DB. Either run `bu
 - Attribution is explicit: core methods take an `Actor`, the CLI reads `--as` and `FLOCK_ACTOR`, the server reads `x-flock-actor` and `x-flock-actor-kind` headers. An `Actor` also optionally carries `harness`/`model`/`effort` (see ADR 0005); the server mirrors them as `x-flock-harness`/`x-flock-model`/`x-flock-effort`.
 - One board per project directory, resolved from the working directory. The board argument is optional in most CLI verbs; a few (`boards`, `actors`, `needs-me`, `log --all`) take no board at all, and `board new` / `board import` take `--project` rather than resolving it.
 - Address cards by number, and by board slug only when the board is not implied. Never expose internal ids.
-- Keep CLI output stable. Agents parse `--json`; humans read the rest. Conflicts (including claiming a blocked or closed card) exit 3, not-found exits 2; `claim --force` claims past a blocker. Everything else exits 1.
+- Keep CLI output stable. Agents parse `--json`; humans read the rest. Conflicts (including claiming a blocked, held, or closed card) exit 3, not-found exits 2; `claim --force` claims past a blocker but never past a hold. Everything else exits 1.
 - The global database `~/.flock/flock.db` is the default. Tests use `:memory:`.
 - Record decisions as a new file in `docs/adr/`, numbered one past the highest existing file, following the format of 0001 and 0002.
 
