@@ -22,8 +22,9 @@ If `flock` is not on PATH here, install it: see the flock repo's `docs/install.m
 - **A board is a project directory** (this checkout or worktree). Run `flock init` once in it; after that the board argument is optional for every command run inside the directory, and the examples here omit it. Find another board's slug with `flock boards`, then name it to act on it.
 - **A card is a ticket.** Its number `#n` is its identity on that board.
 - **Triage state and ticket type are labels**: `ready-for-agent`, `needs-triage`, `needs-info`, `ready-for-human`, and `wayfinder:<research|prototype|grilling|task>`. `wontfix` is a card *status* (set by `flock done --wontfix`), not a label — applying it as a label does not close the card or remove it from the frontier.
-- **Assignee is the claim.** An open card with no assignee is unclaimed. A non-zero exit from `flock claim` means another agent has it, or it is blocked or closed; `flock claim <n> --force` claims past a blocker.
+- **Assignee is the claim.** An open card with no assignee is unclaimed. A non-zero exit from `flock claim` means another agent has it, or it is blocked, held, or closed; `flock claim <n> --force` claims past a blocker but never past a hold.
 - **Blocking is native.** `--blocked-by n,m` on create, or `flock block <n> --by <m>` later. A card is blocked while any blocker is open.
+- **A held card is off-limits.** A human parks a card with `flock hold <n> [--reason]`; it keeps its status but `flock claim` exits 3 until someone runs `flock unhold <n>` — `--force` does not lift a hold. Held cards are excluded from `flock cards --frontier` and from `needs-me`, so check `flock card show <n> --json` (the `held` field) before assuming a card you found some other way is actually takeable, and never try to route around a hold.
 
 ## When a skill says "publish to the issue tracker"
 

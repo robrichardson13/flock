@@ -739,3 +739,82 @@ describe("GET /api/boards/:b/actors/:name", () => {
     expect((await res.json()).name).toBe("Ada Lovelace");
   });
 });
+
+describe("POST /api/boards/:b/cards/:n/hold and /unhold", () => {
+  test("hold sets held state via actor headers; claim after is 409; unhold then claim succeeds", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Hold Board" });
+    const card = flock.createCard(ada, board.id, { title: "Do the thing" });
+
+    const holdRes = await app.request(`/api/boards/${board.slug}/cards/${card.num}/hold`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "rob", "x-flock-actor-kind": "human" },
+      body: JSON.stringify({ reason: "waiting on design" }),
+    });
+    expect(holdRes.status).toBe(200);
+    const held = await holdRes.json();
+    expect(held.held).toBe(true);
+    expect(held.heldBy).toBe("rob");
+    expect(held.holdReason).toBe("waiting on design");
+
+    const claimRes = await app.request(`/api/boards/${board.slug}/cards/${card.num}/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({}),
+    });
+    expect(claimRes.status).toBe(409);
+    const err = await claimRes.json();
+    expect(err.error).toContain("is on hold");
+
+    // --force must not override a hold.
+    const forcedRes = await app.request(`/api/boards/${board.slug}/cards/${card.num}/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({ force: true }),
+    });
+    expect(forcedRes.status).toBe(409);
+
+    const unholdRes = await app.request(`/api/boards/${board.slug}/cards/${card.num}/unhold`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "rob", "x-flock-actor-kind": "human" },
+    });
+    expect(unholdRes.status).toBe(200);
+    const unheld = await unholdRes.json();
+    expect(unheld.held).toBe(false);
+
+    const claimAgain = await app.request(`/api/boards/${board.slug}/cards/${card.num}/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({}),
+    });
+    expect(claimAgain.status).toBe(200);
+  });
+
+  test("hold with no body/reason is accepted; unhold on an unheld card is a no-op 200", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Hold Board 2" });
+    const card = flock.createCard(ada, board.id, { title: "Another" });
+
+    const holdRes = await app.request(`/api/boards/${board.slug}/cards/${card.num}/hold`, {
+      method: "POST",
+      headers: { "x-flock-actor": "rob", "x-flock-actor-kind": "human" },
+    });
+    expect(holdRes.status).toBe(200);
+    const held = await holdRes.json();
+    expect(held.held).toBe(true);
+    expect(held.holdReason).toBeNull();
+
+    await app.request(`/api/boards/${board.slug}/cards/${card.num}/unhold`, {
+      method: "POST",
+      headers: { "x-flock-actor": "rob", "x-flock-actor-kind": "human" },
+    });
+    const again = await app.request(`/api/boards/${board.slug}/cards/${card.num}/unhold`, {
+      method: "POST",
+      headers: { "x-flock-actor": "rob", "x-flock-actor-kind": "human" },
+    });
+    expect(again.status).toBe(200);
+    expect((await again.json()).held).toBe(false);
+  });
+});

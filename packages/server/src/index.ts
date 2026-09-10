@@ -256,7 +256,10 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath 
   app.post("/api/boards/import", async (c) => {
     const body = await c.req.json<{ markdown: string; slug?: string; title?: string; project?: string }>();
     // The whole body reaches importBoard, so `project` gets the same absolute-path rule as above.
-    return c.json(importBoard(flock, actorOf(c), body.markdown, { ...body, project: requestProject(body.project) ?? null }), 201);
+    const warnings: string[] = [];
+    const board = importBoard(flock, actorOf(c), body.markdown, { ...body, project: requestProject(body.project) ?? null, warnings });
+    for (const w of warnings) console.error(`[board import] warning: ${w}`);
+    return c.json(board, 201);
   });
   app.get("/api/boards/:b", (c) => c.json(flock.snapshot(c.req.param("b"))));
   app.patch("/api/boards/:b", async (c) => c.json(flock.updateBoard(actorOf(c), c.req.param("b"), await c.req.json())));
@@ -278,6 +281,7 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath 
         label: q.label,
         frontier: q.frontier === "1" || q.frontier === "true",
         open: q.open === "1" || q.open === "true",
+        held: q.held === "1" || q.held === "true" ? true : undefined,
       }),
     );
   });
@@ -300,6 +304,8 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath 
     });
   cardAction("claim", (a, b, n, body) => flock.claimCard(a, b, n, { force: !!body.force }));
   cardAction("release", (a, b, n) => flock.releaseCard(a, b, n));
+  cardAction("hold", (a, b, n, body) => flock.holdCard(a, b, n, { reason: body.reason }));
+  cardAction("unhold", (a, b, n) => flock.unholdCard(a, b, n));
   cardAction("toggle-task", (a, b, n, body) =>
     flock.toggleCardTask(a, b, n, Number(body.index), typeof body.checked === "boolean" ? body.checked : undefined),
   );

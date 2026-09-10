@@ -11,7 +11,7 @@ import { FlockError } from "./types.ts";
  * whenever `SCHEMA` or `migrate()` below changes, and only ever add columns/tables/indexes:
  * migrations must stay additive so a newer binary can always read an older database.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /**
  * Thrown by `openDatabase` when the database's stamped `user_version` is higher than this
@@ -60,6 +60,9 @@ CREATE TABLE IF NOT EXISTS cards (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   closed_at TEXT,
+  held_at TEXT,
+  held_by TEXT,
+  hold_reason TEXT,
   UNIQUE(board_id, num)
 );
 CREATE TABLE IF NOT EXISTS card_blockers (
@@ -181,6 +184,13 @@ function migrate(db: Database) {
   // Indexed here rather than in SCHEMA: SCHEMA runs before the ALTER above, so on an older
   // database the column does not exist yet at that point.
   db.exec("CREATE INDEX IF NOT EXISTS attachments_comment ON attachments(comment_id)");
+
+  // Hold (#18): a human gate on claiming, orthogonal to blockers. `held_at` is the flag;
+  // the other two are metadata written and cleared with it.
+  const cardCols = new Set((db.query("PRAGMA table_info(cards)").all() as { name: string }[]).map((c) => c.name));
+  if (!cardCols.has("held_at")) db.exec("ALTER TABLE cards ADD COLUMN held_at TEXT");
+  if (!cardCols.has("held_by")) db.exec("ALTER TABLE cards ADD COLUMN held_by TEXT");
+  if (!cardCols.has("hold_reason")) db.exec("ALTER TABLE cards ADD COLUMN hold_reason TEXT");
 }
 
 export const DB_DIRNAME = ".flock";

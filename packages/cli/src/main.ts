@@ -91,16 +91,20 @@ BOARDS
                                       --dry-run runs the hook but does not create a board.
 
 CARDS   (BOARD optional, see SCOPE; N is the card number, "#12" or "12")
-  cards [BOARD] [--frontier] [--blocked] [--mine] [--open] [--status S,S] [--label L] [--assignee A]
+  cards [BOARD] [--frontier] [--blocked] [--held] [--mine] [--open] [--status S,S] [--label L] [--assignee A]
                                       --blocked: only cards still waiting on an open blocker
+                                      --held: only cards a human has parked
   card new [BOARD] TITLE [--body MD | --body-file F] [--label L]... [--blocked-by N,M] [--assign A] [--status S]
   card show [BOARD] N
   card edit [BOARD] N [--title T] [--body MD | --body-file F] [--label L] [--unlabel L] [--position N]
                                       --position reorders the card among its board's cards
   card check [BOARD] N TASK [--uncheck]   Tick a "- [ ] " item in the body; TASK is its number in card show
   card uncheck [BOARD] N TASK
-  claim [BOARD] N [--force]             Compare-and-swap claim (409 if taken or blocked)
+  claim [BOARD] N [--force]             Compare-and-swap claim (409 if taken, blocked or held;
+                                        --force claims past a blocker, never past a hold)
   release [BOARD] N
+  hold [BOARD] N [--reason TEXT]        Park a card: no agent may claim it until it is unheld
+  unhold [BOARD] N                      Lift the hold; the card is claimable again
   assign [BOARD] N ACTOR | --none
   move [BOARD] N STATUS [--reason TEXT]  ${CARD_STATUSES.join(" | ")}
                                       Reopening a done/wontfix card back to todo/doing needs
@@ -212,6 +216,7 @@ function fmtCard(c: Card): string {
   const bits = [`${STATUS_ICON[c.status]} #${String(c.num).padStart(3)} ${c.title}`];
   if (c.assignee) bits.push(`@${c.assignee}`);
   if (c.labels.length) bits.push(`[${c.labels.join(", ")}]`);
+  if (c.held) bits.push(c.holdReason ? `(on hold: ${c.holdReason})` : "(on hold)");
   if (c.blocked) bits.push(`(blocked by #${c.blockedBy.join(", #")})`);
   else if (c.blockedBy.length) bits.push(`(was blocked by #${c.blockedBy.join(", #")})`);
   return bits.join("  ");
@@ -231,7 +236,8 @@ function fmtEvent(e: Event): string {
     e.type === "message.posted" ? `: ${d.body || (d.attachments ? `sent ${d.attachments} image${d.attachments === 1 ? "" : "s"}` : "")}` :
     e.type === "comment.posted" ? `: ${String(d.body ?? "").split("\n")[0] || (d.attachments ? `sent ${d.attachments} image${d.attachments === 1 ? "" : "s"}` : "")}` :
     e.type === "decision.recorded" ? `: ${d.gist}` :
-    e.type === "card.blocked" || e.type === "card.unblocked" ? ` by #${d.by}` : "";
+    e.type === "card.blocked" || e.type === "card.unblocked" ? ` by #${d.by}` :
+    e.type === "card.held" ? `${d.reason ? `: ${d.reason}` : ""}` : "";
   return `${String(e.seq).padStart(5)}  ${e.createdAt.slice(11, 19)}  ${who.padEnd(14)} ${e.type}${card}${detail}`;
 }
 
@@ -602,7 +608,7 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
             for (const c of cards) console.log(fmtCard(c));
             console.log();
           }
-          console.log(`Frontier: ${s.frontier.length ? s.frontier.map((n) => `#${n}`).join(", ") : "empty"}   last event: ${s.lastSeq}`);
+          console.log(`Frontier: ${s.frontier.length ? s.frontier.map((n) => `#${n}`).join(", ") : "empty"}${s.held.length ? `   on hold: ${s.held.map((n) => `#${n}`).join(", ")}` : ""}   last event: ${s.lastSeq}`);
         });
       }
       if (sub === "edit") {
@@ -644,7 +650,9 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
         const file = need(0, "file");
         const md = readFileSync(file === "-" ? 0 : file, "utf8");
         const project = str(flags.project) ? resolve(str(flags.project)!) : null;
-        const b = importBoard(flock, actor, md, { slug: str(flags.slug), title: str(flags.title), project });
+        const warnings: string[] = [];
+        const b = importBoard(flock, actor, md, { slug: str(flags.slug), title: str(flags.title), project, warnings });
+        for (const w of warnings) console.error(`warning: ${w}`);
         return out(ctx, flock.snapshot(b.id), () => console.log(`Imported board "${b.title}" (${b.slug}) with ${flock.listCards(b.id).length} cards`));
       }
       throw new FlockError(`Unknown board subcommand "${sub}"`);
@@ -658,6 +666,7 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
         status: list(flags.status).length ? (list(flags.status) as CardStatus[]) : undefined,
         label: str(flags.label),
         assignee: bool(flags.mine) ? actor.name : str(flags.assignee),
+        held: bool(flags.held) ? true : undefined,
       }).filter((c) => !bool(flags.blocked) || c.blocked);
       return out(ctx, cards, () => {
         if (!cards.length) return console.log("No matching cards.");
@@ -690,6 +699,7 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
           console.log(fmtCard(c));
           console.log(`   status: ${c.status}   created by ${c.createdBy} ${c.createdAt.slice(0, 16)}   updated ${c.updatedAt.slice(0, 16)}`);
           if (blocks.length) console.log(`   blocks: #${blocks.join(", #")}`);
+          if (c.held) console.log(`   on hold since ${c.heldAt!.slice(0, 16)} by ${c.heldBy}${c.holdReason ? ` — ${c.holdReason}` : ""}`);
           if (c.question) console.log(`\n   ? ${c.question}   (asked by ${c.questionBy})`);
           if (c.body.trim()) console.log(`\n${numberTasks(c.body.trim()).replace(/^/gm, "   ")}`);
           if (comments.length) {
@@ -737,6 +747,17 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       const { board, rest } = pickBoard(); a = rest;
       const c = flock.releaseCard(actor, board, need(0, "card number"));
       return out(ctx, c, () => console.log(`Released ${fmtCard(c)}`));
+    }
+    case "hold": {
+      const { board, rest } = pickBoard(); a = rest;
+      const c = flock.holdCard(actor, board, need(0, "card number"), { reason: str(flags.reason) ?? a[1] });
+      return out(ctx, c, () => console.log(`Held ${fmtCard(c)}`));
+    }
+    case "unhold": {
+      const { board, rest } = pickBoard(); a = rest;
+      const before = flock.card(board, need(0, "card number"));
+      const c = flock.unholdCard(actor, board, need(0, "card number"));
+      return out(ctx, c, () => console.log(before.held ? `Unheld ${fmtCard(c)}` : `#${c.num} was not on hold.`));
     }
     case "assign": {
       const { board, rest } = pickBoard(); a = rest;

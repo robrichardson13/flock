@@ -48,6 +48,18 @@ describe("eventPhrase", () => {
     expect(eventPhrase(ev("card.blocked", { by: 7 }), "T").cardSuffix).toBe("on #7");
   });
 
+  it("uses the hold reason as the payload, falling back to the title without one", () => {
+    expect(eventPhrase(ev("card.held", { reason: "waiting on design" }), "T").verb).toBe("put on hold");
+    expect(eventPhrase(ev("card.held", { reason: "waiting on design" }), "T").payload).toBe("waiting on design");
+    expect(eventPhrase(ev("card.held", { reason: null }), "T").payload).toBe("T");
+  });
+
+  it("says the hold was released, naming only the card", () => {
+    const p = eventPhrase(ev("card.unheld", { reason: "waiting on design", heldBy: "rob" }), "T");
+    expect(p.verb).toBe("released the hold on");
+    expect(p.payload).toBe("T");
+  });
+
   it("uses the question and answer as the payload", () => {
     expect(eventPhrase(ev("card.asked", { question: "Which API?" }), "T").payload).toBe("Which API?");
     expect(eventPhrase(ev("card.answered", { answer: "Places." }), "T").payload).toBe("Places.");

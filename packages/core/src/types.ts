@@ -79,6 +79,14 @@ export interface Card {
   blockedBy: number[];
   /** Derived: true when any blocker is still open. */
   blocked: boolean;
+  /** When a human parked this card, ISO. Null when it is not on hold. */
+  heldAt: string | null;
+  /** Who parked it. Null when it is not on hold. */
+  heldBy: string | null;
+  /** Why, free text. Null when there is no hold, or a hold with no reason given. */
+  holdReason: string | null;
+  /** Derived: `heldAt !== null`. No agent may claim a held card. */
+  held: boolean;
 }
 
 /** Someone who has written on a board: the team strip's unit. */
@@ -181,6 +189,8 @@ export type EventType =
   | "card.closed"
   | "card.blocked"
   | "card.unblocked"
+  | "card.held"
+  | "card.unheld"
   | "card.asked"
   | "card.answered"
   | "comment.posted"

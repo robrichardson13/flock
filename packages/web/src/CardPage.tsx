@@ -394,10 +394,19 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
     </div>
   );
 
+  const holdCard = async () => {
+    const reason = await prompt({ title: "Hold", placeholder: "Why (optional)", submit: "Hold card", hint: "No agent can claim this card until the hold is released.", allowEmpty: true });
+    if (reason !== null) act(() => api.hold(boardId, card.num, reason || undefined));
+  };
+
   const primaryActions = (
     <div className="primary-actions">
-      {!closed && !card.assignee && <button className="btn" onClick={() => act(() => api.claim(boardId, card.num, card.blocked))}>{Icons.hand(16)} Claim{card.blocked ? " anyway" : ""}</button>}
+      {/* Held cards hide Claim rather than disabling it: a human acting as themselves gets
+          no control that would always 409. */}
+      {!closed && !card.assignee && !card.held && <button className="btn" onClick={() => act(() => api.claim(boardId, card.num, card.blocked))}>{Icons.hand(16)} Claim{card.blocked ? " anyway" : ""}</button>}
       {!closed && card.assignee && <button className="btn" onClick={() => act(() => api.release(boardId, card.num))}>{mine ? "Release" : `Unassign ${card.assignee}`}</button>}
+      {!closed && card.held && <button className="btn" onClick={() => act(() => api.unhold(boardId, card.num))}>{Icons.pause(16)} Release hold</button>}
+      {!closed && !card.held && <button className="btn btn-ghost" onClick={holdCard}>{Icons.pause(16)} Hold</button>}
       {!closed && <button className="btn btn-ok" onClick={() => act(() => api.close(boardId, card.num))}>{Icons.check(16)} Mark done</button>}
       {closed && <button className="btn" onClick={() => reopen("todo")}>{Icons.undo(16)} Reopen</button>}
     </div>
@@ -851,6 +860,13 @@ function DetailValue({ row }: { row: DetailRow }) {
       );
     case "blocks":
       return <>{row.tokens.map((t) => <span key={t.num} className="detail-token">#{t.num}</span>)}</>;
+    case "hold":
+      return (
+        <span>
+          {row.reason ?? `held by ${row.heldBy}`}
+          <span className="muted tiny"> · held by {row.heldBy} · {timeAgo(row.heldAt)}</span>
+        </span>
+      );
   }
 }
 

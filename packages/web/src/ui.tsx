@@ -1106,6 +1106,10 @@ export interface PromptSpec {
   submit?: string;
   hint?: string;
   inputMode?: "text" | "numeric";
+  /** True for a field the caller treats as genuinely optional (e.g. an optional hold
+   *  reason): submitting blank resolves with `""` rather than being blocked. Every other
+   *  prompt keeps requiring a non-empty value. */
+  allowEmpty?: boolean;
 }
 
 type PromptFn = (spec: PromptSpec) => Promise<string | null>;
@@ -1141,7 +1145,10 @@ export function PromptProvider({ children }: { children: ReactNode }) {
     req?.resolve(v);
     setReq(null);
   };
-  const submit = () => value.trim() && finish(value.trim());
+  const submit = () => {
+    if (value.trim()) finish(value.trim());
+    else if (req?.spec.allowEmpty) finish("");
+  };
 
   return (
     <PromptCtx.Provider value={prompt}>
@@ -1159,7 +1166,7 @@ export function PromptProvider({ children }: { children: ReactNode }) {
             {req.spec.hint && <div className="muted small">{req.spec.hint}</div>}
             <div className="row gap end">
               <button type="button" className="btn btn-ghost" onClick={() => finish(null)}>Cancel</button>
-              <button type="submit" className="btn btn-primary" disabled={!value.trim()}>{req.spec.submit ?? "Save"}</button>
+              <button type="submit" className="btn btn-primary" disabled={!value.trim() && !req.spec.allowEmpty}>{req.spec.submit ?? "Save"}</button>
             </div>
           </form>
         )}
@@ -1198,6 +1205,8 @@ export const Icons = {
   attach: (s?: number) => <I size={s} d="M8 12l6.5-6.5a3 3 0 0 1 4.24 4.24L9.5 19a5 5 0 0 1-7.07-7.07L13 1.5" />,
   /** Blocked, on a list row: a padlock, small enough to sit inside a line of text. */
   lock: (s?: number) => <I size={s} d="M6 11h12v9H6zM9 11V8a3 3 0 0 1 6 0v3" />,
+  /** On hold, on a list row: a pause bar, sized to sit inside a line of text. */
+  pause: (s?: number) => <I size={s} d="M9 6v12M15 6v12" />,
   trash: (s?: number) => <I size={s} d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6" />,
   /** Straight down, for "jump to the bottom" affordances (the card page's latest-comments button). */
   arrowDown: (s?: number) => <I size={s} d="M12 4v15M5 12l7 7 7-7" />,

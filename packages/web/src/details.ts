@@ -20,7 +20,8 @@ export type DetailRow =
   | { key: "assignee"; label: string; tappable: false; assignee: string | null; kind: "human" | "agent"; runtime: string | null }
   | { key: "labels"; label: string; tappable: true; labels: string[] }
   | { key: "blockedBy"; label: string; tappable: true; tokens: CardToken[] }
-  | { key: "blocks"; label: string; tappable: boolean; tokens: CardToken[] };
+  | { key: "blocks"; label: string; tappable: boolean; tokens: CardToken[] }
+  | { key: "hold"; label: string; tappable: false; heldBy: string; heldAt: string; reason: string | null };
 
 /** A card is open until it is closed one way or the other. */
 export function isOpenStatus(status: CardStatus | undefined): boolean {
@@ -43,6 +44,10 @@ export interface DetailsInput {
     assignee: string | null;
     labels: string[];
     blockedBy: number[];
+    held: boolean;
+    heldBy: string | null;
+    heldAt: string | null;
+    holdReason: string | null;
   };
   /** Cards this one blocks, from `api.card`. */
   blocks: number[];
@@ -78,8 +83,17 @@ export function buildDetailRows({ card, blocks, allCards, holder }: DetailsInput
     { key: "labels", label: "Labels", tappable: true, labels: card.labels },
     { key: "blockedBy", label: "Blocked by", tappable: true, tokens: tokens(card.blockedBy, allCards) },
   ];
+  if (card.held && card.heldBy && card.heldAt) {
+    rows.push({ key: "hold", label: "On hold", tappable: false, heldBy: card.heldBy, heldAt: card.heldAt, reason: card.holdReason });
+  }
   if (blocks.length > 0) {
     rows.push({ key: "blocks", label: "Blocks", tappable: true, tokens: tokens(blocks, allCards) });
   }
   return rows;
+}
+
+/** The tooltip/aria-label on a held card's row/tile badge, and the card page's hold row. */
+export function holdTitle(card: { heldAt: string | null; heldBy: string | null; holdReason: string | null }): string {
+  const since = card.heldAt ? card.heldAt.slice(0, 10) : "unknown";
+  return `On hold since ${since}, held by ${card.heldBy}${card.holdReason ? `: ${card.holdReason}` : ""}`;
 }

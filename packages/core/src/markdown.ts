@@ -30,8 +30,10 @@ export function exportBoard(flock: Flock, boardRef: string): string {
       if (c.assignee) bits.push(`@${c.assignee}`);
       if (c.labels.length) bits.push(`[${c.labels.join(", ")}]`);
       if (c.blockedBy.length) bits.push(`(blocked by ${c.blockedBy.map((n) => `#${n}`).join(", ")})`);
+      if (c.held) bits.push("(on hold)");
       out.push(bits.join(" "));
       if (c.question) out.push(`  > ? ${c.question.replace(/\n/g, "\n  > ")}`);
+      if (c.held && c.holdReason) out.push(`  > ! ${c.holdReason.replace(/\n/g, "\n  > ")}`);
       if (c.body.trim()) for (const line of c.body.trim().split("\n")) out.push(`  ${line}`);
     }
     out.push("");
@@ -48,6 +50,8 @@ interface ParsedCard {
   blockedBy: number[];
   body: string;
   question: string | null;
+  held: boolean;
+  holdReason: string | null;
 }
 
 export interface ParsedBoard {
@@ -66,6 +70,7 @@ export function parseBoard(md: string): ParsedBoard {
   let section: "body" | "decisions" | CardStatus = "body";
   const bodyLines: string[] = [];
   let current: ParsedCard | null = null;
+  let openBlock: "question" | "hold" | null = null;
 
   for (const raw of lines) {
     if (raw.startsWith("# ") && result.title === "Untitled" && section === "body") {
@@ -101,6 +106,8 @@ export function parseBoard(md: string): ParsedBoard {
         for (const n of list.matchAll(/#?(\d+)/g)) blockedBy.push(Number(n[1]));
         return "";
       });
+      let held = false;
+      rest = rest.replace(/\(on hold\)/i, () => { held = true; return ""; });
       let labels: string[] = [];
       rest = rest.replace(/\[([^\]]*)\]\s*$/, (_, list: string) => {
         labels = list.split(",").map((s) => s.trim()).filter(Boolean);
@@ -115,23 +122,34 @@ export function parseBoard(md: string): ParsedBoard {
       let status = section as CardStatus;
       if (checked && !CLOSED_STATUSES.includes(status)) status = "done";
       if (!checked && CLOSED_STATUSES.includes(status)) status = "todo";
-      current = { num: m[2] ? Number(m[2]) : null, title: rest.trim(), status, assignee, labels, blockedBy, body: "", question: null };
+      current = { num: m[2] ? Number(m[2]) : null, title: rest.trim(), status, assignee, labels, blockedBy, body: "", question: null, held, holdReason: null };
       result.cards.push(current);
+      openBlock = null;
       continue;
     }
     if (current && raw.startsWith("  ")) {
       const line = raw.slice(2);
-      if (line.startsWith("> ? ")) current.question = (current.question ? current.question + "\n" : "") + line.slice(4);
-      else if (line.startsWith("> ") && current.question != null) current.question += "\n" + line.slice(2);
-      else current.body += (current.body ? "\n" : "") + line;
+      if (line.startsWith("> ? ")) { current.question = (current.question ? current.question + "\n" : "") + line.slice(4); openBlock = "question"; }
+      else if (line.startsWith("> ! ")) { current.holdReason = (current.holdReason ? current.holdReason + "\n" : "") + line.slice(4); openBlock = "hold"; }
+      else if (line.startsWith("> ") && openBlock === "question") current.question += "\n" + line.slice(2);
+      else if (line.startsWith("> ") && openBlock === "hold") current.holdReason += "\n" + line.slice(2);
+      else { openBlock = null; current.body += (current.body ? "\n" : "") + line; }
     }
   }
   result.body = bodyLines.join("\n").trim();
   return result;
 }
 
-/** Create a new board from a markdown document. Card numbers in the file are preserved when unique. */
-export function importBoard(flock: Flock, actor: Actor, md: string, opts: { slug?: string; title?: string; project?: string | null } = {}) {
+/**
+ * Create a new board from a markdown document. Card numbers in the file are preserved when unique.
+ * `opts.warnings`, if given, is pushed to with soft issues that were skipped rather than aborting the import.
+ */
+export function importBoard(
+  flock: Flock,
+  actor: Actor,
+  md: string,
+  opts: { slug?: string; title?: string; project?: string | null; warnings?: string[] } = {},
+) {
   const parsed = parseBoard(md);
   const board = flock.createBoard(actor, { title: opts.title ?? parsed.title, slug: opts.slug, body: parsed.body, project: opts.project });
   // Assign nums: keep file nums when present and unique, otherwise take the next free.
@@ -152,6 +170,16 @@ export function importBoard(flock: Flock, actor: Actor, md: string, opts: { slug
     const created = flock.createCard(actor, board.id, { title: c.title, body: c.body, labels: c.labels, assignee: c.assignee, status: c.status });
     numMap.set(c.num, created.num);
     if (c.question) flock.db.query("UPDATE cards SET question = ?, question_by = ? WHERE id = ?").run(c.question, c.assignee ?? actor.name, created.id);
+    if (c.held) {
+      // A closed card can never legitimately hold flock's own exporter, but a hand-written or
+      // third-party file can say so; holdCard would throw on a closed card and abort the import
+      // mid-loop. Closing already clears a hold (see decision vutsf1m5), so skip it here too.
+      if (CLOSED_STATUSES.includes(c.status)) {
+        opts.warnings?.push(`#${created.num} ${c.title}: ignored "(on hold)" on a closed card`);
+      } else {
+        flock.holdCard(actor, board.id, created.num, { reason: c.holdReason ?? undefined });
+      }
+    }
   }
   for (const c of order) {
     for (const b of c.blockedBy) {

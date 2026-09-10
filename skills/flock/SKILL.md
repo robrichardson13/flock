@@ -53,6 +53,8 @@ directory), every command below is `bun run flock ...` instead. Always act as a 
 4. Break the goal into cards, one per delegation, blockers declared:
    `flock card new "<title>" --body "..." --blocked-by n,m`. Acceptance criteria go in the
    body as a checklist. `flock cards --frontier` is what can run now.
+   A card the human is not ready to start yet is `flock hold <n> --reason "..."`, not a note in
+   the body — the gate is structural and every agent honours it.
 5. Arm the listener (next section) before the first delegation.
 6. `flock say "Conductor online: <one-line plan>"` so the channel shows the human the run has started.
 7. Give the human the board's URL before you delegate anything, so they can watch the run in the
@@ -136,6 +138,7 @@ What each event means and what you do with it, in the same turn it arrives:
 | `comment.posted` | The human commented on a card | Instruction or context for that card. Relay to the agent holding it, or fold it into the next delegation. A card comment carries images the same way a channel message does, so a line with `[attachments: ...]` is handled the same way: `flock attachment get <id> --out /tmp/flock-<id>.<ext>` for each, Read the file, and transcribe it for any subagent. |
 | `card.moved`, `card.closed`, `card.updated` | The human changed the plan | Re-read the board and re-plan. A card the human closed is done; a card they reopened is work again. |
 | `card.claimed`, `card.released`, `card.blocked`, `card.unblocked` | The human re-sequenced work | Same: re-read the board, respect the new shape. |
+| `card.held`, `card.unheld` | The human parked a card, or un-parked it | A held card is off the table: never delegate it, and pull back any agent you already sent at it. When the hold lifts, treat it as new frontier work and delegate it the way you would any card that just became claimable. Do not ask the human to justify a hold. |
 
 Reply where the human is looking. A channel message gets a `flock say`; a card comment gets a
 `flock comment`. Milestones and decision points go to the channel too, one line each, so the
@@ -157,6 +160,9 @@ contract, stated in the prompt:
   whatever this delegation was routed to (see Routing below) — the subagent cannot see its
   own model, only you chose it. Claim the card before any work; a non-zero exit means take
   nothing and report back.
+  Never delegate a card that is on hold, and never tell a subagent to `--force` past one. Check
+  `flock cards --frontier` rather than picking a card number out of your own plan: held cards are
+  already excluded there.
 - `flock comment <n>` at each meaningful step.
 - Finish with `flock done <n> --resolution "<full findings>"`. The resolution is the
   **full** output; return here only a summary of at most ten lines and the card number.

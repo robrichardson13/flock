@@ -152,6 +152,9 @@
   --status-await: var(--human);
   --status-done: var(--done);
   --status-blocked: var(--warn);
+  /* Hold: a human parked this. Grey, not amber — parked is quiet, not alarming, and amber
+     is already spoken for by blocked. */
+  --status-held: var(--muted);
   /* The knockout mark inside a filled status glyph, so it follows the fill. */
   --status-ink: var(--on-accent);
   /* Progress bars on the home list. */
@@ -1264,9 +1267,14 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 /* Blocked is a state of the whole row, said once by dimming it behind a padlock, rather than
    an amber pill repeated down a column of to-dos. The blocker numbers are on the card page. */
 .card-row.blocked { opacity: 0.6; }
+/* Held is the same dim-behind-a-glyph grammar as blocked, quieter: a human parked this, not
+   an ordering fact. Painted with the token directly (like `.status-done`/`.status-wontfix`
+   above) rather than a container opacity, so the contrast gate can see it. */
+.card-row.on-hold .list-title { color: var(--muted); }
 .card-row-line { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 .card-row-line .list-title { flex: 1; min-width: 0; }
 .card-lock { flex: none; display: inline-flex; color: var(--muted); }
+.card-hold { flex: none; display: inline-flex; color: var(--status-held); }
 .card-row-line .card-num { flex: none; font-size: var(--t-foot); }
 /* Finished is said by dimming the whole row behind a tick, the same grammar blocked uses
    with its padlock. A strike-through said it a second time and made the title hard to read
@@ -2959,6 +2967,8 @@ html[data-topbar] .sheet { max-height: 100%; }
      them, only at 2.49-3.46:1 instead of at a ratio the gate can see. */
   .card-tile.blocked .card-title { color: var(--muted); }
   .card-tile.blocked .card-tile-meta { color: var(--muted-2); }
+  .card-tile.on-hold .card-title { color: var(--muted); }
+  .card-tile.on-hold .card-tile-meta { color: var(--muted-2); }
   /* Same grammar as the phone row: dimmed behind a tick, not struck through. */
   .card-tile.status-done .card-title, .card-tile.status-wontfix .card-title,
   .card-tile.status-done .card-tile-meta, .card-tile.status-wontfix .card-tile-meta { color: var(--muted-2); }
@@ -2981,7 +2991,7 @@ html[data-topbar] .sheet { max-height: 100%; }
     margin-top: 2px;
     font-size: var(--t-cap); line-height: var(--lh-cap); color: var(--muted);
   }
-  .card-tile-meta .card-lock, .card-tile-meta .card-check, .card-tile-meta .avatar { flex: none; }
+  .card-tile-meta .card-lock, .card-tile-meta .card-hold, .card-tile-meta .card-check, .card-tile-meta .avatar { flex: none; }
   /* The face is the one coloured thing on the line, so it gets a little air before the name
      it belongs to and none of the line's own tight caption gap on the other side. */
   .card-tile-meta .avatar { margin-left: var(--s1); }

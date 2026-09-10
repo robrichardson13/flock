@@ -1,12 +1,27 @@
 import { describe, expect, it } from "bun:test";
-import { buildDetailRows, isOpenStatus, runtimeText, type DetailRow } from "./details.ts";
+import { buildDetailRows, holdTitle, isOpenStatus, runtimeText, type DetailRow } from "./details.ts";
 import type { CardStatus } from "./api.ts";
 
-const card = (over: Partial<{ status: CardStatus; assignee: string | null; labels: string[]; blockedBy: number[] }> = {}) => ({
+const card = (
+  over: Partial<{
+    status: CardStatus;
+    assignee: string | null;
+    labels: string[];
+    blockedBy: number[];
+    held: boolean;
+    heldBy: string | null;
+    heldAt: string | null;
+    holdReason: string | null;
+  }> = {},
+) => ({
   status: "todo" as CardStatus,
   assignee: null,
   labels: [],
   blockedBy: [],
+  held: false,
+  heldBy: null,
+  heldAt: null,
+  holdReason: null,
   ...over,
 });
 
@@ -111,5 +126,44 @@ describe("buildDetailRows", () => {
   it("passes the labels through in order", () => {
     const rows = buildDetailRows({ card: card({ labels: ["ux", "web"] }), blocks: [], allCards: [] });
     expect(find(rows, "labels").labels).toEqual(["ux", "web"]);
+  });
+
+  it("adds no hold row when the card is not held", () => {
+    const rows = buildDetailRows({ card: card(), blocks: [], allCards: [] });
+    expect(rowsOf(rows)).not.toContain("hold");
+  });
+
+  it("shows the hold row with its reason and attribution when held", () => {
+    const rows = buildDetailRows({
+      card: card({ held: true, heldBy: "rob", heldAt: "2026-09-10T12:00:00.000Z", holdReason: "waiting on design" }),
+      blocks: [],
+      allCards: [],
+    });
+    const r = find(rows, "hold");
+    expect(r.heldBy).toBe("rob");
+    expect(r.heldAt).toBe("2026-09-10T12:00:00.000Z");
+    expect(r.reason).toBe("waiting on design");
+    expect(r.tappable).toBe(false);
+  });
+
+  it("shows the hold row even without a reason", () => {
+    const rows = buildDetailRows({
+      card: card({ held: true, heldBy: "rob", heldAt: "2026-09-10T12:00:00.000Z", holdReason: null }),
+      blocks: [],
+      allCards: [],
+    });
+    expect(find(rows, "hold").reason).toBeNull();
+  });
+});
+
+describe("holdTitle", () => {
+  it("names who held it, since when, and why", () => {
+    expect(holdTitle({ heldAt: "2026-09-10T12:00:00.000Z", heldBy: "rob", holdReason: "waiting on design" }))
+      .toBe("On hold since 2026-09-10, held by rob: waiting on design");
+  });
+
+  it("drops the colon clause when there is no reason", () => {
+    expect(holdTitle({ heldAt: "2026-09-10T12:00:00.000Z", heldBy: "rob", holdReason: null }))
+      .toBe("On hold since 2026-09-10, held by rob");
   });
 });

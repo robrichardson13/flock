@@ -21,7 +21,7 @@ argument is optional; it is shown below for clarity.` : "Every command below tak
 ## Orient
 
     flock board show ${b}            # goal, notes, decisions, every card by status, the frontier
-    flock cards ${b} --frontier      # open, unblocked, unclaimed cards: what you may take
+    flock cards ${b} --frontier      # open, unblocked, unheld, unclaimed cards: what you may take
     flock card show ${b} <n>         # one card with its comments and blockers
 
 ## Work a card
@@ -32,6 +32,10 @@ argument is optional; it is shown below for clarity.` : "Every command below tak
     flock release ${b} <n>           # give it back if you cannot finish
 
 Never work a card you have not claimed. Never claim a blocked card; blockers close first.
+A card can also be on hold: a human parked it, and \`claim\` exits 3 until someone lifts it
+with \`flock unhold <n>\`. \`--force\` claims past a blocker but never past a hold — a hold is a
+person's instruction, not an ordering guess, so do not argue with it in a comment and do not
+try to route around it. Pick another frontier card.
 
 ## Need a human?
 
@@ -65,6 +69,8 @@ short code in backticks. This applies to card bodies, comments, and resolutions 
 ## Statuses
 
 todo → doing → done | wontfix, with awaiting-human as a side state. A card is *blocked* while
-any card in its "blocked by" list is still open.
+any card in its "blocked by" list is still open. Hold is a flag, not a status: a held card
+keeps whatever status it had, so a held card can be \`todo\` or \`doing\`. \`flock cards --frontier\`
+already leaves held cards out, and \`flock cards --held\` lists them.
 `;
 }

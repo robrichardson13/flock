@@ -48,6 +48,10 @@ export function eventPhrase(e: Event, cardTitle?: string): { verb: string; showC
       return { verb: "blocked", showCard: true, cardSuffix: `on #${d.by}`, payload: title };
     case "card.unblocked":
       return { verb: "unblocked", showCard: true, cardSuffix: "", payload: title };
+    case "card.held":
+      return { verb: "put on hold", showCard: true, cardSuffix: "", payload: d.reason ?? title };
+    case "card.unheld":
+      return { verb: "released the hold on", showCard: true, cardSuffix: "", payload: title };
     case "card.asked":
       return { verb: "asked about", showCard: true, cardSuffix: "", payload: String(d.question ?? "") };
     case "card.answered":
