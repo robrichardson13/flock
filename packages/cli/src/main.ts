@@ -29,11 +29,19 @@ import {
 import { bool, list, parseArgs, str } from "./args.ts";
 import { baseUrl, resolveHost } from "./dev.ts";
 import { handoffMarkdown } from "./handoff.ts";
-import { resolveActor } from "./identity.ts";
+import { actorWasDefaulted, resolveActor } from "./identity.ts";
 import { embeddedAssets, installScriptPath, versionLine } from "./runtime.ts";
 import { maybeSpawnUpdateCheck } from "./update.ts";
 
 const HELP = `flock — mission control for a team of agents
+
+FOR AGENTS
+  Asked to add or file a ticket? One line does it:
+    flock card new "<title>" --body "<markdown>" --as <your-name>
+  Attribution: pass --as <name> or export FLOCK_ACTOR=<name>. Omit it and the write
+  silently files under the OS user, as a human rather than as you.
+  The board is resolved from the working directory; confirm it with \`flock boards --here\`.
+  Working cards on a board? Run \`flock handoff\` first.
 
 USAGE
   flock <command> [args] [--as NAME] [--json] [--db PATH]
@@ -42,6 +50,76 @@ SCOPE
   One board per project directory (a repo or a worktree). Run \`flock init\` in the directory
   once; after that every command below resolves BOARD from the working directory, so the
   BOARD argument is optional. Name it (slug or id) to act on a different board.
+
+CARDS   (BOARD optional, see SCOPE; N is the card number, "#12" or "12")
+  cards [BOARD] [--frontier] [--blocked] [--held] [--mine] [--open] [--status S,S] [--label L] [--assignee A]
+                                      --blocked: only cards still waiting on an open blocker
+                                      --held: only cards a human has parked
+  card new [BOARD] TITLE [--body MD | --body-file F] [--label L]... [--blocked-by N,M] [--assign A] [--status S]
+  card show [BOARD] N
+  card edit [BOARD] N [--title T] [--body MD | --body-file F] [--label L] [--unlabel L] [--position N]
+                                      --position reorders the card among its board's cards
+  card check [BOARD] N TASK [--uncheck]   Tick a "- [ ] " item in the body; TASK is its number in card show
+  card uncheck [BOARD] N TASK
+  claim [BOARD] N [--force]             Compare-and-swap claim (409 if taken, blocked or held;
+                                        --force claims past a blocker, never past a hold)
+  release [BOARD] N
+  hold [BOARD] N [--reason TEXT]        Park a card: no agent may claim it until it is unheld
+  unhold [BOARD] N                      Lift the hold; the card is claimable again
+  assign [BOARD] N ACTOR | --none
+  move [BOARD] N STATUS [--reason TEXT]  ${CARD_STATUSES.join(" | ")}
+                                      Reopening a done/wontfix card back to todo/doing needs
+                                      --reason; it's recorded as a comment on the card
+  done [BOARD] N [--resolution TEXT] [--wontfix]
+  block [BOARD] N --by M                Add a blocking edge (M must close before N starts)
+  unblock [BOARD] N --by M
+  comment [BOARD] N TEXT [--attach PATH]...   Comment on a card; --attach is repeatable and
+                                      uploads an image (comment text is optional with one)
+
+IDENTITY
+  --as NAME        Act as NAME (implies --agent). Env: FLOCK_ACTOR, FLOCK_ACTOR_KIND
+  --human/--agent  Override the kind
+  --harness NAME   Runtime harness, e.g. claude-code@2.1.261. Env: FLOCK_HARNESS. Auto-detected for Claude Code.
+  --model NAME     Model name, e.g. opus-5. Env: FLOCK_MODEL. Never auto-detected; pass it or it stays unknown.
+  --effort LEVEL   Reasoning effort, e.g. high. Env: FLOCK_EFFORT. Auto-detected from CLAUDE_EFFORT when present.
+  --json           Machine-readable output
+  --db PATH        Database file. Env: FLOCK_DB. Default: ~/.flock/flock.db, or a .flock/ found walking up from cwd
+  --host H         Bind host for serve/up. Precedence: --host, FLOCK_HOST, "host" in
+                    ~/.flock/config.json, then the default 0.0.0.0 (every interface). Use
+                    127.0.0.1 to bind loopback only. A bare up/restart with none of these given
+                    keeps a running daemon's own host rather than resetting it. See docs/adr/0015.
+
+BOARDS
+  boards [--all] [--here]             List boards (--here: only this directory's)
+  board new TITLE [--project DIR] [--slug S] [--body MD | --body-file F]
+  board show [BOARD]                  Full picture: body, decisions, cards, frontier
+  board edit [BOARD] [--title T] [--body MD | --body-file F] [--project DIR|none] [--archive | --activate]
+  board delete [BOARD] [--yes]        Delete a board and everything on it. Asks first unless --yes
+  board export [BOARD] [--out FILE]   Board as markdown
+  board import FILE [--project DIR] [--slug S]   New board from markdown
+  hook describe                       Locate the board-create hook and show its declared fields
+  hook run [--title T] [--input k=v]... [--dry-run]
+                                      Run the board-create hook and create the board it returns.
+                                      --dry-run runs the hook but does not create a board.
+
+HUMAN IN THE LOOP
+  ask [BOARD] N QUESTION                Park the card as awaiting-human
+  answer [BOARD] N TEXT                 Reply and hand the card back
+
+TEAM
+  handoff [BOARD]                     Print the agent onboarding text
+  needs-me                            Cards waiting on a human, across all boards
+  say [BOARD] TEXT [--attach PATH]...   Post to the board channel; --attach is repeatable and
+                                      uploads an image (message text is optional with one)
+  attachment get [BOARD] ID [--out PATH]   Fetch an attachment's bytes (stdout if --out omitted);
+                                      --json prints its metadata only, never bytes
+  chat [BOARD] [--limit 50]             Read the channel
+  decide [BOARD] GIST [--card N]        Record a decision
+  decisions [BOARD]
+  help formatting                     The markdown subset the web UI renders
+  log [BOARD] [--all] [--since SEQ] [--wait | --follow] [--for NAME] [--timeout MS]
+                                      --wait: block until a matching event, then exit. --all: every board
+  actors                              Who has touched this database
 
 SETUP
   init [TITLE] [--body MD | --body-file F] [--local]
@@ -74,76 +152,6 @@ SETUP
                                       installed flock also does this on its own once a day; set
                                       FLOCK_NO_UPDATE=1, or {"autoupdate": false} in
                                       ~/.flock/config.json, to turn that off.
-  handoff [BOARD]                     Print the agent onboarding text
-  needs-me                            Cards waiting on a human, across all boards
-
-BOARDS
-  boards [--all] [--here]             List boards (--here: only this directory's)
-  board new TITLE [--project DIR] [--slug S] [--body MD | --body-file F]
-  board show [BOARD]                  Full picture: body, decisions, cards, frontier
-  board edit [BOARD] [--title T] [--body MD | --body-file F] [--project DIR|none] [--archive | --activate]
-  board delete [BOARD] [--yes]        Delete a board and everything on it. Asks first unless --yes
-  board export [BOARD] [--out FILE]   Board as markdown
-  board import FILE [--project DIR] [--slug S]   New board from markdown
-  hook describe                       Locate the board-create hook and show its declared fields
-  hook run [--title T] [--input k=v]... [--dry-run]
-                                      Run the board-create hook and create the board it returns.
-                                      --dry-run runs the hook but does not create a board.
-
-CARDS   (BOARD optional, see SCOPE; N is the card number, "#12" or "12")
-  cards [BOARD] [--frontier] [--blocked] [--held] [--mine] [--open] [--status S,S] [--label L] [--assignee A]
-                                      --blocked: only cards still waiting on an open blocker
-                                      --held: only cards a human has parked
-  card new [BOARD] TITLE [--body MD | --body-file F] [--label L]... [--blocked-by N,M] [--assign A] [--status S]
-  card show [BOARD] N
-  card edit [BOARD] N [--title T] [--body MD | --body-file F] [--label L] [--unlabel L] [--position N]
-                                      --position reorders the card among its board's cards
-  card check [BOARD] N TASK [--uncheck]   Tick a "- [ ] " item in the body; TASK is its number in card show
-  card uncheck [BOARD] N TASK
-  claim [BOARD] N [--force]             Compare-and-swap claim (409 if taken, blocked or held;
-                                        --force claims past a blocker, never past a hold)
-  release [BOARD] N
-  hold [BOARD] N [--reason TEXT]        Park a card: no agent may claim it until it is unheld
-  unhold [BOARD] N                      Lift the hold; the card is claimable again
-  assign [BOARD] N ACTOR | --none
-  move [BOARD] N STATUS [--reason TEXT]  ${CARD_STATUSES.join(" | ")}
-                                      Reopening a done/wontfix card back to todo/doing needs
-                                      --reason; it's recorded as a comment on the card
-  done [BOARD] N [--resolution TEXT] [--wontfix]
-  block [BOARD] N --by M                Add a blocking edge (M must close before N starts)
-  unblock [BOARD] N --by M
-  comment [BOARD] N TEXT [--attach PATH]...   Comment on a card; --attach is repeatable and
-                                      uploads an image (comment text is optional with one)
-
-HUMAN IN THE LOOP
-  ask [BOARD] N QUESTION                Park the card as awaiting-human
-  answer [BOARD] N TEXT                 Reply and hand the card back
-
-TEAM
-  say [BOARD] TEXT [--attach PATH]...   Post to the board channel; --attach is repeatable and
-                                      uploads an image (message text is optional with one)
-  attachment get [BOARD] ID [--out PATH]   Fetch an attachment's bytes (stdout if --out omitted);
-                                      --json prints its metadata only, never bytes
-  chat [BOARD] [--limit 50]             Read the channel
-  decide [BOARD] GIST [--card N]        Record a decision
-  decisions [BOARD]
-  help formatting                     The markdown subset the web UI renders
-  log [BOARD] [--all] [--since SEQ] [--wait | --follow] [--for NAME] [--timeout MS]
-                                      --wait: block until a matching event, then exit. --all: every board
-  actors                              Who has touched this database
-
-IDENTITY
-  --as NAME        Act as NAME (implies --agent). Env: FLOCK_ACTOR, FLOCK_ACTOR_KIND
-  --human/--agent  Override the kind
-  --harness NAME   Runtime harness, e.g. claude-code@2.1.261. Env: FLOCK_HARNESS. Auto-detected for Claude Code.
-  --model NAME     Model name, e.g. opus-5. Env: FLOCK_MODEL. Never auto-detected; pass it or it stays unknown.
-  --effort LEVEL   Reasoning effort, e.g. high. Env: FLOCK_EFFORT. Auto-detected from CLAUDE_EFFORT when present.
-  --json           Machine-readable output
-  --db PATH        Database file. Env: FLOCK_DB. Default: ~/.flock/flock.db, or a .flock/ found walking up from cwd
-  --host H         Bind host for serve/up. Precedence: --host, FLOCK_HOST, "host" in
-                    ~/.flock/config.json, then the default 0.0.0.0 (every interface). Use
-                    127.0.0.1 to bind loopback only. A bare up/restart with none of these given
-                    keeps a running daemon's own host rather than resetting it. See docs/adr/0015.
 `;
 
 /** Top-level daemon verbs, handled before the database is opened. `start`/`stop` alias `up`/`down`. */
@@ -539,7 +547,16 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
     case "handoff": {
       const b = a[0] ? flock.board(a[0]) : flock.boardForDir(cwd);
       flock.touchActor(actor);
-      console.log(handoffMarkdown({ board: b?.slug, project: b?.project, actor: actor.name, model: actor.model, dbPath: ctx.dbPath }));
+      console.log(
+        handoffMarkdown({
+          board: b?.slug,
+          project: b?.project,
+          actor: actor.name,
+          model: actor.model,
+          dbPath: ctx.dbPath,
+          defaulted: actorWasDefaulted(flags),
+        }),
+      );
       return;
     }
 
