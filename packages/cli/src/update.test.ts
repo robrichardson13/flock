@@ -165,7 +165,7 @@ describe("guards", () => {
     expect(updateBlockedReason({ standalone: true, env: {}, config: { autoupdate: true } })).toBeUndefined();
   });
 
-  test("readConfig reads only that one key, and treats junk as absent", () => {
+  test("readConfig reads autoupdate and host, and treats junk as absent", () => {
     useScratchHome();
     expect(readConfig()).toEqual({});
     mkdirSync(process.env.FLOCK_HOME!, { recursive: true });
@@ -176,6 +176,19 @@ describe("guards", () => {
     writeFileSync(configPath(), "[]");
     expect(readConfig()).toEqual({});
     writeFileSync(configPath(), "nope");
+    expect(readConfig()).toEqual({});
+  });
+
+  test("readConfig reads a string host, and rejects a non-string or empty one", () => {
+    useScratchHome();
+    mkdirSync(process.env.FLOCK_HOME!, { recursive: true });
+    writeFileSync(configPath(), JSON.stringify({ host: "127.0.0.1" }));
+    expect(readConfig()).toEqual({ host: "127.0.0.1" });
+    writeFileSync(configPath(), JSON.stringify({ autoupdate: false, host: "10.0.0.5" }));
+    expect(readConfig()).toEqual({ autoupdate: false, host: "10.0.0.5" });
+    writeFileSync(configPath(), JSON.stringify({ host: "" }));
+    expect(readConfig()).toEqual({});
+    writeFileSync(configPath(), JSON.stringify({ host: 123 }));
     expect(readConfig()).toEqual({});
   });
 

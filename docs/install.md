@@ -21,8 +21,11 @@ one. If the repo is private, download a release asset by hand instead (see Manua
    leaves it alone and says so on stderr.
 3. The daemon, started by that same `flock setup` call, serving the web app and the API on every
    interface by default (`0.0.0.0:4747`) — so `http://127.0.0.1:4747` works, and so do the LAN and
-   Tailscale addresses `flock url`/`flock status` print. Set `FLOCK_HOST=127.0.0.1` (or pass
-   `flock up --host 127.0.0.1`) for loopback-only; see
+   Tailscale addresses `flock url`/`flock status` print. flock has no authentication (see the
+   README's "When not to use flock" section), so this means anything that can reach the machine —
+   over the LAN, or over a Tailscale tailnet — can reach every board. Set `FLOCK_HOST=127.0.0.1` (or pass
+   `flock up --host 127.0.0.1`, or `{"host": "127.0.0.1"}` in `~/.flock/config.json` to make it the
+   standing default) for loopback-only; see
    [ADR 0015](adr/0015-bind-to-all-interfaces-by-default-and-advertise-only-reachable-urls.md).
 
 The installer prints the absolute path to the binary on stdout (so a sandboxed agent can run it

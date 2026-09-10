@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { DB_DIRNAME, DB_FILENAME, FlockError, globalDbPath, resolveDbPath } from "@flock/core";
-import { CANONICAL_API_PORT, CANONICAL_WEB_PORT, DEFAULT_HOST, REPO_ROOT, advertisedUrls, devUrl, portOffset, resolveCheckout, resolveHost, type Checkout } from "./dev.ts";
+import { CANONICAL_API_PORT, CANONICAL_WEB_PORT, DEFAULT_HOST, REPO_ROOT, advertisedUrls, baseUrl, devUrl, portOffset, resolveCheckout, resolveHost, type Checkout } from "./dev.ts";
 import { flockHome } from "./paths.ts";
 import { isStandalone, version } from "./runtime.ts";
 
@@ -104,6 +104,10 @@ export function parseRunInfo(text: string): RunInfo | undefined {
   const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : undefined);
   const apiPort = num(o.apiPort);
   if (apiPort === undefined) return undefined;
+  // A runfile from before ADR 0015 never named a wildcard bind it never did: the honest reading of
+  // a missing `host` is what every build before this change actually bound, `127.0.0.1`, not the
+  // new `0.0.0.0` default.
+  const host = typeof o.host === "string" ? o.host : "127.0.0.1";
   return {
     name: o.name,
     pid: o.pid,
@@ -111,11 +115,11 @@ export function parseRunInfo(text: string): RunInfo | undefined {
     mode: o.mode === "checkout" ? "checkout" : "binary",
     apiPort,
     webPort: num(o.webPort),
-    host: typeof o.host === "string" ? o.host : "127.0.0.1",
+    host,
     root: typeof o.root === "string" ? o.root : "",
     db: typeof o.db === "string" ? o.db : "",
     startedAt: typeof o.startedAt === "string" ? o.startedAt : "",
-    url: typeof o.url === "string" ? o.url : `http://localhost:${apiPort}`,
+    url: typeof o.url === "string" ? o.url : baseUrl(host, apiPort),
     version: typeof o.version === "string" ? o.version : undefined,
   };
 }
@@ -188,15 +192,19 @@ export function announceListening(live: { apiPort?: number; host?: string; db: s
   try {
     existing = parseRunInfo(readFileSync(file, "utf8"));
   } catch {}
+  const apiPort = live.apiPort ?? 4747;
+  const host = live.host ?? DEFAULT_HOST;
   const info = {
     name: "flock",
     mode: "binary" as Mode,
-    url: `http://localhost:${live.apiPort ?? 4747}`,
+    // Overwritten by fromParent.url below whenever `up` spawned this (it always sets RUNINFO_ENV);
+    // this is only the fallback for a malformed/missing RUNINFO_ENV.
+    url: baseUrl(host, apiPort),
     ...fromParent,
     webPid: existing?.pid === process.pid ? existing.webPid : undefined,
     pid: process.pid,
-    apiPort: live.apiPort ?? 4747,
-    host: live.host ?? DEFAULT_HOST,
+    apiPort,
+    host,
     db: live.db,
     startedAt: existing?.pid === process.pid && existing.startedAt ? existing.startedAt : new Date().toISOString(),
     version: version(),
@@ -261,7 +269,7 @@ export function planDaemon(args: {
   if (mode === "binary") {
     const apiPort = opts.port ?? (env.FLOCK_PORT ? Number(env.FLOCK_PORT) : 4747);
     const name = BINARY_RUNFILE_NAME;
-    const url = `http://${host === "0.0.0.0" ? "localhost" : host}:${apiPort}`;
+    const url = baseUrl(host, apiPort);
     return {
       name,
       mode,
@@ -330,10 +338,27 @@ export function resolvePlan(opts: Partial<DaemonOptions> = {}): DaemonPlan {
     effectiveCheckout = fallback.checkout;
     portFallbackNote = fallback.note;
   }
+  const name = mode === "binary" ? BINARY_RUNFILE_NAME : checkoutRunfileName((effectiveCheckout as Checkout).name);
+  const effectiveOpts: Partial<DaemonOptions> = { ...opts, host: preserveRunningHost(opts, process.env, readRunfile(name)) };
   const db = mode === "checkout" && effectiveCheckout?.db ? effectiveCheckout.db : resolveDbPath(opts.db).path;
-  const plan = planDaemon({ mode, serveCmd: serveCmd(), bun: bunPath(), cwd, db, checkout: effectiveCheckout, opts, env: process.env });
+  const plan = planDaemon({ mode, serveCmd: serveCmd(), bun: bunPath(), cwd, db, checkout: effectiveCheckout, opts: effectiveOpts, env: process.env });
   if (portFallbackNote) plan.portFallbackNote = portFallbackNote;
   return plan;
+}
+
+/**
+ * `up`/`restart` must not flip a daemon someone started with `--host 127.0.0.1` back onto the
+ * wildcard (or config) default just because a later invocation carries neither `--host` nor
+ * `FLOCK_HOST`: recomputing the default every time would otherwise fight the very thing that made
+ * the daemon idempotent (`settingsDiffer`) and would silently re-expose a deliberately closed
+ * daemon on `restart`. When there is no explicit override, an already-running daemon's own runfile
+ * wins over `FLOCK_HOST`'s absence and over config/default; a first start (no runfile yet) is
+ * unaffected and still resolves through `resolveHost`'s normal precedence. Pure over an injected
+ * runfile lookup so it's testable without one on disk.
+ */
+export function preserveRunningHost(opts: Partial<DaemonOptions>, env: Record<string, string | undefined>, existing: RunInfo | undefined): string | undefined {
+  if (opts.host !== undefined || env.FLOCK_HOST) return opts.host;
+  return existing?.host ?? opts.host;
 }
 
 /**
@@ -494,7 +519,7 @@ function probeHosts(host: string): string[] {
 }
 
 /** The daemon's addresses, host-aware: see `advertisedUrls` in dev.ts (ADR 0015). */
-function urls(d: { mode: Mode; apiPort: number; webPort?: number; host: string }): string[] {
+function urls(d: { mode: Mode; apiPort: number; webPort?: number; host: string }): { urls: string[]; hint?: string } {
   const port = d.mode === "checkout" ? (d.webPort ?? d.apiPort) : d.apiPort;
   return advertisedUrls(d.host, port);
 }
@@ -510,10 +535,13 @@ function describe(d: { name: string; mode: Mode; canonical?: boolean; apiPort: n
       : (d.canonical ?? d.name === CHECKOUT_RUNFILE_NAME)
         ? "canonical checkout"
         : `worktree "${d.name.replace(`${CHECKOUT_RUNFILE_NAME}@`, "")}"`;
-  const [local, ...net] = urls(d);
-  const web = [local, ...net.map((u) => `\n      ${u}`)].join("");
+  const { urls: list, hint } = urls(d);
+  const [local, ...net] = list;
+  const web = [local, ...net.map((u) => `\n      ${u}`), ...(hint ? [`\n      ${hint}`] : [])].join("");
   const isolated = d.db !== globalDbPath();
-  return `${where} at ${d.root}\n  web ${web}\n  api http://localhost:${d.apiPort}\n  db  ${d.db}${isolated ? " (isolated)" : " (shared)"}`;
+  // The api line uses the same host-aware URL as `web` in binary mode, not a hardcoded "localhost":
+  // a specific non-loopback --host means the API is only reachable at that host, not at loopback.
+  return `${where} at ${d.root}\n  web ${web}\n  api ${baseUrl(d.host, d.apiPort)}\n  db  ${d.db}${isolated ? " (isolated)" : " (shared)"}`;
 }
 
 /**
@@ -647,8 +675,12 @@ export async function daemonCommand(cmd: string, opts: DaemonOptions) {
     case "url": {
       const plan = resolvePlan(opts);
       // The running daemon's URL when there is one; otherwise the one `up` would print.
-      const list = urls(readRunfile(plan.name) ?? plan);
-      return console.log(opts.json ? JSON.stringify(list) : list.join("\n"));
+      const { urls: list, hint } = urls(readRunfile(plan.name) ?? plan);
+      // --json is URLs only, no hint line, so a machine consumer never has to filter it out.
+      if (opts.json) return console.log(JSON.stringify(list));
+      console.log(list.join("\n"));
+      if (hint) console.log(hint);
+      return;
     }
     default:
       throw new FlockError(`Unknown daemon command "${cmd}".`, "invalid");

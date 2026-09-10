@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { DB_DIRNAME, DB_FILENAME, FlockError } from "@flock/core";
+import { readConfig, type FlockConfig } from "./update.ts";
 
 /** The checkout this CLI's source lives in: the fallback when cwd is not inside a flock checkout. */
 export const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -97,19 +98,37 @@ export const devUrl = (c: Checkout) => `http://localhost:${c.webPort}`;
 
 /**
  * Bind-host resolution shared by `flock serve`, `flock up` (binary and checkout mode) and
- * `flock setup`: an explicit `--host` wins, then `FLOCK_HOST`, then the default of every
- * interface. See ADR 0015 for why the default is `0.0.0.0` rather than loopback.
+ * `flock setup`: an explicit `--host` wins, then `FLOCK_HOST`, then `"host"` in
+ * `~/.flock/config.json` (`docs/config.md`), then the default of every interface. See ADR 0015
+ * for why the default is `0.0.0.0` rather than loopback. `config` defaults to the real
+ * `~/.flock/config.json` (`readConfig()`); tests inject one instead of touching disk.
  */
 export const DEFAULT_HOST = "0.0.0.0";
 
-export function resolveHost(host: string | undefined, env: Record<string, string | undefined>): string {
-  return host ?? (env.FLOCK_HOST || undefined) ?? DEFAULT_HOST;
+export function resolveHost(host: string | undefined, env: Record<string, string | undefined>, config: Pick<FlockConfig, "host"> = readConfig()): string {
+  return host ?? (env.FLOCK_HOST || undefined) ?? config.host ?? DEFAULT_HOST;
 }
 
 /** Hosts that only ever mean "this machine, to itself". */
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 /** Hosts that mean "every interface". */
 const WILDCARD_HOSTS = new Set(["0.0.0.0", "::", ""]);
+
+/** `2001:db8::1` -> `[2001:db8::1]`, so it survives being followed by `:<port>` in a URL. Anything
+ *  already bracketed, or without a `:`, is untouched — IPv4 and hostnames alike. */
+function bracketed(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+export interface AdvertisedUrls {
+  /** Always present, always first: the loopback/localhost URL, except for a specific non-loopback
+   *  host, where it is the one address actually bound. What `flock serve`'s own banner, `--open`,
+   *  and the skill treat as *the* URL. */
+  urls: string[];
+  /** Present only for a loopback bind: how to reach the daemon from another device instead. Kept
+   *  out of `urls` so `flock url --json` stays URLs-only. */
+  hint?: string;
+}
 
 /**
  * What to advertise for a daemon bound to `host`:`port`. Pure over an injected interface list
@@ -119,11 +138,21 @@ const WILDCARD_HOSTS = new Set(["0.0.0.0", "::", ""]);
  *   LAN/Tailscale address `interfaces` names.
  * - any other specific host: only that host's URL — it's the one address we know is bound.
  */
-export function advertisedUrls(host: string, port: number, interfaces: string[] = networkHosts()): string[] {
+export function advertisedUrls(host: string, port: number, interfaces: string[] = networkHosts()): AdvertisedUrls {
   const loopback = `http://localhost:${port}`;
-  if (LOOPBACK_HOSTS.has(host)) return [loopback, "to reach from other devices: flock up --host 0.0.0.0"];
-  if (WILDCARD_HOSTS.has(host)) return [loopback, ...interfaces.map((h) => `http://${h}:${port}`)];
-  return [`http://${host}:${port}`];
+  if (LOOPBACK_HOSTS.has(host)) return { urls: [loopback], hint: "to reach from other devices: flock up --host 0.0.0.0" };
+  if (WILDCARD_HOSTS.has(host)) return { urls: [loopback, ...interfaces.map((h) => `http://${bracketed(h)}:${port}`)] };
+  return { urls: [`http://${bracketed(host)}:${port}`] };
+}
+
+/**
+ * `advertisedUrls(host, port).urls[0]`, without the `networkHosts()` call that default would make
+ * — that entry never depends on the interface list (it's always loopback, or the specific host).
+ * For a caller (`planDaemon`'s binary URL, `flock serve`'s own banner/`--open`) that only wants the
+ * one URL, this skips spawning `tailscale status` to compute entries it would then discard.
+ */
+export function baseUrl(host: string, port: number): string {
+  return advertisedUrls(host, port, []).urls[0];
 }
 
 /** Addresses another device can reach this machine on: LAN IPv4s and, when present, Tailscale. */
