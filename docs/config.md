@@ -4,13 +4,15 @@ Optional. flock works with no config file at all; this is only for turning somet
 
 ```json
 {
-  "autoupdate": false
+  "autoupdate": false,
+  "host": "127.0.0.1"
 }
 ```
 
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `autoupdate` | boolean | `true` | `false` stops an installed flock from updating itself. |
+| `host` | string | `0.0.0.0` | The bind host `flock serve`/`flock up` fall back to when there is no `--host` flag and no `FLOCK_HOST`. Precedence, highest first: `--host`, `FLOCK_HOST`, this key, then the built-in `0.0.0.0` default. Set it to `127.0.0.1` to keep every future `flock up` on this machine to loopback without having to pass `--host` (or export `FLOCK_HOST`) every time. See [ADR 0015](adr/0015-bind-to-all-interfaces-by-default-and-advertise-only-reachable-urls.md). |
 
 Unknown keys are ignored, and a file that is missing or not valid JSON is treated as an empty
 object — a broken config never stops a command from running.

@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planCheckout, portOffset, CANONICAL_API_PORT, CANONICAL_WEB_PORT } from "./dev.ts";
-import { canonicalFallbackPlan, checkoutRunfileName, isAlive, listRunfiles, parseRunInfo, planDaemon, portFree, portHeldByOther, portsOf, readRunfile, runfilePath, settingsDiffer, type DaemonPlan, type RunInfo } from "./daemon.ts";
+import { canonicalFallbackPlan, checkoutRunfileName, isAlive, listRunfiles, parseRunInfo, planDaemon, portFree, portHeldByOther, portsOf, preserveRunningHost, readRunfile, runfilePath, settingsDiffer, type DaemonPlan, type RunInfo } from "./daemon.ts";
 
 const dirs: string[] = [];
 function scratch(): string {
@@ -99,14 +99,21 @@ describe("readRunfile / listRunfiles pruning", () => {
 describe("planDaemon — installed binary", () => {
   const base = { mode: "binary" as const, serveCmd: ["/home/me/.flock/bin/flock"], cwd: "/home/me/work", db: "/home/me/.flock/flock.db", env: {} };
 
-  test("one serve child on :4747, named flock", () => {
+  test("one serve child on :4747, named flock, bound to every interface by default", () => {
     const p = planDaemon({ ...base, opts: {} });
     expect(p.name).toBe("flock");
     expect(p.apiPort).toBe(4747);
     expect(p.webPort).toBeUndefined();
-    expect(p.url).toBe("http://127.0.0.1:4747");
+    expect(p.host).toBe("0.0.0.0");
+    expect(p.url).toBe("http://localhost:4747");
     expect(p.children).toHaveLength(1);
-    expect(p.children[0]).toMatchObject({ key: "api", cmd: ["/home/me/.flock/bin/flock", "serve", "--port", "4747", "--host", "127.0.0.1"], cwd: "/home/me/work" });
+    expect(p.children[0]).toMatchObject({ key: "api", cmd: ["/home/me/.flock/bin/flock", "serve", "--port", "4747", "--host", "0.0.0.0"], cwd: "/home/me/work" });
+  });
+
+  test("FLOCK_HOST moves the default when no --host is given", () => {
+    const p = planDaemon({ ...base, env: { FLOCK_HOST: "127.0.0.1" }, opts: {} });
+    expect(p.host).toBe("127.0.0.1");
+    expect(p.url).toBe("http://localhost:4747");
   });
 
   test("--port and --host win over FLOCK_PORT", () => {
@@ -141,11 +148,19 @@ describe("planDaemon — checkout", () => {
     expect(p.apiPort).toBe(CANONICAL_API_PORT);
     expect(p.webPort).toBe(CANONICAL_WEB_PORT);
     expect(p.url).toBe(`http://localhost:${CANONICAL_WEB_PORT}`);
+    expect(p.host).toBe("0.0.0.0");
     expect(p.children.map((c) => c.key)).toEqual(["api", "web"]);
-    expect(p.children[0].cmd).toEqual(["/opt/bun/bin/bun", "--watch", join(root, "packages/cli/src/main.ts"), "serve", "--port", "4747", "--host", "127.0.0.1"]);
+    expect(p.children[0].cmd).toEqual(["/opt/bun/bin/bun", "--watch", join(root, "packages/cli/src/main.ts"), "serve", "--port", "4747", "--host", "0.0.0.0"]);
     expect(p.children[0].cwd).toBe(root);
-    expect(p.children[1].cmd).toEqual(["/opt/bun/bin/bun", "x", "vite", "--port", "5173", "--strictPort"]);
+    expect(p.children[1].cmd).toEqual(["/opt/bun/bin/bun", "x", "vite", "--port", "5173", "--strictPort", "--host", "0.0.0.0"]);
     expect(p.children[1].cwd).toBe(join(root, "packages/web"));
+  });
+
+  test("--host / FLOCK_HOST flow through to both children", () => {
+    const p = plan({ host: "127.0.0.1" });
+    expect(p.host).toBe("127.0.0.1");
+    expect(p.children[0].cmd).toContain("127.0.0.1");
+    expect(p.children[1].cmd.slice(-2)).toEqual(["--host", "127.0.0.1"]);
   });
 
   test("a worktree gets its ADR 0003 ports and its directory name, so runfiles do not collide", () => {
@@ -316,13 +331,45 @@ describe("settingsDiffer", () => {
 
   test("a different port, host, database or mode is a restart", () => {
     expect(settingsDiffer({ ...live, apiPort: 4800 }, p)).toBe(true);
-    expect(settingsDiffer({ ...live, host: "0.0.0.0" }, p)).toBe(true);
+    expect(settingsDiffer({ ...live, host: "127.0.0.1" }, p)).toBe(true);
     expect(settingsDiffer({ ...live, db: "/other.db" }, p)).toBe(true);
     expect(settingsDiffer({ ...live, mode: "checkout", webPort: 5173 }, p)).toBe(true);
   });
 
   test("pid, url and startedAt are not settings", () => {
     expect(settingsDiffer({ ...live, pid: 1, url: "http://elsewhere", startedAt: "then" }, p)).toBe(false);
+  });
+});
+
+describe("preserveRunningHost", () => {
+  const running = runfile({ host: "127.0.0.1" });
+
+  test("no explicit --host or FLOCK_HOST, and a runfile exists: the running host wins", () => {
+    expect(preserveRunningHost({}, {}, running)).toBe("127.0.0.1");
+  });
+
+  test("no runfile yet: nothing to preserve, opts.host passes through unchanged", () => {
+    expect(preserveRunningHost({}, {}, undefined)).toBeUndefined();
+    expect(preserveRunningHost({ host: "10.0.0.5" }, {}, undefined)).toBe("10.0.0.5");
+  });
+
+  test("an explicit --host always wins, even over a running daemon's different host", () => {
+    expect(preserveRunningHost({ host: "0.0.0.0" }, {}, running)).toBe("0.0.0.0");
+  });
+
+  test("FLOCK_HOST also wins over the running host: preserveRunningHost steps aside for it", () => {
+    // undefined, not "0.0.0.0" — it leaves opts.host as given so resolveHost (which does see
+    // FLOCK_HOST) resolves it, rather than baking the env var's value in here too.
+    expect(preserveRunningHost({}, { FLOCK_HOST: "0.0.0.0" }, running)).toBeUndefined();
+  });
+
+  test("an empty-string FLOCK_HOST does not count as explicit", () => {
+    expect(preserveRunningHost({}, { FLOCK_HOST: "" }, running)).toBe("127.0.0.1");
+  });
+
+  test("restart round-trip: a daemon started with --host 127.0.0.1 stays there on a bare restart", () => {
+    const plan = planDaemon({ mode: "binary", serveCmd: ["/bin/flock"], cwd: "/w", db: "/db/flock.db", env: {}, opts: { host: preserveRunningHost({}, {}, running) } });
+    expect(plan.host).toBe("127.0.0.1");
   });
 });
 
@@ -396,6 +443,44 @@ describe("up / status / down, for real", () => {
         expect(isAlive(pid)).toBe(false);
         pid = 0;
       } finally {
+        if (pid) try { process.kill(pid, "SIGKILL"); } catch {}
+      }
+    },
+    60_000,
+  );
+
+  test(
+    "restart and a bare up preserve a non-default --host across invocations",
+    async () => {
+      const home = scratch();
+      const work = scratch();
+      const port = await freePort();
+      const env = { FLOCK_HOME: home, FLOCK_DB: join(home, "flock.db"), FLOCK_PORT: "", FLOCK_WEB_PORT: "", FLOCK_HOST: "" };
+      let pid = 0;
+      try {
+        const started = await run(work, env, ["up", "--port", String(port), "--host", "127.0.0.1", "--json"]);
+        expect(started.code).toBe(0);
+        const info = JSON.parse(started.out) as RunInfo & { action: string };
+        expect(info.host).toBe("127.0.0.1");
+        pid = info.pid;
+
+        // A bare `up`, no --host: settingsDiffer must see the same host as already running, not
+        // the recomputed 0.0.0.0 default, or this would report a spurious restart.
+        const again = await run(work, env, ["up", "--port", String(port), "--json"]);
+        const againInfo = JSON.parse(again.out) as RunInfo & { action: string };
+        expect(againInfo.action).toBe("already running");
+        expect(againInfo.host).toBe("127.0.0.1");
+        expect(againInfo.pid).toBe(pid);
+
+        // `restart`, no --host either: the daemon comes back on the host it was actually running
+        // on, not the default.
+        const restarted = await run(work, env, ["restart", "--port", String(port), "--json"]);
+        const restartedInfo = JSON.parse(restarted.out) as RunInfo & { action: string };
+        expect(restartedInfo.host).toBe("127.0.0.1");
+        pid = restartedInfo.pid;
+        expect(isAlive(pid)).toBe(true);
+      } finally {
+        await run(work, env, ["down", "--all"]);
         if (pid) try { process.kill(pid, "SIGKILL"); } catch {}
       }
     },

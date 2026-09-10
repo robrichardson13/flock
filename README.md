@@ -47,6 +47,13 @@ The one-liner puts the `flock` binary in `~/.flock/bin`, writes the Claude Code 
 no git, no sudo. If `~/.flock/bin` is not already on your `PATH`, the installer adds it to your
 shell's rc file itself; set `FLOCK_NO_MODIFY_PATH=1` to opt out.
 
+The daemon binds every network interface by default (not just loopback), so the web app and API
+are reachable from your LAN and any Tailscale tailnet you're on, and flock has no authentication —
+anything that can reach the machine can reach every board. Pass `--host 127.0.0.1` to `flock up`
+(or set `FLOCK_HOST=127.0.0.1`, or `{"host": "127.0.0.1"}` in `~/.flock/config.json` to make it the
+standing default) to keep it to this machine only. See
+`docs/adr/0015-bind-to-all-interfaces-by-default-and-advertise-only-reachable-urls.md`.
+
 An installed flock checks for a new release in the background, at most once a day, and applies it.
 `FLOCK_NO_UPDATE=1` or `{"autoupdate": false}` in `~/.flock/config.json` turns that off;
 `flock upgrade` does it deliberately. See `docs/install.md` for platforms, env overrides, and
@@ -126,8 +133,11 @@ format; SQLite is the store (`docs/adr/0001-sqlite-is-the-store.md`).
 ## When not to use flock
 
 - One agent doing one bounded task. A board is overhead you will not get back.
-- Work that has to be visible to people who are not at this machine. flock is local and
-  single-user, with no auth and no sync between machines.
+- Work that has to be visible to people who are not at this machine. flock is single-user, with
+  no auth and no sync between machines — though `flock up` binds every network interface by
+  default, so anything on your LAN or Tailscale tailnet can reach it too; pass `--host 127.0.0.1`
+  (or set `FLOCK_HOST`) to keep it to this machine only. See
+  `docs/adr/0015-bind-to-all-interfaces-by-default-and-advertise-only-reachable-urls.md`.
 - A team that wants a real issue tracker. flock tracks a run in progress, not a backlog, and has
   no permissions and nothing that pings you outside the open tab. (One project's agents can still
   point at it as their tracker: `docs/agents/issue-tracker.md`.)
