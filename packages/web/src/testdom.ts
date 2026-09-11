@@ -24,6 +24,16 @@
 
 type Listener = (ev: any) => void;
 
+/** `el.style.setProperty`/`removeProperty` — the two calls `TopBar.tsx` makes to publish its
+ *  measured height as a CSS custom property. Properties also read/write as plain keys
+ *  (`style.color = ...`), same as a real `CSSStyleDeclaration`. */
+class FakeStyle {
+  [key: string]: unknown;
+  setProperty(name: string, value: string) { this[name] = value; }
+  removeProperty(name: string) { delete this[name]; }
+  getPropertyValue(name: string) { return (this[name] as string) ?? ""; }
+}
+
 /** A node with the surface React's host config and these hooks actually touch. */
 export class FakeNode {
   nodeType = 1;
@@ -33,7 +43,10 @@ export class FakeNode {
   parentNode: any = null;
   ownerDocument: any;
   attrs: Record<string, string> = {};
-  style: Record<string, string> = {};
+  style: FakeStyle = new FakeStyle();
+  /** `el.dataset.foo = ...` / `delete el.dataset.foo` — a plain object is enough; nothing here
+   *  reads it back through `getAttribute("data-foo")`. */
+  dataset: Record<string, string> = {};
   listeners: Record<string, Listener[]> = {};
   /** Scroll geometry is inert here: a test sets it to describe the pane it wants. */
   scrollTop = 0;
@@ -84,6 +97,9 @@ export class FakeNode {
   getAttribute(k: string) { return this.attrs[k] ?? null; }
   removeAttribute(k: string) { delete this.attrs[k]; }
   hasAttribute(k: string) { return k in this.attrs; }
+  /** A zeroed rect: geometry here is inert, same as scroll geometry above — a test that cares
+   *  about a real measurement sets it up itself; nothing does yet. */
+  getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }; }
   addEventListener(t: string, f: Listener) { (this.listeners[t] ||= []).push(f); }
   removeEventListener(t: string, f: Listener) { this.listeners[t] = (this.listeners[t] ?? []).filter((x) => x !== f); }
   /** Fire an event at this node only; no bubbling, which none of these hooks rely on. */
