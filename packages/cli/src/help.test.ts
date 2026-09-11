@@ -46,6 +46,15 @@ describe("flock --help / bare flock", () => {
     expect(dashH).toBe(help);
   });
 
+  test("--tailscale / --no-tailscale, FLOCK_TAILSCALE and FLOCK_TAILSCALE_BIN are documented", () => {
+    const text = runHelp();
+    expect(text).toContain("--tailscale");
+    expect(text).toContain("--no-tailscale");
+    expect(text).toContain("FLOCK_TAILSCALE");
+    expect(text).toContain("FLOCK_TAILSCALE_BIN");
+    expect(text).toContain("docs/adr/0018");
+  });
+
   test("`help formatting` is unaffected by the reorder", () => {
     const formatting = runHelp(["help", "formatting"]);
     expect(formatting).toContain("message formatting");

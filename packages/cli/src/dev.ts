@@ -121,38 +121,53 @@ function bracketed(host: string): string {
 }
 
 export interface AdvertisedUrls {
-  /** Always present, always first: the loopback/localhost URL, except for a specific non-loopback
-   *  host, where it is the one address actually bound. What `flock serve`'s own banner, `--open`,
-   *  and the skill treat as *the* URL. */
+  /** Always present, always first: the `https://<magicdns>` tailnet URL when a `tailscale serve`
+   *  mount is active (ADR 0018), else the loopback/localhost URL, except for a specific
+   *  non-loopback host, where it is the one address actually bound. What `flock url`, `flock
+   *  status` and the `up`/`serve` banner text lead with. `--open` (in `daemon.ts`'s `up` and
+   *  `main.ts`'s `serve`) deliberately does *not* follow this to the https entry: it stays on the
+   *  loopback/bound address, since the browser it opens is on this machine and the conductor
+   *  skill's "take the first line of `flock url` as the base" still needs a same-machine address
+   *  it can build on — see the skill implication noted in card 3's resolution. */
   urls: string[];
-  /** Present only for a loopback bind: how to reach the daemon from another device instead. Kept
-   *  out of `urls` so `flock url --json` stays URLs-only. */
+  /** Present only for a loopback bind with no tailscale mount: how to reach the daemon from
+   *  another device instead. Kept out of `urls` so `flock url --json` stays URLs-only. Dropped
+   *  once a tailscale mount exists — there is now a way to reach it from elsewhere, and it is
+   *  `urls[0]`. */
   hint?: string;
 }
 
 /**
  * What to advertise for a daemon bound to `host`:`port`. Pure over an injected interface list
- * (`networkHosts()` in production) so it's testable without touching the network. ADR 0015:
- * - loopback bind: just the loopback URL, plus a hint on how to reach it from elsewhere.
- * - wildcard bind: loopback first (what the skill and `flock url`'s first line use), then every
- *   LAN/Tailscale address `interfaces` names.
+ * (`networkHosts()` in production) so it's testable without touching the network. ADR 0015, plus
+ * ADR 0018's `tailscaleUrl`:
+ * - a live tailscale mount: its `https://<magicdns>` URL leads, ahead of everything below.
+ * - loopback bind: just the loopback URL, plus a hint on how to reach it from elsewhere (unless a
+ *   tailscale mount already provides one).
+ * - wildcard bind: loopback first (what the skill and `flock url`'s first *http* line use), then
+ *   every LAN/Tailscale address `interfaces` names.
  * - any other specific host: only that host's URL — it's the one address we know is bound.
  */
-export function advertisedUrls(host: string, port: number, interfaces: string[] = networkHosts()): AdvertisedUrls {
+export function advertisedUrls(host: string, port: number, interfaces: string[] = networkHosts(), tailscaleUrl?: string): AdvertisedUrls {
   const loopback = `http://localhost:${port}`;
-  if (LOOPBACK_HOSTS.has(host)) return { urls: [loopback], hint: "to reach from other devices: flock up --host 0.0.0.0" };
-  if (WILDCARD_HOSTS.has(host)) return { urls: [loopback, ...interfaces.map((h) => `http://${bracketed(h)}:${port}`)] };
-  return { urls: [`http://${bracketed(host)}:${port}`] };
+  const base: AdvertisedUrls = LOOPBACK_HOSTS.has(host)
+    ? { urls: [loopback], hint: tailscaleUrl ? undefined : "to reach from other devices: flock up --host 0.0.0.0" }
+    : WILDCARD_HOSTS.has(host)
+      ? { urls: [loopback, ...interfaces.map((h) => `http://${bracketed(h)}:${port}`)] }
+      : { urls: [`http://${bracketed(host)}:${port}`] };
+  return tailscaleUrl ? { urls: [tailscaleUrl, ...base.urls], hint: base.hint } : base;
 }
 
 /**
- * `advertisedUrls(host, port).urls[0]`, without the `networkHosts()` call that default would make
- * — that entry never depends on the interface list (it's always loopback, or the specific host).
- * For a caller (`planDaemon`'s binary URL, `flock serve`'s own banner/`--open`) that only wants the
- * one URL, this skips spawning `tailscale status` to compute entries it would then discard.
+ * `advertisedUrls(host, port, [], tailscaleUrl).urls[0]`, without the `networkHosts()` call that
+ * default would make — that entry never depends on the interface list (it's always the tailscale
+ * URL when given one, else loopback, else the specific host). For a caller that only wants the one
+ * URL, this skips spawning `tailscale status` to compute entries it would then discard. Callers
+ * that intentionally want the same-machine address regardless of any active mount (`--open` in
+ * `daemon.ts`/`main.ts`) pass no `tailscaleUrl`.
  */
-export function baseUrl(host: string, port: number): string {
-  return advertisedUrls(host, port, []).urls[0];
+export function baseUrl(host: string, port: number, tailscaleUrl?: string): string {
+  return advertisedUrls(host, port, [], tailscaleUrl).urls[0];
 }
 
 /** Addresses another device can reach this machine on: LAN IPv4s and, when present, Tailscale. */

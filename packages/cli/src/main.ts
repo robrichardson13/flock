@@ -90,6 +90,15 @@ IDENTITY
                     ~/.flock/config.json, then the default 0.0.0.0 (every interface). Use
                     127.0.0.1 to bind loopback only. A bare up/restart with none of these given
                     keeps a running daemon's own host rather than resetting it. See docs/adr/0015.
+  --tailscale       Front the browser-facing port with \`tailscale serve\` for an HTTPS origin on
+  --no-tailscale    the tailnet (https://<machine>.<tailnet>.ts.net). Precedence: --tailscale/
+                    --no-tailscale, FLOCK_TAILSCALE, "tailscale" in ~/.flock/config.json, then off.
+                    FLOCK_TAILSCALE_BIN overrides where the tailscale binary is found. Refuses
+                    (never warns) when tailscale is missing, logged out, or the port is already
+                    mounted elsewhere. A bare up/restart keeps a running daemon's own choice, like
+                    --host. \`flock down\` tears the mount down. \`url\`/\`status\`/the up and serve
+                    banners list the https URL first once a mount is active. See docs/adr/0018
+                    and docs/config.md.
 
 BOARDS
   boards [--all] [--here]             List boards (--here: only this directory's)
@@ -133,25 +142,35 @@ SETUP
   serve [--port 4747] [--host 0.0.0.0] [--open]
                                       Run the web UI + HTTP API in the foreground. Binds every
                                       interface by default; --host 127.0.0.1 (or FLOCK_HOST) for
-                                      loopback only.
+                                      loopback only. Prints the https tailnet URL first when its
+                                      parent (\`up --foreground --tailscale\`) established a mount;
+                                      --open still opens the loopback address.
   setup [--no-start] [--skill-only]   Write ~/.claude/skills/flock/SKILL.md, then \`flock up\`
                                       (a symlinked destination is left alone). --skill-only
                                       does just the skill; --no-start skips starting the daemon.
                                       Reports ~/.flock/skill.md (your personalization of the
                                       skill, see docs/config.md) when it exists; silent when not.
   up [--port N] [--host H] [--isolated | --db PATH] [--foreground] [--open]
+     [--tailscale | --no-tailscale]
                                       Start the daemon in the background (detached; survives the
                                       terminal). In a checkout it starts the dev environment
                                       instead: bun --watch + vite on this checkout's ports.
                                       Idempotent: already running / started / restarted with new
-                                      settings. --foreground runs \`serve\` here instead.
-  down [--all]                        Stop this directory's daemon (--all: every one on the machine)
-  restart                             Stop it and start it again
-  status                              This directory's daemon, plus every other one running
+                                      settings. --foreground runs \`serve\` here instead. --tailscale
+                                      fronts the browser-facing port with \`tailscale serve\`; --open
+                                      always opens the loopback address, never the tailnet one.
+  down [--all]                        Stop this directory's daemon (--all: every one on the machine).
+                                      Tears down its tailscale mount first, if it made one.
+  restart                             Stop it and start it again (keeps its tailscale choice, like host)
+  status                              This directory's daemon, plus every other one running. Adds a
+                                      \`tls\` line naming the tailscale mount when one is active.
   logs [-f] [-n 40]                   Tail ~/.flock/logs/<name>.log
-  url                                 Print the URL. Bound to 0.0.0.0 (the default): loopback,
-                                      then LAN and Tailscale addresses. Bound to loopback only:
-                                      just the loopback URL, plus a hint to reach it elsewhere.
+  url                                 Print the URL. Leads with the https tailnet URL when a
+                                      tailscale mount is active (see --tailscale above), then:
+                                      bound to 0.0.0.0 (the default): loopback, then LAN and
+                                      Tailscale addresses. Bound to loopback only: just the
+                                      loopback URL, plus a hint to reach it elsewhere (dropped once
+                                      a tailscale mount already provides one).
   upgrade [--version=V]               Reinstall flock: re-runs the installer beside this binary,
                                       refreshes the skill and restarts a running daemon. An
                                       installed flock also does this on its own once a day; set
@@ -572,8 +591,10 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       const server = serve({ flock, dbPath: ctx.dbPath, port, hostname, staticDir, assets, installScriptPath, flockHome: flockHome() });
       // The first advertisedUrls entry, never the literal bind host: a wildcard bind would
       // otherwise print/--open the unusable `http://0.0.0.0:PORT`. `FLOCK_TAILSCALE_URL` is set by
-      // `up --foreground --tailscale` just above, before this same process fell through to `serve`.
-      const url = process.env.FLOCK_TAILSCALE_URL || baseUrl(hostname, server.port ?? port);
+      // `up --foreground --tailscale` just above, before this same process fell through to
+      // `serve` — it leads the printed banner (ADR 0018 §8), same as `flock url`/`status`.
+      const loopback = baseUrl(hostname, server.port ?? port);
+      const url = process.env.FLOCK_TAILSCALE_URL || loopback;
       const ui = assets?.["/index.html"] ? "embedded" : existsSync(join(staticDir, "index.html")) ? "built" : "not built (run `bun run build`, or use `bun run dev`)";
       console.log(`flock serving ${url}\n  db: ${ctx.dbPath}\n  ui: ${ui}`);
       // Spawned by `flock up`? Write the runfile now that we are listening: it is up's readiness signal.
@@ -582,7 +603,9 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       // A long-lived daemon is the one process that can keep itself current: 60s + jitter, then 6h.
       const { startDaemonUpdateChecks } = await import("./update.ts");
       startDaemonUpdateChecks();
-      if (bool(flags.open)) Bun.spawn(["open", url]);
+      // Deliberately `loopback`, not `url`: `--open` puts a browser tab on this machine, so it
+      // stays off the tailnet round-trip even when the banner above led with the https origin.
+      if (bool(flags.open)) Bun.spawn(["open", loopback]);
       await new Promise(() => {});
       return;
     }

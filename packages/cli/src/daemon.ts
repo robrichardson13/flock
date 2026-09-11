@@ -550,16 +550,27 @@ function probeHosts(host: string): string[] {
   return host === "0.0.0.0" || host === "::" || host === "" ? [host || "0.0.0.0", "127.0.0.1"] : [host];
 }
 
-/** The daemon's addresses, host-aware: see `advertisedUrls` in dev.ts (ADR 0015). */
-function urls(d: { mode: Mode; apiPort: number; webPort?: number; host: string }): { urls: string[]; hint?: string } {
-  return advertisedUrls(d.host, browserPort(d));
+/** The daemon's addresses, host-aware: see `advertisedUrls` in dev.ts (ADR 0015, ADR 0018). */
+function urls(d: { mode: Mode; apiPort: number; webPort?: number; host: string; tailscaleUrl?: string }): { urls: string[]; hint?: string } {
+  return advertisedUrls(d.host, browserPort(d), undefined, d.tailscaleUrl);
 }
 
 /**
  * Where, on what ports, against which database. Takes the live runfile when there is one, so
  * `status` describes what is actually running rather than what `up` would start.
  */
-function describe(d: { name: string; mode: Mode; canonical?: boolean; apiPort: number; webPort?: number; host: string; root: string; db: string }): string {
+function describe(d: {
+  name: string;
+  mode: Mode;
+  canonical?: boolean;
+  apiPort: number;
+  webPort?: number;
+  host: string;
+  root: string;
+  db: string;
+  tailscaleUrl?: string;
+  tailscaleTarget?: string;
+}): string {
   const where =
     d.mode === "binary"
       ? "installed daemon"
@@ -572,7 +583,12 @@ function describe(d: { name: string; mode: Mode; canonical?: boolean; apiPort: n
   const isolated = d.db !== globalDbPath();
   // The api line uses the same host-aware URL as `web` in binary mode, not a hardcoded "localhost":
   // a specific non-loopback --host means the API is only reachable at that host, not at loopback.
-  return `${where} at ${d.root}\n  web ${web}\n  api ${baseUrl(d.host, d.apiPort)}\n  db  ${d.db}${isolated ? " (isolated)" : " (shared)"}`;
+  // It never gets the tailscale URL: the mount fronts the browser-facing port only (ADR 0018 d2).
+  const api = `\n  api ${baseUrl(d.host, d.apiPort)}`;
+  // Names the mechanism and its target, so a reader who did not start the daemon knows where the
+  // certificate comes from and what to turn off (ADR 0018 §8).
+  const tls = d.tailscaleTarget ? `\n  tls tailscale serve :443 -> ${d.tailscaleTarget}` : "";
+  return `${where} at ${d.root}\n  web ${web}${api}\n  db  ${d.db}${isolated ? " (isolated)" : " (shared)"}${tls}`;
 }
 
 /**
@@ -636,7 +652,10 @@ async function up(plan: DaemonPlan, opts: DaemonOptions, label?: "restarted", he
     if (plan.tailscale) writeRunfile(runfilePath(plan.name), info);
     if (opts.json) console.log(JSON.stringify({ action, ...info, ...(fallback ? { portFallback: fallback } : {}) }));
     else console.log(`${fallback ? `${fallback}\n\n` : ""}${action}: pid ${existing.pid}\n\n${describe(info)}\n\nLogs: flock logs`);
-    if (opts.open) openUrl(info.url);
+    // Deliberately not `info.url` (the tailscale https URL when a mount is active): `--open`
+    // opens a browser on this machine, so it stays on the loopback/bound address rather than
+    // round-tripping through the tailnet — see the doc comment on `AdvertisedUrls.urls`.
+    if (opts.open) openUrl(baseUrl(plan.host, browserPort(plan)));
     return;
   }
   if (existing) {
@@ -666,7 +685,8 @@ async function up(plan: DaemonPlan, opts: DaemonOptions, label?: "restarted", he
   if (fallback) console.log(fallback);
   console.log(`${action}: pid ${info.pid}${pids.web !== undefined ? `, web pid ${pids.web}` : ""}`);
   console.log(`\n${describe(info)}\n\nLogs: flock logs`);
-  if (opts.open) openUrl(info.url);
+  // Same reasoning as the "already running" branch above: stay on loopback, not the tailscale URL.
+  if (opts.open) openUrl(baseUrl(plan.host, browserPort(plan)));
 }
 
 function openUrl(url: string) {

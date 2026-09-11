@@ -629,13 +629,25 @@ exit 1
         expect(info.tailscaleTarget).toBe(`http://127.0.0.1:${port}`);
         expect(info.url).toBe("https://stub-machine.tailnet.ts.net");
 
-        // `flock url`/`status` leading with this URL is card 3's job (advertisedUrls' tailscale
-        // parameter); here we only assert the runfile — what card 3 reads — carries it.
         const status = await run(work, env, ["status", "--json"]);
         const here = JSON.parse(status.out).here as RunInfo;
         expect(here.tailscale).toBe(true);
         expect(here.tailscaleUrl).toBe("https://stub-machine.tailnet.ts.net");
         expect(here.tailscaleTarget).toBe(`http://127.0.0.1:${port}`);
+
+        // Card 3: `flock url` (and `--json`) lead with the https URL, the loopback URL still
+        // follows, and human `status`/`up` text shows both plus a `tls` line naming the target.
+        const urlJson = await run(work, env, ["url", "--json"]);
+        const urls = JSON.parse(urlJson.out) as string[];
+        expect(urls[0]).toBe("https://stub-machine.tailnet.ts.net");
+        expect(urls).toContain(`http://localhost:${port}`);
+
+        const urlText = await run(work, env, ["url"]);
+        expect(urlText.out.trim().split("\n")[0]).toBe("https://stub-machine.tailnet.ts.net");
+
+        const statusText = await run(work, env, ["status"]);
+        expect(statusText.out).toContain("https://stub-machine.tailnet.ts.net");
+        expect(statusText.out).toContain(`tls tailscale serve :443 -> http://127.0.0.1:${port}`);
 
         expect(existsSync(stub.mountFile)).toBe(true);
 
