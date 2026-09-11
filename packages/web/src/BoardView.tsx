@@ -1675,7 +1675,9 @@ function Channel({ boardId, snap, onSent }: { boardId: string; snap: Snapshot; o
         attachable
         onSubmit={async (t, ids, attachments) => {
           const tempId = nextTempId();
-          const optimistic: Message = { id: tempId, boardId, author: me, authorKind: "human", body: t, createdAt: new Date().toISOString(), attachments };
+          // num 0 is the "not numbered yet" placeholder: the server assigns the real one, and the
+          // optimistic row is replaced by `real` the moment it comes back.
+          const optimistic: Message = { id: tempId, boardId, num: 0, author: me, authorKind: "human", body: t, createdAt: new Date().toISOString(), attachments, reactions: [] };
           setPendingSends((prev) => [...prev, { tempId, entry: optimistic, sending: true, draftText: t, draftAttachmentIds: ids }]);
           stick();
           try {
