@@ -16,7 +16,7 @@ import { TopBar, TopBarProvider } from "./TopBar.tsx";
 import { keyboardShrunk, readoutRequested, shellHeight } from "./vv.ts";
 import { VVReadout } from "./VVReadout.tsx";
 import { ActorLinks, Avatar, Icons, OverlayProvider, PromptProvider, PushStack, useEdgeSwipePeek, useIsMobile, usePrompt } from "./ui.tsx";
-import { PushPanel, PushRow } from "./Notifications.tsx";
+import { PushPanel } from "./Notifications.tsx";
 import { currentSubscription, disablePush, enablePush, primePushKey, pushKeyNow, pushState, readPushEnv, withServerKey, type PushState } from "./push.ts";
 
 /**
@@ -550,13 +550,13 @@ function Shell() {
         {/* The one top bar, above the push stack and above the banners: it is the same DOM
             node on Home, on a board and on a card, so navigating swaps its contents in place
             instead of sliding a second bar past the first, and its y origin never moves. */}
-        <TopBar route={route} actor={actor} boardLabel={boardLabel} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} />
+        <TopBar route={route} actor={actor} boardLabel={boardLabel} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} pushKind={pushKind} />
         {streamHint}
         {errorBanner}
         <PushStack
           routeKey={route.board ?? "#home"}
           depth={route.board ? 1 : 0}
-          under={route.board && peek ? <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} pushBusy={pushBusy} pushError={pushError} onEnablePush={onEnablePush} onOpenNotifications={onOpenNotifications} /> : null}
+          under={route.board && peek ? <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} onOpenNotifications={onOpenNotifications} /> : null}
         >
           {route.board ? (
             // Inside a board, every avatar drawn below opens that actor's view (#49).
@@ -564,7 +564,7 @@ function Shell() {
               <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} />
             </ActorLinks>
           ) : (
-            <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} pushBusy={pushBusy} pushError={pushError} onEnablePush={onEnablePush} onOpenNotifications={onOpenNotifications} />
+            <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} onOpenNotifications={onOpenNotifications} />
           )}
         </PushStack>
         {newBoardDialog}
@@ -582,7 +582,7 @@ function Shell() {
         {streamHint}
         <main className="main">
           {errorBanner}
-          <Home boards={boards} needs={needs} actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} pushBusy={pushBusy} pushError={pushError} onEnablePush={onEnablePush} onOpenNotifications={onOpenNotifications} />
+          <Home boards={boards} needs={needs} actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} onOpenNotifications={onOpenNotifications} />
         </main>
         {newBoardDialog}
         {pushPanel}
@@ -597,7 +597,7 @@ function Shell() {
         {errorBanner}
         {/* `route.board` is set: the index returned its own shell above. */}
         <ActorLinks boardRef={route.board}>
-          <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} />
+          <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} pushKind={pushKind} />
         </ActorLinks>
       </main>
       {newBoardDialog}
@@ -609,14 +609,11 @@ function Shell() {
 /** What Home caches between visits: exactly the two payloads its own fetch produces. */
 interface HomeSnapshot { boards: BoardSummary[]; needs: NeedsHuman[] }
 
-function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswered, loaded, seeded, pushKind, pushBusy, pushError, onEnablePush, onOpenNotifications }: {
+function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswered, loaded, seeded, pushKind, onOpenNotifications }: {
   boards: BoardSummary[]; needs: NeedsHuman[]; actor: string; dbPath?: string; onNewBoard: () => void; onRename: () => void; onAnswered: () => void; loaded: boolean; seeded: boolean;
-  /** This device's push state and the row's `Turn on`/panel-opening callbacks — owned by
-   *  `Shell` (#5, card C) so the same panel is reachable from a board screen too. */
+  /** This device's push state and the panel-opening callback for the desktop `AppTopBar`'s
+   *  bell — owned by `Shell` (#8) so the same panel is reachable from a board screen too. */
   pushKind: PushState["kind"];
-  pushBusy: boolean;
-  pushError: string | null;
-  onEnablePush: () => void;
   onOpenNotifications: () => void;
 }) {
   const mobile = useIsMobile();
@@ -647,7 +644,7 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
   return (
     <div className="screen screen-home">
       {!mobile && (
-        <AppTopBar actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications}
+        <AppTopBar actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} pushKind={pushKind}
           action={<button className="btn btn-primary" onClick={onNewBoard}>{Icons.plus(16)} New board</button>} />
       )}
       {/* On a phone the bar is the shell's, mounted once above the push stack: see TopBar.tsx. */}
@@ -721,19 +718,6 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
             })}
           </>
         )}
-
-        {/* Its own `Notifications` section head, in the same gutter as Boards/Active/Idle
-            (§1.1, §8) — the foot of the boards list, not a settings surface. The panel itself
-            is `Shell`'s: this device's own state belongs to the app, not to Home, so the same
-            row/menu/action-sheet trio all open one panel regardless of which screen they're on
-            (§1.3, card C). */}
-        <PushRow
-          state={{ kind: pushKind } as PushState}
-          busy={pushBusy}
-          error={pushError}
-          onEnable={onEnablePush}
-          onOpen={onOpenNotifications}
-        />
       </div>
     </div>
   );

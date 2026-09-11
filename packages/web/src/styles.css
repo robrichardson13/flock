@@ -1404,19 +1404,9 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 .empty p { margin: 0; max-width: 32ch; }
 .stat-row { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); font-size: var(--t-foot); color: var(--muted); }
 
-/* The notifications row (ADR 0017): a `.list-row` like a board row, and the panel it opens.
+/* The notifications panel (ADR 0017), opened from the bell beside the avatar (#8).
    §9: every colour here is an existing semantic token; no hex, no dimming via opacity. */
-.push-row { width: 100%; background: none; border: none; text-align: left; font: inherit; }
-.push-icon { display: inline-flex; flex: none; color: var(--text); }
-.push-icon--blocked { color: var(--status-blocked); }
-.push-icon--needs-install { color: var(--status-await); }
-.push-icon--server-off, .push-icon--insecure, .push-icon--unsupported { color: var(--muted); }
 .push-meta { font-size: var(--t-foot); line-height: var(--lh-foot); color: var(--muted); }
-.push-dot { width: 7px; height: 7px; border-radius: 999px; flex: none; display: none; }
-.push-dot--on { display: block; background: var(--dot-working); }
-.push-dot--blocked { display: block; background: var(--status-blocked); }
-.push-dot--needs-install { display: block; background: var(--status-await); }
-@media (prefers-reduced-motion: no-preference) { .push-dot--on { animation: pill-pulse 2s ease-in-out infinite; } }
 .push-panel { display: flex; flex-direction: column; gap: var(--s4); }
 .push-lead { margin: 0; max-width: 42ch; }
 .push-note { display: flex; gap: var(--s3); padding: var(--s3); border-radius: var(--r-md);
@@ -1431,6 +1421,15 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 .push-hint { margin: var(--s2) 0 0; font-size: var(--t-foot); line-height: var(--lh-foot); color: var(--muted); }
 .push-actions, .push-test { display: flex; flex-direction: column; gap: var(--s2); }
 .push-device-remove { width: var(--tap); height: var(--tap); color: var(--muted); }
+
+/* The entrance itself (#8): a quiet icon-only bell beside the avatar, desktop and phone alike.
+   It carries a dot only when the state needs attention (`blocked`) — nothing for `on`/`off`,
+   so the button reads as chrome, not as a status readout. */
+.notify-btn { position: relative; color: var(--muted); }
+.notify-dot {
+  position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 999px;
+  background: var(--status-blocked); border: 1.5px solid var(--bg);
+}
 
 /* ---------- cold-start skeletons (#43) ---------- */
 /* A cached snapshot paints the settled screen on every refresh of something already seen,

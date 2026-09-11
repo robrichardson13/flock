@@ -19,6 +19,7 @@ import { ROSTER_NAV_INITIAL, rosterNav } from "./rosterNav.ts";
 import { CardPage } from "./CardPage.tsx";
 import { Brand } from "./Mark.tsx";
 import { AppTopBar } from "./shell.tsx";
+import type { PushState } from "./push.ts";
 import { Markdownish, MessageBody } from "./markdown.tsx";
 import { NeedsYou } from "./NeedsYou.tsx";
 import { agoText, shortPath } from "./App.tsx";
@@ -175,12 +176,14 @@ function CardsScrollBody({ boardSlug, listRef, children }: { boardSlug: string; 
   return <div className="screen-body" ref={combinedRef}>{children}</div>;
 }
 
-export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, boards = [], needs = [], actor = "", onNewBoard = () => {}, onRename = () => {}, onOpenNotifications = () => {} }: { boardRef: string; cardNum?: number; actorName?: string; tab: BoardTab; onBoardsChanged: () => void;
+export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, boards = [], needs = [], actor = "", onNewBoard = () => {}, onRename = () => {}, onOpenNotifications = () => {}, pushKind }: { boardRef: string; cardNum?: number; actorName?: string; tab: BoardTab; onBoardsChanged: () => void;
   /** Desktop shell (P1.3): the top bar carries the boards switcher and who you are, so the
       board page needs what the sidebar used to be handed. Unused by the mobile branch. */
   boards?: BoardSummary[]; needs?: NeedsHuman[]; actor?: string; onNewBoard?: () => void; onRename?: () => void;
-  /** The identity menu's `Notifications` entry: opens the panel `Shell` owns (#5, card C). */
-  onOpenNotifications?: () => void }) {
+  /** Opens the panel `Shell` owns behind the top bar's bell (#8). */
+  onOpenNotifications?: () => void;
+  /** This device's push state, so the bell can swap to `bellOff` and carry its warn dot when `blocked`. */
+  pushKind?: PushState["kind"] }) {
   const mobile = useIsMobile();
   // #7: the bar publishes its resting height so the keyboard can take it back a strip at a
   // time instead of the whole bar in one frame.
@@ -661,7 +664,7 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
   // from the server — so the top bar, the tab bar and the chrome colour paint now and only
   // the pane waits. The bare full-screen "Loading…" this replaces had neither bar, so the
   // iOS status bar sampled --bg and stepped to --bg-chrome when the board arrived (#40).
-  if (!snap) return <BoardSkeleton boardRef={boardRef} tab={tab} card={cardNum} mobile={mobile} boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} />;
+  if (!snap) return <BoardSkeleton boardRef={boardRef} tab={tab} card={cardNum} mobile={mobile} boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} pushKind={pushKind} />;
 
   const b = snap.board;
   // `displayCards` only ever differs from `snap.cards` for the mobile Cards pane mid-beat
@@ -943,6 +946,7 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
         onNewBoard={onNewBoard}
         onRename={onRename}
         onOpenNotifications={onOpenNotifications}
+        pushKind={pushKind}
         action={<button className="btn btn-primary" onClick={() => setNewCard(true)}>{Icons.plus(16)} New card</button>}
         trailing={(
           <Menu label="Board menu" trigger={Icons.more()}>
@@ -1170,13 +1174,13 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
  * tab bar and both chrome surfaces — and only the part that genuinely needs the server is a
  * placeholder, at the row heights the Cards tab uses (#48) so the swap moves nothing.
  */
-function BoardSkeleton({ boardRef, tab, card, mobile, boards = [], needs = [], actor = "", onNewBoard = () => {}, onRename = () => {}, onOpenNotifications = () => {} }: { boardRef: string; tab: BoardTab; card?: number; mobile: boolean;
+function BoardSkeleton({ boardRef, tab, card, mobile, boards = [], needs = [], actor = "", onNewBoard = () => {}, onRename = () => {}, onOpenNotifications = () => {}, pushKind }: { boardRef: string; tab: BoardTab; card?: number; mobile: boolean;
   /** Everything the route already knows before the board's own snapshot lands (#21/C2): the
       boards list, who is waiting, and who you are all come from Home's fetch, not this
       board's, so the top bar's switcher and identity are real and functional here, not
       placeholders. Only the pieces that depend on *this* board (its menu, its "New card")
       are drawn as inert shapes. */
-  boards?: BoardSummary[]; needs?: NeedsHuman[]; actor?: string; onNewBoard?: () => void; onRename?: () => void; onOpenNotifications?: () => void }) {
+  boards?: BoardSummary[]; needs?: NeedsHuman[]; actor?: string; onNewBoard?: () => void; onRename?: () => void; onOpenNotifications?: () => void; pushKind?: PushState["kind"] }) {
   if (!mobile) {
     return (
       <div className="board-view">
@@ -1193,6 +1197,7 @@ function BoardSkeleton({ boardRef, tab, card, mobile, boards = [], needs = [], a
           onNewBoard={onNewBoard}
           onRename={onRename}
           onOpenNotifications={onOpenNotifications}
+          pushKind={pushKind}
           action={<span className="btn btn-primary sk-btn" aria-hidden>{Icons.plus(16)} New card</span>}
           trailing={<span className="icon-btn" aria-hidden>{Icons.more()}</span>}
         />

@@ -86,54 +86,6 @@ export const TREATMENT: Record<PushKind, Treatment> = {
 };
 
 /**
- * The Home row: one tap opens the panel. In `off` the trailing button enables directly, without
- * a round trip through the panel — the row's own gesture is a valid place to fire
- * `Notification.requestPermission()` from.
- */
-export function PushRow({ state, busy, error, onEnable, onOpen }: {
-  state: PushState;
-  busy: boolean;
-  error: string | null;
-  onEnable: () => void;
-  onOpen: () => void;
-}) {
-  const t = TREATMENT[state.kind];
-  return (
-    <section className="section">
-      <div className="section-head"><h2>Notifications</h2></div>
-      <div className="list">
-        <button className="list-row push-row" onClick={onOpen}>
-          <span className={`push-icon push-icon--${state.kind}`}>{t.icon(20)}</span>
-          <div className="list-main">
-            <div className="list-title">Notifications</div>
-            {error
-              ? <div className="inline-error">{error}</div>
-              : <div className="push-meta">{t.meta}</div>}
-          </div>
-          {state.kind === "off"
-            ? (
-              <button
-                className="btn btn-primary push-row-btn"
-                disabled={busy}
-                aria-busy={busy}
-                onClick={(e) => { e.stopPropagation(); onEnable(); }}
-              >
-                {busy ? "Turning on…" : "Turn on notifications"}
-              </button>
-            )
-            : (
-              <>
-                <span className={`push-dot push-dot--${state.kind}`} />
-                <span className="chev">{Icons.chevron(18)}</span>
-              </>
-            )}
-        </button>
-      </div>
-    </section>
-  );
-}
-
-/**
  * The panel: a `Sheet` (bottom sheet on the phone, centred dialog on desktop) opened from either
  * the row or the identity menu. `on` additionally owns the test-send button and the device list
  * (§5) — both fetched here, not threaded down from `App.tsx`, since they are this panel's own

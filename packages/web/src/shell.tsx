@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { BoardSummary, NeedsHuman } from "./api.ts";
 import { BoardNavItem } from "./BoardRow.tsx";
 import { Brand } from "./Mark.tsx";
+import type { PushState } from "./push.ts";
 import { Avatar, Icons, Menu, useIsMobile } from "./ui.tsx";
 
 /**
@@ -14,7 +15,7 @@ import { Avatar, Icons, Menu, useIsMobile } from "./ui.tsx";
  * inside the same `--shell-max` box as the page below, so Home and a board share a left
  * edge (F10).
  */
-export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoard, onRename, onOpenNotifications, action, trailing }: {
+export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoard, onRename, onOpenNotifications, pushKind, action, trailing }: {
   /** Present on a board: the switcher that reaches another board without going Home. */
   boards?: BoardSummary[];
   activeBoard?: string;
@@ -23,8 +24,10 @@ export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoar
   dbPath?: string;
   onNewBoard: () => void;
   onRename: () => void;
-  /** Identity menu's second entry: opens the push notifications panel (#5, card C). */
+  /** Opens the push notifications panel: a quiet bell beside the avatar (#8). */
   onOpenNotifications: () => void;
+  /** This device's push state, so the bell can swap to `bellOff` and carry its warn dot when `blocked`. */
+  pushKind?: PushState["kind"];
   /** The route's primary action: New board, or New card. */
   action?: ReactNode;
   /** Anything that belongs after it — on a board, the "⋯" menu. */
@@ -72,33 +75,21 @@ export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoar
         )}
         <span className="grow" />
         {action}
-        {/* The identity button used to be a single-purpose rename trigger; it is now the
-            second door to notifications (§1.3), so it opens a menu instead of firing
-            `onRename` directly. Rename stays its first, unchanged entry. */}
-        <Menu
-          label={`Signed in as ${actor || "?"}`}
-          align="right"
-          triggerClass="me-btn me-btn-inline"
-          trigger={(
-            <>
-              <Avatar name={actor || "?"} kind="human" size={22} quiet={!mobile} />
-              <span className="ellipsis">{actor || "…"}</span>
-            </>
-          )}
+        {/* Subtle entrance (#8): a quiet, icon-only bell beside the avatar, not inside it — the
+            identity control reverts to a plain rename trigger so the two stay independent. */}
+        <button
+          className="icon-btn notify-btn"
+          onClick={onOpenNotifications}
+          aria-label="Notifications"
+          title="Notifications"
         >
-          {(close) => (
-            <>
-              <button role="menuitem" className="menu-item" onClick={() => { close(); onRename(); }}>
-                {Icons.person(16)}
-                <span>Change your name</span>
-              </button>
-              <button role="menuitem" className="menu-item" onClick={() => { close(); onOpenNotifications(); }}>
-                {Icons.bell(16)}
-                <span>Notifications</span>
-              </button>
-            </>
-          )}
-        </Menu>
+          {pushKind === "blocked" ? Icons.bellOff(16) : Icons.bell(16)}
+          {pushKind === "blocked" && <span className="notify-dot" />}
+        </button>
+        <button className="me-btn me-btn-inline" onClick={onRename} title="Change your name">
+          <Avatar name={actor || "?"} kind="human" size={22} quiet={!mobile} />
+          <span className="ellipsis">{actor || "…"}</span>
+        </button>
         {dbPath && <span className="muted tiny ellipsis home-db" title={dbPath}>{dbPath.replace(/^.*\/(?=[^/]+\/[^/]+$)/, "…/")}</span>}
         {trailing}
       </div>

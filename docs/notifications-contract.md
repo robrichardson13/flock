@@ -570,68 +570,61 @@ the subscription with no extra work.
 
 ### 3.4 Where it lives in the UI
 
-**One panel, two entrances**, not a single row. The row on Home still exists, but it is a door
-into a `Sheet` — the test send, the device list, the unblock hint, and every non-`on`/`off` state's
-explanation live in the panel, not on Home. Home keeps exactly one line.
+**One panel, one quiet entrance.** There is no `Notifications` row on Home and no section for it —
+`packages/web/src/Notifications.tsx` exports only `TREATMENT` and `PushPanel` now; `PushRow` and
+its `Notifications` section head are gone, and the CSS that only served that row (`.push-row`,
+`.push-icon*`, `.push-dot*`) was deleted with it. The entrance is a single icon-only button, `Icons.bell`
+(`Icons.bellOff` in `blocked`), beside the avatar in the top bar — `aria-label`/`title` both
+`"Notifications"` — on Home and on a board, desktop and phone alike:
 
-**Entrance 1 — Home.** A `Notifications` section, in the same left gutter as Boards/Active/Idle,
-the last group in `.screen-body.home`'s scroller (`<section className="settings">` is gone —
-`packages/web/src/Notifications.tsx`'s `PushRow` replaces it, and the old `.settings` CSS rules
-were deleted along with it). One `.list-row`: a bell icon, the title `Notifications`, a meta line
-that carries the state's summary, and a trailing dot + chevron — except in `off`, where the
-trailing slot is instead a `Turn on notifications` button (`e.stopPropagation()` on its own click,
-so it enables directly rather than opening the panel). Tapping anywhere else on the row opens the
-panel. No fixed positioning, no new scroll container, no viewport meta change — it is ordinary
-content inside the existing scroller, same as before.
+- Desktop (`AppTopBar` in `shell.tsx`): the button sits beside `.me-btn`, which is back to being a
+  plain rename trigger (`onClick={onRename}`) — the two-item `Menu` this pass had briefly added
+  is gone.
+- Phone (`TopBar.tsx`): the button sits beside the avatar on the `home` shape, and beside the team
+  stack on the `board` shape — the phone `TopBar` previously carried the identity control (and, for
+  one pass, this entrance) only on `home`; the bell now reaches a board directly instead. The
+  avatar itself is back to firing `onRename` directly, with no `ActionSheet`.
 
-**Entrance 2 — the identity control**, because the panel is "your settings" and the avatar is
-already the app's identity idiom. It used to be a single-purpose rename trigger; it is now a
-two-item menu, `Change your name` and `Notifications`, both opening the same panel:
+Both buttons carry a small warn-coloured dot (`.notify-dot`, `--status-blocked`) only when this
+device's `PushState["kind"]` is `blocked` — every other state (including `on`) shows a bare bell,
+so the entrance stays quiet rather than reporting status. The panel's own open state and this
+device's `PushState` live in `App.tsx` (`pushKind`/`pushBusy`/`pushError`/`pushPanelOpen`), threaded
+down via `onOpenNotifications` (and, for the dot, `pushKind`) through `Home`, `TopBar`, `BoardView`
+and `AppTopBar`, so the one button per screen opens the one panel instance.
 
-- Desktop (`AppTopBar` in `shell.tsx`): `.me-btn` is the trigger of a `Menu` (`align="right"`).
-- Phone (`TopBar.tsx`'s `home` shape): the avatar button opens an `ActionSheet` with the same two
-  entries.
-
-This makes the panel reachable from a board screen as well as Home — desktop's `AppTopBar` carries
-the identity control on every route; the phone `TopBar` carries it only on Home's shape, unchanged
-from before this pass. The panel's own open state and this device's `PushState` live in `App.tsx`
-(`pushKind`/`pushBusy`/`pushError`/`pushPanelOpen`), threaded down via an `onOpenNotifications`
-prop through `Home`, `TopBar`, `BoardView` and `AppTopBar`, so either entrance opens the one panel
-instance.
-
-Home, not only a board: a subscription is one device saying yes to everything, and Home is the
-screen that is the app rather than a screen that is one board. It also puts the row in sight of
-"Waiting on you", the list notifications exist to get you to.
+Reachable from a board as well as Home: a subscription is one device saying yes to everything, not
+a fact about one board, so the entrance travels with the identity control rather than living only
+on the screen that is the app.
 
 **Seven states**, one `TREATMENT` record exported from `Notifications.tsx` keyed by
-`PushState["kind"]`, so the row and the panel read the same icon, dot colour, meta text and
-callout copy and cannot disagree:
+`PushState["kind"]`. The entrance button only ever reads two of its fields (`icon`, for the
+bell/bellOff swap, and implicitly `kind === "blocked"` for the dot); everything else in the table
+is the panel's:
 
-| kind | icon | dot | Home row meta | panel body | button |
-| --- | --- | --- | --- | --- | --- |
-| `on` | `bell` | accent, pulsing | `On for this device` | lead line + `Send a test notification` + the Devices list | `Turn off` (panel only) |
-| `off` | `bell` | none | `Off — turn on to get pinged when a card needs you` | lead line only | `Turn on notifications` — row *and* panel |
-| `blocked` | `bellOff` | warn | `Blocked in your browser settings` | warn `.push-note`: "Notifications are blocked for this site. flock can't ask again." + an unblock hint line | none |
-| `needs-install` | `bell` | human/await | `Add flock to your Home Screen first` | attention `.push-note` with the three `Add to Home Screen` steps as a `<ol className="push-steps">` | none |
-| `server-off` | `bellOff` | none | `Not set up on this server` | neutral `.push-note`: "This flock server has no notification key, so it can't send anything yet." + a `FLOCK_VAPID_PUBLIC_KEY`/`FLOCK_VAPID_PRIVATE_KEY` hint | none |
-| `insecure` | `bellOff` | none | `Needs a secure connection` | neutral `.push-note`: "Notifications need HTTPS. Open flock over https://, or on localhost." | none |
-| `unsupported` | `bellOff` | none | `Not supported in this browser` | neutral `.push-note`: "This browser doesn't support notifications. Chrome, Edge, Firefox and Safari 16.4+ do." | none |
+| kind | icon | panel body | button |
+| --- | --- | --- | --- |
+| `on` | `bell` | lead line + `Send a test notification` + the Devices list | `Turn off` |
+| `off` | `bell` | lead line only | `Turn on notifications` |
+| `blocked` | `bellOff` | warn `.push-note`: "Notifications are blocked for this site. flock can't ask again." + an unblock hint line | none |
+| `needs-install` | `bell` | attention `.push-note` with the three `Add to Home Screen` steps as a `<ol className="push-steps">` | none |
+| `server-off` | `bellOff` | neutral `.push-note`: "This flock server has no notification key, so it can't send anything yet." + a `FLOCK_VAPID_PUBLIC_KEY`/`FLOCK_VAPID_PRIVATE_KEY` hint | none |
+| `insecure` | `bellOff` | neutral `.push-note`: "Notifications need HTTPS. Open flock over https://, or on localhost." | none |
+| `unsupported` | `bellOff` | neutral `.push-note`: "This browser doesn't support notifications. Chrome, Edge, Firefox and Safari 16.4+ do." | none |
 
 `server-off` (§3.2) is new since the original contract: a key-less server used to fall through to
 `unsupported`, which told the user their browser couldn't do something it actually could. It now
 gets its own honest, muted state, and — because the key is prefetched (§3.3) rather than fetched
-after the prompt — the row never fires an OS permission dialog it cannot make good on.
-`blocked`/`needs-install`/`insecure`/`unsupported`/`server-off` all render no button, because no
-button would work; the row stays tappable in every state so the panel's explanation is always one
-tap away.
+after the prompt — the entrance never fires an OS permission dialog it cannot make good on.
+`blocked`/`needs-install`/`insecure`/`unsupported`/`server-off` all render no button in the panel,
+because no button would work; the bell stays tappable in every state so the explanation is always
+one tap away.
 
-**Feedback.** Busy disables the acting button, sets `aria-busy="true"`, and swaps its label to
-`Turning on…`/`Turning off…`. Success is the state change itself — the dot lights accent, the meta
-flips to `On for this device`, and in `on` the test-send button and Devices section appear; no
-toast. A failure renders `.inline-error` in the panel next to the button *and*, when it was the Home
-row's own trailing button that failed, in place of the row's meta line — so an error raised there
-is visible without opening the panel. `onEnablePush`/`onDisablePush` in `App.tsx` both carry the
-`.catch` the original toggle handler never had.
+**Feedback.** Busy disables the panel's acting button, sets `aria-busy="true"`, and swaps its label
+to `Turning on…`/`Turning off…`. Success is the state change itself — `on` shows the test-send
+button and the Devices section, and the entrance drops its dot the next time `blocked` stops being
+true; no toast. A failure renders `.inline-error` in the panel next to the button.
+`onEnablePush`/`onDisablePush` in `App.tsx` both carry the `.catch` the original toggle handler
+never had.
 
 **Test send and the device list**, `on` only, inside the panel (`packages/web/src/Notifications.tsx`
 and `packages/web/src/devices.ts`): a `Send a test notification` button over `api.pushTest()`,
