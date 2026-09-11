@@ -279,12 +279,13 @@ export function TopBar({ route, actor, boardLabel, onNewBoard, onRename, onOpenN
             To do section grows its own "+" (`Section`), same as it always has for a column
             with nothing folded above it. The other tabs have no equivalent "New card" affordance,
             which is fine — Cards is the one place a card gets created. */}
+        {/* No bell here (#10): it is Home-only chrome, and a board's nav is tight enough
+            without it — the team stack (or the growing spacer beside it) is the last item. */}
         {boardTeam ? (
           <TeamStack team={boardTeam.team} cards={boardTeam.cards} cap={3} size={22} onOpen={() => slots.current.board.onOpenTeam?.()} />
         ) : (
           <span className="grow" />
         )}
-        {notifyBtn}
       </>
     );
   }
