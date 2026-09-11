@@ -2503,6 +2503,14 @@ html[data-topbar] .sheet { max-height: 100%; }
   .card-composer:not(.composer-collapsed) .line-composer > .icon-btn {
     --btn-lift: calc((var(--lh-body) + 2 * var(--s2)) * var(--composer-collapse, 0));
     margin-top: calc(-1 * var(--btn-lift));
+    /* The lift tucks these buttons up under `.composer-field`, which is `position: relative`
+       with its input at `z-index: 1` (see the quote-highlight comment above) and so paints
+       after a static sibling. Without a stacking context of its own here, a tap in the
+       overlap hit-tests the field, not the button: `position: relative; z-index: 2` puts the
+       lifted button back on top, restoring the pre-highlight paint order for exactly the
+       buttons `--btn-lift` moves. */
+    position: relative;
+    z-index: 2;
     /* The paperclip below still uses `transform` for its scale, and the shared control
        transition springs transform over `--d-base` — a lagging spring on top of a value that
        already tracks the finger. Colour keeps its easing; transform does not. */
