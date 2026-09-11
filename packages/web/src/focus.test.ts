@@ -1,5 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import { FOCUSABLE_SELECTOR, focusReturnTarget, nextTrapIndex } from "./focus.ts";
+import { FOCUSABLE_SELECTOR, focusReturnTarget, nextTrapIndex, shouldBlurOnSend } from "./focus.ts";
+
+describe("shouldBlurOnSend", () => {
+  it("blurs after a successful send on a coarse pointer (touch), so the keyboard dismisses", () => {
+    expect(shouldBlurOnSend(false)).toBe(true);
+  });
+
+  it("keeps focus after send on a fine pointer (mouse/trackpad), matching today's desktop behaviour", () => {
+    expect(shouldBlurOnSend(true)).toBe(false);
+  });
+});
 
 describe("nextTrapIndex", () => {
   it("walks forward through the stops", () => {
