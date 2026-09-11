@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { ATTACHMENT_MIMES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES, ORPHAN_TTL_MS, normalizeMime, sanitizeAttachmentName, sniffImageMime } from "./attachments.ts";
-import { openDatabase } from "./db.ts";
+import { openDatabase, readStamp, SCHEMA_VERSION, type OpenOptions } from "./db.ts";
 import { setTaskChecked, taskItems } from "./tasks.ts";
 import type { PushSubscriptionInput, PushSubscriptionRecord } from "./notify.ts";
 import {
@@ -236,9 +236,16 @@ export interface CardPatch {
  */
 export class Flock {
   readonly db: Database;
+  /**
+   * Set when the database is stamped newer than this build and was opened with `allowNewer`
+   * (ADR 0021). Core never prints; the CLI and server turn this into one stderr line.
+   */
+  readonly schemaSkew?: { dbVersion: number; binaryVersion: number };
 
-  constructor(pathOrDb: string | Database) {
-    this.db = typeof pathOrDb === "string" ? openDatabase(pathOrDb) : pathOrDb;
+  constructor(pathOrDb: string | Database, opts: OpenOptions = {}) {
+    this.db = typeof pathOrDb === "string" ? openDatabase(pathOrDb, opts) : pathOrDb;
+    const dbVersion = readStamp(this.db);
+    if (dbVersion > SCHEMA_VERSION) this.schemaSkew = { dbVersion, binaryVersion: SCHEMA_VERSION };
   }
 
   close() {

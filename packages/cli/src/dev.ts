@@ -46,7 +46,7 @@ function findRoot(from = process.cwd()): string {
   }
 }
 
-function isLinkedWorktree(root: string): boolean {
+export function isLinkedWorktree(root: string): boolean {
   let r: { exitCode: number; stdout: Buffer };
   try {
     r = Bun.spawnSync(["git", "-C", root, "rev-parse", "--git-dir", "--git-common-dir"], { stdout: "pipe", stderr: "pipe" });
