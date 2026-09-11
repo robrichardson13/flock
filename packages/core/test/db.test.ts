@@ -90,6 +90,30 @@ describe("openDatabase / schema_version", () => {
     }
   });
 
+  test("a v3 database opens, gains push_subscriptions, and is re-stamped to the current version", () => {
+    const { dir, path } = freshPath();
+    try {
+      // Simulate a v3 database: no push_subscriptions table yet.
+      const legacy = new Database(path, { create: true });
+      legacy.exec(`
+        CREATE TABLE boards (
+          id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+          project TEXT, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+      `);
+      legacy.exec("PRAGMA user_version = 3;");
+      legacy.close();
+
+      const db = openDatabase(path);
+      const tables = new Set((db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((t) => t.name));
+      expect(tables.has("push_subscriptions")).toBe(true);
+      expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION);
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("the error names both versions and tells the user to upgrade", () => {
     const { dir, path } = freshPath();
     try {

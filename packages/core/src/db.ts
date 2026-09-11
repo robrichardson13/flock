@@ -11,7 +11,7 @@ import { FlockError } from "./types.ts";
  * whenever `SCHEMA` or `migrate()` below changes, and only ever add columns/tables/indexes:
  * migrations must stay additive so a newer binary can always read an older database.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * Thrown by `openDatabase` when the database's stamped `user_version` is higher than this
@@ -141,6 +141,20 @@ CREATE TABLE IF NOT EXISTS attachments (
 );
 CREATE INDEX IF NOT EXISTS attachments_message ON attachments(message_id);
 CREATE INDEX IF NOT EXISTS attachments_orphans ON attachments(board_id, message_id, created_at);
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id TEXT PRIMARY KEY,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  actor_kind TEXT NOT NULL DEFAULT 'human',
+  board_id TEXT REFERENCES boards(id) ON DELETE CASCADE,
+  user_agent TEXT,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS push_subs_actor ON push_subscriptions(actor);
+CREATE INDEX IF NOT EXISTS push_subs_board ON push_subscriptions(board_id);
 `;
 
 export function openDatabase(path: string): Database {
