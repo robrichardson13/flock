@@ -1132,9 +1132,14 @@ export class Flock {
    * `not_found` naming it, so an archive/restore call fails clean rather than partially. A
    * filter selector (`card`/`author`/`before`) matching nothing simply returns `[]` — see ADR
    * 0016; there is nothing to name as missing when the caller never named a number.
+   *
+   * A selector naming no field at all is `invalid`, never "every decision on the board": the
+   * filter branch's only other clause is `board_id`, so falling through would turn an empty
+   * `{}` or `{ nums: [] }` — which HTTP clients can send — into a board-wide archive.
    */
   private resolveDecisionSelector(boardId: string, boardSlug: string, sel: DecisionSelector): DecisionRow[] {
-    if (sel.nums && sel.nums.length > 0) {
+    if (sel.nums !== undefined) {
+      if (sel.nums.length === 0) return [];
       const byNum = new Map<number, DecisionRow>();
       for (const n of sel.nums) {
         const row = this.decisionRow(boardId, n);
@@ -1142,6 +1147,9 @@ export class Flock {
         byNum.set(n, row);
       }
       return [...byNum.values()].sort((a, b) => a.num - b.num);
+    }
+    if (sel.card === undefined && sel.author === undefined && sel.before === undefined) {
+      throw new FlockError("A decision selector is required: nums, card, author or before", "invalid");
     }
     const clauses = ["board_id = ?"];
     const params: (string | number)[] = [boardId];

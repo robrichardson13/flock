@@ -145,6 +145,18 @@ describe("decisions routes", () => {
     expect(res.status).toBe(400);
   });
 
+  test("POST .../archive with an empty nums array archives nothing", async () => {
+    const { app } = fresh();
+    const board = await newBoard(app);
+    for (const gist of ["keep one", "keep two"]) {
+      await app.request(`/api/boards/${board.slug}/decisions`, { method: "POST", headers, body: JSON.stringify({ gist }) });
+    }
+    const res = await app.request(`/api/boards/${board.slug}/decisions/archive`, { method: "POST", headers, body: JSON.stringify({ nums: [] }) });
+    expect(res.status).toBe(200);
+    expect((await res.json()).archived).toEqual([]);
+    expect(await (await app.request(`/api/boards/${board.slug}/decisions`)).json()).toHaveLength(2);
+  });
+
   test("POST .../restore round-trips an archived decision back to standing", async () => {
     const { app } = fresh();
     const board = await newBoard(app);

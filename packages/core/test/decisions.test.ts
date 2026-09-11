@@ -186,6 +186,28 @@ describe("archiveDecisions / restoreDecisions", () => {
     expect(f.archiveDecisions(ada, board.id, { author: "nobody" })).toEqual([]);
   });
 
+  test("an empty selector archives nothing — it never means the whole board", () => {
+    const { f, board } = fresh();
+    for (const g of ["one", "two", "three"]) f.decide(ada, board.id, g);
+
+    // `{ nums: [] }` is "these zero decisions", not "every decision".
+    expect(f.archiveDecisions(ada, board.id, { nums: [] })).toEqual([]);
+    expect(f.restoreDecisions(ada, board.id, { nums: [] })).toEqual([]);
+    expect(f.decisions(board.id)).toHaveLength(3);
+
+    // A selector naming no field at all is a caller bug, not a board-wide archive.
+    for (const call of [() => f.archiveDecisions(ada, board.id, {}), () => f.restoreDecisions(ada, board.id, {})]) {
+      try {
+        call();
+        throw new Error("expected an invalid selector to throw");
+      } catch (e) {
+        expect(e).toBeInstanceOf(FlockError);
+        expect((e as FlockError).code).toBe("invalid");
+      }
+    }
+    expect(f.decisions(board.id)).toHaveLength(3);
+  });
+
   test("an explicit num that does not exist throws not_found", () => {
     const { f, board } = fresh();
     expect(() => f.archiveDecisions(ada, board.id, { nums: [42] })).toThrow(FlockError);
