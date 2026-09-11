@@ -52,7 +52,7 @@ describe("flock --help / bare flock", () => {
     expect(text).toContain("--no-tailscale");
     expect(text).toContain("FLOCK_TAILSCALE");
     expect(text).toContain("FLOCK_TAILSCALE_BIN");
-    expect(text).toContain("docs/adr/0018");
+    expect(text).toContain("docs/adr/0019");
   });
 
   test("`help formatting` is unaffected by the reorder", () => {

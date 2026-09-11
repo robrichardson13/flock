@@ -157,7 +157,7 @@ describe("advertisedUrls", () => {
     expect(advertisedUrls("[fe80::1]", 4747, [])).toEqual({ urls: ["http://[fe80::1]:4747"] });
   });
 
-  // ADR 0018: a live tailscale mount's https URL leads urls[], ahead of the http entries above,
+  // ADR 0019: a live tailscale mount's https URL leads urls[], ahead of the http entries above,
   // in every host branch; the loopback-bind hint is dropped once the mount already provides a way
   // to reach the daemon from elsewhere.
   const TS_URL = "https://robs-macbook-pro.tailnet.ts.net";

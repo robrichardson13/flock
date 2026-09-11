@@ -48,12 +48,12 @@ describe("parseRunInfo", () => {
     expect(i?.version).toBeUndefined();
   });
 
-  test("round-trips the ADR 0018 tailscale fields", () => {
+  test("round-trips the ADR 0019 tailscale fields", () => {
     const info = runfile({ tailscale: true, tailscaleUrl: "https://m.tail.ts.net", tailscaleTarget: "http://127.0.0.1:5173" });
     expect(parseRunInfo(JSON.stringify(info))).toEqual(info);
   });
 
-  test("a pre-0018 runfile (none of the three fields) reads as tailscale-off", () => {
+  test("a pre-0019 runfile (none of the three fields) reads as tailscale-off", () => {
     const i = parseRunInfo('{"name":"flock","pid":7,"apiPort":4747}');
     expect(i?.tailscale).toBeUndefined();
     expect(i?.tailscaleUrl).toBeUndefined();
@@ -370,7 +370,7 @@ describe("settingsDiffer", () => {
   });
 });
 
-describe("planDaemon — tailscale (ADR 0018)", () => {
+describe("planDaemon — tailscale (ADR 0019)", () => {
   test("undefined/false tailscale: plan.tailscale is falsy, url unchanged", () => {
     const p = planDaemon({ mode: "binary", serveCmd: ["/bin/flock"], cwd: "/w", db: "/db.sqlite", env: {}, opts: {} });
     expect(p.tailscale).toBeUndefined();
@@ -567,7 +567,7 @@ describe("up / status / down, for real", () => {
   );
 
   /**
-   * ADR 0018, wired end to end through the real `flock` CLI, but never through a real `tailscale`:
+   * ADR 0019, wired end to end through the real `flock` CLI, but never through a real `tailscale`:
    * FLOCK_TAILSCALE_BIN points `up`/`down` at a tiny stub script that answers `status --json`,
    * `serve status --json`, `serve --bg …` and `serve --https=443 off` the same shape the real
    * binary does, and logs every argv it was called with so the test can assert the wiring (not the
@@ -659,6 +659,37 @@ exit 1
         const argv = readFileSync(stub.log, "utf8").trim().split("\n");
         expect(argv.filter((l) => l.startsWith("serve --bg"))).toHaveLength(1);
         expect(argv.filter((l) => l === "serve --https=443 off")).toHaveLength(1);
+      } finally {
+        if (pid) try { process.kill(pid, "SIGKILL"); } catch {}
+      }
+    },
+    60_000,
+  );
+
+  test(
+    "up --no-tailscale on a mounted daemon tears the mount down, not just restart",
+    async () => {
+      const home = scratch();
+      const work = scratch();
+      const stub = writeTailscaleStub(scratch());
+      const port = await freePort();
+      const env = { FLOCK_HOME: home, FLOCK_DB: join(home, "flock.db"), FLOCK_PORT: "", FLOCK_WEB_PORT: "", FLOCK_TAILSCALE_BIN: stub.bin };
+      let pid = 0;
+      try {
+        const started = await run(work, env, ["up", "--port", String(port), "--tailscale", "--json"]);
+        expect(started.code).toBe(0);
+        pid = (JSON.parse(started.out) as RunInfo).pid;
+        expect(existsSync(stub.mountFile)).toBe(true);
+
+        // Settings-differ path in `up` (not `restart`): must tear down the old mount exactly like
+        // `restart` does, not just stop the old process and leave tailscaled still proxying to it.
+        const toggled = await run(work, env, ["up", "--port", String(port), "--no-tailscale", "--json"]);
+        expect(toggled.code).toBe(0);
+        const info = JSON.parse(toggled.out) as RunInfo & { action: string };
+        expect(info.action).toBe("restarted with new settings");
+        expect(info.tailscale).toBeUndefined();
+        expect(existsSync(stub.mountFile)).toBe(false);
+        pid = info.pid;
       } finally {
         if (pid) try { process.kill(pid, "SIGKILL"); } catch {}
       }

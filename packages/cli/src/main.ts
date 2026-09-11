@@ -99,7 +99,7 @@ IDENTITY
                     (never warns) when tailscale is missing, logged out, or the port is already
                     mounted elsewhere. A bare up/restart keeps a running daemon's own choice, like
                     --host. \`flock down\` tears the mount down. \`url\`/\`status\`/the up and serve
-                    banners list the https URL first once a mount is active. See docs/adr/0018
+                    banners list the https URL first once a mount is active. See docs/adr/0019
                     and docs/config.md.
 
 BOARDS
@@ -612,7 +612,7 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       // The first advertisedUrls entry, never the literal bind host: a wildcard bind would
       // otherwise print/--open the unusable `http://0.0.0.0:PORT`. `FLOCK_TAILSCALE_URL` is set by
       // `up --foreground --tailscale` just above, before this same process fell through to
-      // `serve` — it leads the printed banner (ADR 0018 §8), same as `flock url`/`status`.
+      // `serve` — it leads the printed banner (ADR 0019 §8), same as `flock url`/`status`.
       const loopback = baseUrl(hostname, server.port ?? port);
       const url = process.env.FLOCK_TAILSCALE_URL || loopback;
       const ui = assets?.["/index.html"] ? "embedded" : existsSync(join(staticDir, "index.html")) ? "built" : "not built (run `bun run build`, or use `bun run dev`)";

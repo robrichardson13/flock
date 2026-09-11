@@ -47,7 +47,7 @@ export interface RunInfo {
   startedAt: string;
   url: string;
   version?: string;
-  /** True when this daemon established a `tailscale serve` mount for its browser port (ADR 0018). */
+  /** True when this daemon established a `tailscale serve` mount for its browser port (ADR 0019). */
   tailscale?: boolean;
   /** The `https://<magicdns>` origin that mount serves. */
   tailscaleUrl?: string;
@@ -132,7 +132,7 @@ export function parseRunInfo(text: string): RunInfo | undefined {
     startedAt: typeof o.startedAt === "string" ? o.startedAt : "",
     url: typeof o.url === "string" ? o.url : baseUrl(host, apiPort),
     version: typeof o.version === "string" ? o.version : undefined,
-    // Flat, tolerant fields (ADR 0018): a pre-0018 runfile has none of them and reads as
+    // Flat, tolerant fields (ADR 0019): a pre-0019 runfile has none of them and reads as
     // tailscale-off, which is what those daemons are.
     tailscale: o.tailscale === true ? true : undefined,
     tailscaleUrl: typeof o.tailscaleUrl === "string" && o.tailscaleUrl ? o.tailscaleUrl : undefined,
@@ -251,7 +251,7 @@ export interface DaemonPlan {
   children: ChildSpec[];
   /** Set when the canonical checkout fell back off :4747/:5173 because they were held elsewhere. */
   portFallbackNote?: string;
-  /** ADR 0018: set when this plan wants a `tailscale serve` mount established for its browser port. */
+  /** ADR 0019: set when this plan wants a `tailscale serve` mount established for its browser port. */
   tailscale?: boolean;
   tailscaleUrl?: string;
   tailscaleTarget?: string;
@@ -550,7 +550,7 @@ function probeHosts(host: string): string[] {
   return host === "0.0.0.0" || host === "::" || host === "" ? [host || "0.0.0.0", "127.0.0.1"] : [host];
 }
 
-/** The daemon's addresses, host-aware: see `advertisedUrls` in dev.ts (ADR 0015, ADR 0018). */
+/** The daemon's addresses, host-aware: see `advertisedUrls` in dev.ts (ADR 0015, ADR 0019). */
 function urls(d: { mode: Mode; apiPort: number; webPort?: number; host: string; tailscaleUrl?: string }): { urls: string[]; hint?: string } {
   return advertisedUrls(d.host, browserPort(d), undefined, d.tailscaleUrl);
 }
@@ -583,10 +583,10 @@ function describe(d: {
   const isolated = d.db !== globalDbPath();
   // The api line uses the same host-aware URL as `web` in binary mode, not a hardcoded "localhost":
   // a specific non-loopback --host means the API is only reachable at that host, not at loopback.
-  // It never gets the tailscale URL: the mount fronts the browser-facing port only (ADR 0018 d2).
+  // It never gets the tailscale URL: the mount fronts the browser-facing port only (ADR 0019 d2).
   const api = `\n  api ${baseUrl(d.host, d.apiPort)}`;
   // Names the mechanism and its target, so a reader who did not start the daemon knows where the
-  // certificate comes from and what to turn off (ADR 0018 §8).
+  // certificate comes from and what to turn off (ADR 0019 §8).
   const tls = d.tailscaleTarget ? `\n  tls tailscale serve :443 -> ${d.tailscaleTarget}` : "";
   return `${where} at ${d.root}\n  web ${web}${api}\n  db  ${d.db}${isolated ? " (isolated)" : " (shared)"}${tls}`;
 }
@@ -614,7 +614,7 @@ function guardPorts(plan: DaemonPlan, held: number[]) {
  * Establish (or re-assert) the plan's tailscale mount and fold the result into a `RunInfo` patch.
  * Every `up --tailscale` calls this, whether the daemon was just started or was already running:
  * the mount lives in tailscaled, not in the runfile, so a `tailscale down`, a reboot, or a manual
- * `serve reset` can remove it behind flock's back, and `flock up` is the reconciler (ADR 0018 §5).
+ * `serve reset` can remove it behind flock's back, and `flock up` is the reconciler (ADR 0019 §5).
  */
 function mountTailscale(plan: DaemonPlan): Pick<RunInfo, "tailscale" | "tailscaleUrl" | "tailscaleTarget" | "url"> {
   const bin = findTailscaleReal();
@@ -640,7 +640,7 @@ async function up(plan: DaemonPlan, opts: DaemonOptions, label?: "restarted", he
   }
   const existing = readRunfile(plan.name);
   guardPorts(plan, existing ? portsOf(existing) : (heldPorts ?? []));
-  // Preflight only (steps 1-5 of ADR 0018 §4): entirely read-only, so a refusal here costs nothing
+  // Preflight only (steps 1-5 of ADR 0019 §4): entirely read-only, so a refusal here costs nothing
   // and starts nothing, whether this call goes on to do nothing (already running) or a fresh start.
   if (plan.tailscale) preflightTailscale({ run: spawnRunner, bin: findTailscaleReal() });
   let action: "already running" | "started" | "restarted" | "restarted with new settings" = "started";
@@ -659,6 +659,11 @@ async function up(plan: DaemonPlan, opts: DaemonOptions, label?: "restarted", he
     return;
   }
   if (existing) {
+    // Settings differ (e.g. `up --no-tailscale` on a mounted daemon): tear down whatever mount
+    // the old settings established before stopping it, same as the `restart` command does —
+    // otherwise a bare settings-changing `up` leaves tailscaled still proxying to the port that
+    // is about to be replaced (or torn down entirely), a stale mount nothing else will notice.
+    teardownTailscale(existing);
     await stop(existing);
     action = "restarted with new settings";
   }
@@ -673,7 +678,7 @@ async function up(plan: DaemonPlan, opts: DaemonOptions, label?: "restarted", he
     try {
       info = { ...info, ...mountTailscale(plan) };
     } catch (e) {
-      // "up --tailscale gives you HTTPS or it gives you nothing" (ADR 0018 §5): this invocation
+      // "up --tailscale gives you HTTPS or it gives you nothing" (ADR 0019 §5): this invocation
       // started the daemon, so a mount failure after readiness stops it again rather than leaving
       // an HTTP-only daemon up that silently lacks the capability it was started for.
       await stop(info);

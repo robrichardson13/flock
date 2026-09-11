@@ -61,8 +61,10 @@ directory), every command below is `bun run flock ...` instead. Always act as a 
    web UI rather than the terminal. `flock up` is idempotent and prints the URL (it reports
    "already running" when the daemon is already up), so run it and take the first line of
    `flock url` as the base — it is the right one for an installed binary and for a checkout's
-   dev server alike, always loopback/localhost form (`flock up` binds every interface by default,
-   ADR 0015, but the base URL stays the one that works from this machine either way). What follows
+   dev server alike, and it always works from this machine (`flock up` binds every interface by
+   default, ADR 0015). Ordinarily that first line is loopback/localhost form; on a machine running
+   `flock up --tailscale` it is instead the `https://<machine>.<tailnet>.ts.net` origin (ADR 0019)
+   — still a same-machine address, so taking the first line as the base still works. What follows
    the base line depends on the daemon's bind host: LAN and Tailscale addresses for another device
    when it's reachable from the network (the default), or one hint line on how to make it so
    (`flock up --host 0.0.0.0`) when someone deliberately restricted it to loopback. The board's own

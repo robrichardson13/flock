@@ -14,7 +14,7 @@ Optional. flock works with no config file at all; this is only for turning somet
 | --- | --- | --- | --- |
 | `autoupdate` | boolean | `true` | `false` stops an installed flock from updating itself. |
 | `host` | string | `0.0.0.0` | The bind host `flock serve`/`flock up` fall back to when there is no `--host` flag and no `FLOCK_HOST`. Precedence, highest first: `--host`, `FLOCK_HOST`, this key, then the built-in `0.0.0.0` default. Set it to `127.0.0.1` to keep every future `flock up` on this machine to loopback without having to pass `--host` (or export `FLOCK_HOST`) every time. See [ADR 0015](adr/0015-bind-to-all-interfaces-by-default-and-advertise-only-reachable-urls.md). |
-| `tailscale` | boolean | `false` | `true` makes every future `flock up`/`restart` on this machine front the browser-facing port with `tailscale serve`, for an HTTPS origin on the tailnet, without having to pass `--tailscale` every time. Precedence, highest first: `--tailscale`/`--no-tailscale`, `FLOCK_TAILSCALE`, this key, then off. A bare `up`/`restart` keeps a running daemon's own choice rather than recomputing it, same as `host`. See [ADR 0018](adr/0018-tailscale-serve-for-an-https-origin.md) and "HTTPS on the tailnet" below. |
+| `tailscale` | boolean | `false` | `true` makes every future `flock up`/`restart` on this machine front the browser-facing port with `tailscale serve`, for an HTTPS origin on the tailnet, without having to pass `--tailscale` every time. Precedence, highest first: `--tailscale`/`--no-tailscale`, `FLOCK_TAILSCALE`, this key, then off. A bare `up`/`restart` keeps a running daemon's own choice rather than recomputing it, same as `host`. See [ADR 0019](adr/0019-tailscale-serve-for-an-https-origin.md) and "HTTPS on the tailnet" below. |
 
 Unknown keys are ignored, and a file that is missing or not valid JSON is treated as an empty
 object — a broken config never stops a command from running.
@@ -39,7 +39,7 @@ where the automatic checks leave their trail.
 
 ## HTTPS on the tailnet
 
-See [ADR 0018](adr/0018-tailscale-serve-for-an-https-origin.md) for the full design. `flock up
+See [ADR 0019](adr/0019-tailscale-serve-for-an-https-origin.md) for the full design. `flock up
 --tailscale` (or the `tailscale` config key / `FLOCK_TAILSCALE` above) makes the daemon establish a
 `tailscale serve` mount for its browser-facing port — vite's web port in a checkout, the one server
 port in an installed binary — so the app is reachable at `https://<machine>.<tailnet>.ts.net`, with

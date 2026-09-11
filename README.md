@@ -57,7 +57,7 @@ standing default) to keep it to this machine only. See
 `flock up --tailscale` fronts the daemon with `tailscale serve` for an HTTPS origin on the tailnet
 (`https://<machine>.<tailnet>.ts.net`) — what a phone needs to install the app to its home screen
 and receive notifications. See `docs/config.md` and
-`docs/adr/0018-tailscale-serve-for-an-https-origin.md`.
+`docs/adr/0019-tailscale-serve-for-an-https-origin.md`.
 
 An installed flock checks for a new release in the background, at most once a day, and applies it.
 `FLOCK_NO_UPDATE=1` or `{"autoupdate": false}` in `~/.flock/config.json` turns that off;

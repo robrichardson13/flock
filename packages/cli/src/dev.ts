@@ -122,7 +122,7 @@ function bracketed(host: string): string {
 
 export interface AdvertisedUrls {
   /** Always present, always first: the `https://<magicdns>` tailnet URL when a `tailscale serve`
-   *  mount is active (ADR 0018), else the loopback/localhost URL, except for a specific
+   *  mount is active (ADR 0019), else the loopback/localhost URL, except for a specific
    *  non-loopback host, where it is the one address actually bound. What `flock url`, `flock
    *  status` and the `up`/`serve` banner text lead with. `--open` (in `daemon.ts`'s `up` and
    *  `main.ts`'s `serve`) deliberately does *not* follow this to the https entry: it stays on the
@@ -140,7 +140,7 @@ export interface AdvertisedUrls {
 /**
  * What to advertise for a daemon bound to `host`:`port`. Pure over an injected interface list
  * (`networkHosts()` in production) so it's testable without touching the network. ADR 0015, plus
- * ADR 0018's `tailscaleUrl`:
+ * ADR 0019's `tailscaleUrl`:
  * - a live tailscale mount: its `https://<magicdns>` URL leads, ahead of everything below.
  * - loopback bind: just the loopback URL, plus a hint on how to reach it from elsewhere (unless a
  *   tailscale mount already provides one).

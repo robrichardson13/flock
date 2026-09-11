@@ -1,6 +1,6 @@
 /**
  * `tailscale serve` integration: fronts the daemon's browser-facing port with an HTTPS origin on
- * the tailnet. See ADR 0018 (card 4) for the full design; this module is the whole surface
+ * the tailnet. See ADR 0019 (card 4) for the full design; this module is the whole surface
  * `daemon.ts` and `main.ts` use — nothing else in the CLI talks to `tailscale` directly.
  *
  * Everything that could shell out takes an injectable `Runner`, so `bun test` never executes a
@@ -214,7 +214,7 @@ export function preflightTailscale(a: { run: Runner; bin: string | undefined }):
 }
 
 /**
- * Preflight + mount (steps 1-7 of ADR 0018 §4). Throws an actionable, single-topic FlockError on
+ * Preflight + mount (steps 1-7 of ADR 0019 §4). Throws an actionable, single-topic FlockError on
  * any failure, each naming the command to run next. Every `up --tailscale` re-runs this, whether
  * the daemon was just started or was already running, since the mount lives in tailscaled rather
  * than in the runfile and can be removed from underneath flock (`tailscale down`, a reboot, a
