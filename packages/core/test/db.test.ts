@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SCHEMA_VERSION, SchemaVersionError, openDatabase } from "../src/db.ts";
+import { SCHEMA_VERSION, SchemaBehindError, SchemaVersionError, copyDatabase, openDatabase, readStamp, schemaStamp } from "../src/db.ts";
+import { Flock } from "../src/flock.ts";
 
 /** A fresh on-disk db path in a throwaway directory, since ":memory:" can't be reopened. */
 function freshPath(): { dir: string; path: string } {
@@ -133,6 +134,108 @@ describe("openDatabase / schema_version", () => {
         expect(e.message).toContain(String(SCHEMA_VERSION));
         expect(e.message.toLowerCase()).toContain("upgrade");
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("openDatabase policy (ADR 0021)", () => {
+  test("migrate: false refuses an older stamp without writing anything", () => {
+    const { dir, path } = freshPath();
+    try {
+      const old = new Database(path, { create: true });
+      old.exec(`PRAGMA user_version = ${SCHEMA_VERSION - 1};`);
+      old.close();
+
+      expect(() => openDatabase(path, { migrate: false })).toThrow(SchemaBehindError);
+
+      const check = new Database(path, { create: true });
+      const tables = check.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[];
+      expect(tables.length).toBe(0);
+      expect(readStamp(check)).toBe(SCHEMA_VERSION - 1);
+      check.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("migrate: false opens a database already at the current stamp", () => {
+    const { dir, path } = freshPath();
+    try {
+      openDatabase(path).close();
+      const db = openDatabase(path, { migrate: false });
+      expect(readStamp(db)).toBe(SCHEMA_VERSION);
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("allowNewer opens a newer stamp, leaves it alone, and Flock reports the skew", () => {
+    const { dir, path } = freshPath();
+    try {
+      openDatabase(path).close();
+      const bump = new Database(path);
+      bump.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1};`);
+      bump.close();
+
+      const f = new Flock(path, { allowNewer: true });
+      expect(f.schemaSkew).toEqual({ dbVersion: SCHEMA_VERSION + 1, binaryVersion: SCHEMA_VERSION });
+      // Reads and writes still work: the tables this build knows are all there.
+      const b = f.createBoard({ name: "t", kind: "human" }, { title: "T", project: dir });
+      expect(f.board(b.slug)?.title).toBe("T");
+      expect(readStamp(f.db)).toBe(SCHEMA_VERSION + 1);
+      f.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a Flock at the current stamp reports no skew", () => {
+    const f = new Flock(":memory:");
+    expect(f.schemaSkew).toBeUndefined();
+    f.close();
+  });
+
+  test("schemaStamp reads the stamp without creating or migrating, and reports 0 for a missing file", () => {
+    const { dir, path } = freshPath();
+    try {
+      expect(schemaStamp(path)).toBe(0);
+      expect(existsSync(path)).toBe(false);
+      openDatabase(path).close();
+      expect(schemaStamp(path)).toBe(SCHEMA_VERSION);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("copyDatabase seeds a consistent copy that a newer build can then migrate on its own", () => {
+    const { dir, path } = freshPath();
+    const dest = join(dir, "worktree", ".flock", "flock.db");
+    try {
+      const f = new Flock(path);
+      f.createBoard({ name: "t", kind: "human" }, { title: "Shared", project: dir });
+      f.close(); // rows may still sit in the -wal; VACUUM INTO must see them
+      copyDatabase(path, dest);
+      const g = new Flock(dest);
+      expect(g.listBoards().map((b) => b.title)).toEqual(["Shared"]);
+      g.close();
+      expect(() => copyDatabase(path, dest)).toThrow(/Refusing to overwrite/);
+      // The source is untouched.
+      expect(schemaStamp(path)).toBe(SCHEMA_VERSION);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("copyDatabase of a missing source creates only the directory", () => {
+    const { dir } = freshPath();
+    const dest = join(dir, ".flock", "flock.db");
+    try {
+      copyDatabase(join(dir, "nope.db"), dest);
+      expect(existsSync(dest)).toBe(false);
+      expect(existsSync(join(dir, ".flock"))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

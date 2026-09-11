@@ -6,4 +6,4 @@ export * from "./notify.ts";
 export * from "./tasks.ts";
 export { detectRuntime, normalizeRuntime } from "./runtime.ts";
 export * from "./hooks.ts";
-export { openDatabase, resolveDbPath, findProjectDb, globalDbPath, DB_DIRNAME, DB_FILENAME, SCHEMA_VERSION, SchemaVersionError } from "./db.ts";
+export { openDatabase, readStamp, schemaStamp, copyDatabase, resolveDbPath, findProjectDb, globalDbPath, DB_DIRNAME, DB_FILENAME, SCHEMA_VERSION, SchemaVersionError, SchemaBehindError, type OpenOptions } from "./db.ts";

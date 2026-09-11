@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planCheckout, portOffset, CANONICAL_API_PORT, CANONICAL_WEB_PORT } from "./dev.ts";
-import { canonicalFallbackPlan, checkoutRunfileName, listRunfiles, parseRunInfo, planDaemon, portFree, portHeldByOther, portsOf, preserveRunningHost, readRunfile, runfilePath, settingsDiffer, startupFailureExcerpt, type DaemonPlan, type RunInfo } from "./daemon.ts";
+import { canonicalFallbackPlan, checkoutRunfileName, worktreeDbFallback, listRunfiles, parseRunInfo, planDaemon, portFree, portHeldByOther, portsOf, preserveRunningHost, readRunfile, runfilePath, settingsDiffer, startupFailureExcerpt, type DaemonPlan, type RunInfo } from "./daemon.ts";
 import { isAlive } from "./procs.ts";
 
 const dirs: string[] = [];
@@ -756,4 +756,27 @@ exit 1
     },
     30_000,
   );
+});
+
+describe("worktreeDbFallback (ADR 0021)", () => {
+  const shared = "/home/me/.flock/flock.db";
+  const wt = { standalone: false, worktree: true, root: "/repo-wt" };
+  const canon = { standalone: false, worktree: false, root: "/repo" };
+
+  test("a worktree ahead of the shared stamp is pointed at its own copy, with a note", () => {
+    const r = worktreeDbFallback({ site: wt, db: shared, shared, stamp: () => 5, version: 6 });
+    expect(r.db).toBe("/repo-wt/.flock/flock.db");
+    expect(r.note).toContain("v5");
+    expect(r.note).toContain("v6");
+  });
+
+  test("a worktree at or behind the shared stamp keeps the shared file", () => {
+    expect(worktreeDbFallback({ site: wt, db: shared, shared, stamp: () => 6, version: 6 })).toEqual({ db: shared });
+    expect(worktreeDbFallback({ site: wt, db: shared, shared, stamp: () => 7, version: 6 })).toEqual({ db: shared });
+  });
+
+  test("the canonical checkout and an explicit db are never redirected", () => {
+    expect(worktreeDbFallback({ site: canon, db: shared, shared, stamp: () => 5, version: 6 })).toEqual({ db: shared });
+    expect(worktreeDbFallback({ site: wt, db: "/tmp/x.db", shared, stamp: () => 5, version: 6 })).toEqual({ db: "/tmp/x.db" });
+  });
 });
