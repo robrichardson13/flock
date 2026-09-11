@@ -24,8 +24,9 @@ export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoar
   dbPath?: string;
   onNewBoard: () => void;
   onRename: () => void;
-  /** Opens the push notifications panel: a quiet bell beside the avatar (#8). */
-  onOpenNotifications: () => void;
+  /** Opens the push notifications panel: a quiet bell beside the avatar (#8). Only the boards
+   *  list passes this — the bell is Home-only chrome, so a board never renders it (#10). */
+  onOpenNotifications?: () => void;
   /** This device's push state, so the bell can swap to `bellOff` and carry its warn dot when `blocked`. */
   pushKind?: PushState["kind"];
   /** The route's primary action: New board, or New card. */
@@ -76,16 +77,20 @@ export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoar
         <span className="grow" />
         {action}
         {/* Subtle entrance (#8): a quiet, icon-only bell beside the avatar, not inside it — the
-            identity control reverts to a plain rename trigger so the two stay independent. */}
-        <button
-          className="icon-btn notify-btn"
-          onClick={onOpenNotifications}
-          aria-label="Notifications"
-          title="Notifications"
-        >
-          {pushKind === "blocked" ? Icons.bellOff(16) : Icons.bell(16)}
-          {pushKind === "blocked" && <span className="notify-dot" />}
-        </button>
+            identity control reverts to a plain rename trigger so the two stay independent.
+            Home-only (#10): a board never passes `onOpenNotifications`, so it never gets a
+            bell taking up nav space. */}
+        {onOpenNotifications && (
+          <button
+            className="icon-btn notify-btn"
+            onClick={onOpenNotifications}
+            aria-label="Notifications"
+            title="Notifications"
+          >
+            {pushKind === "blocked" ? Icons.bellOff(16) : Icons.bell(16)}
+            {pushKind === "blocked" && <span className="notify-dot" />}
+          </button>
+        )}
         <button className="me-btn me-btn-inline" onClick={onRename} title="Change your name">
           <Avatar name={actor || "?"} kind="human" size={22} quiet={!mobile} />
           <span className="ellipsis">{actor || "…"}</span>

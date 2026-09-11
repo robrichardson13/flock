@@ -600,7 +600,7 @@ function Shell() {
         {errorBanner}
         {/* `route.board` is set: the index returned its own shell above. */}
         <ActorLinks boardRef={route.board}>
-          <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} pushKind={pushKind} />
+          <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} />
         </ActorLinks>
       </main>
       {newBoardDialog}
