@@ -13,6 +13,7 @@ import {
   hooksDir,
   importBoard,
   mergeBoardInput,
+  messageRef,
   normalizeFields,
   parseHookOutput,
   resolveDbPath,
@@ -26,6 +27,7 @@ import {
   type Decision,
   type Event,
   type HookDescribe,
+  type Message,
 } from "@flock/core";
 import { bool, list, parseArgs, str } from "./args.ts";
 import { baseUrl, resolveHost } from "./dev.ts";
@@ -112,10 +114,14 @@ TEAM
   handoff [BOARD]                     Print the agent onboarding text
   needs-me                            Cards waiting on a human, across all boards
   say [BOARD] TEXT [--attach PATH]...   Post to the board channel; --attach is repeatable and
-                                      uploads an image (message text is optional with one)
+                                      uploads an image (message text is optional with one).
+                                      Prints the new message's ref (m<n>) for later \`flock react\`
+  react [BOARD] REF EMOJI [--remove]    React to a channel message; REF is "m7" or a bare "7".
+                                      --remove removes the actor's reaction instead of adding it
   attachment get [BOARD] ID [--out PATH]   Fetch an attachment's bytes (stdout if --out omitted);
                                       --json prints its metadata only, never bytes
-  chat [BOARD] [--limit 50]             Read the channel
+  chat [BOARD] [--limit 50]             Read the channel; each message shows its ref (m<n>) and
+                                      any reactions
   decide [BOARD] GIST [--card N] [--supersedes D]   Record a decision; --supersedes archives D
   decisions [BOARD] [--archived | --all] [--card N] [--by ACTOR]   Standing decisions by default
   decision archive [BOARD] [D...] [--card N] [--by ACTOR] [--before YYYY-MM-DD] [--reason TEXT]
@@ -252,7 +258,9 @@ function fmtEvent(e: Event): string {
     e.type === "decision.archived" ? `: archived d${d.num}` :
     e.type === "decision.restored" ? `: restored d${d.num}` :
     e.type === "card.blocked" || e.type === "card.unblocked" ? ` by #${d.by}` :
-    e.type === "card.held" ? `${d.reason ? `: ${d.reason}` : ""}` : "";
+    e.type === "card.held" ? `${d.reason ? `: ${d.reason}` : ""}` :
+    e.type === "message.reacted" ? ` ${d.emoji} ${d.ref} (${d.messageAuthor}: "${d.gist}")` :
+    e.type === "message.unreacted" ? ` removed ${d.emoji} from ${d.ref} (${d.messageAuthor}: "${d.gist}")` : "";
   return `${String(e.seq).padStart(5)}  ${e.createdAt.slice(11, 19)}  ${who.padEnd(14)} ${e.type}${card}${detail}`;
 }
 
@@ -261,6 +269,18 @@ function parseDecisionNum(ref: string): number {
   const n = Number.parseInt(ref.replace(/^[dD]/, ""), 10);
   if (!Number.isInteger(n) || n <= 0) throw new FlockError(`"${ref}" is not a decision number`, "invalid");
   return n;
+}
+
+/** Message references parse as `m7` or a bare `7`, mirroring `parseDecisionNum`. */
+function parseMessageNum(ref: string): number {
+  const n = Number.parseInt(ref.replace(/^[mM]/, ""), 10);
+  if (!Number.isInteger(n) || n <= 0) throw new FlockError(`"${ref}" is not a message reference`, "invalid");
+  return n;
+}
+
+/** `  👍 2 (rob, conductor)` — one line per emoji, under a message in `chat` output. */
+function fmtReactions(m: Pick<Message, "reactions">): string[] {
+  return m.reactions.map((r) => `  ${r.emoji} ${r.count} (${r.actors.join(", ")})`);
 }
 
 function mentions(e: Event, name: string): boolean {
@@ -842,7 +862,19 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       if (attachPaths.length === 0 && a[0] === undefined) throw new FlockError("Missing message. Run `flock help`.", "invalid");
       const attachmentIds = attachPaths.map((p) => uploadAttachment(flock, actor, board, p));
       const m = flock.say(actor, board, a[0] ?? "", { attachments: attachmentIds });
-      return out(ctx, m, () => console.log(`${m.author}: ${m.body}${m.attachments.length ? `  + ${m.attachments.length} attachments` : ""}`));
+      return out(ctx, m, () => console.log(`${messageRef(m.num)}  ${m.author}: ${m.body}${m.attachments.length ? `  + ${m.attachments.length} attachments` : ""}`));
+    }
+    case "react": {
+      const { board, rest } = pickBoard(); a = rest;
+      const num = parseMessageNum(need(0, "message reference (m<n>)"));
+      const emoji = need(1, "emoji");
+      const remove = bool(flags.remove);
+      const result = remove ? flock.unreact(actor, board, num, emoji) : flock.react(actor, board, num, emoji);
+      return out(ctx, result, () => {
+        const ref = messageRef(num);
+        if (!result.changed) return console.log(remove ? "not reacted" : "already reacted");
+        console.log(`${emoji} ${ref} (${actor.name})${remove ? " removed" : ""}`);
+      });
     }
     case "attachment": {
       const sub = need(0, "subcommand (get)");
@@ -871,7 +903,8 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
         if (!ms.length) return console.log("Channel is empty.");
         for (const m of ms) {
           const attach = m.attachments.length ? `  [+${m.attachments.length} attachment${m.attachments.length === 1 ? "" : "s"}]` : "";
-          console.log(`${m.createdAt.slice(5, 16)}  ${m.author}${m.authorKind === "agent" ? "🤖" : ""}: ${m.body}${attach}`);
+          console.log(`${messageRef(m.num)}  ${m.createdAt.slice(5, 16)}  ${m.author}${m.authorKind === "agent" ? "🤖" : ""}: ${m.body}${attach}`);
+          for (const line of fmtReactions(m)) console.log(line);
         }
       });
     }
