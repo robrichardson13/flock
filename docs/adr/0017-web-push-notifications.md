@@ -233,3 +233,19 @@ browser can't" from "the server never configured a key", so it picked the wrong 
 says the true thing, and — because the VAPID key is now prefetched at App mount instead of fetched
 after `Notification.requestPermission()` (§3.3) — a key-less server can be detected before the OS
 prompt would have fired at all, not merely explained after the fact.
+
+## Amendment, 2026-09-11
+
+"Nothing else filters. No per-event-type preferences, no quiet hours, no 'is this human on this
+board'" above now has one exception: a channel message (`message.posted` only, never an ask) is
+suppressed for a recipient who is actively looking at that board on any device, and the pump folds
+a burst of channel messages into one leading-edge alert plus one trailing merged update rather than
+sending every one. Both are decided in full, including every rejected alternative, in
+[ADR 0020](0020-batching-and-presence-on-the-push-pump.md); see
+[docs/notifications-contract.md](../notifications-contract.md) §1.3, §1.4, §2.3, §2.4, §3.1 and §3.7
+for the shipped shapes. `renotify`, noted above as unused, is now set as an enhancement
+(`true` on a leading edge and every ask, `false` on a trailing flush) so Chrome/Edge alert correctly
+on a same-tag replacement — this does not contradict "nothing depends on `renotify`", since Safari,
+iOS Safari and Firefox still ignore it and the batching cadence caps the alert rate regardless.
+Nothing else here changes: the protocol, the trigger rules' author filter, and the schema are
+exactly what this ADR decided.

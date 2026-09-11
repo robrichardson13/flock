@@ -132,6 +132,13 @@ export interface NotificationPayload {
   tag: string;
   /** The event that produced it. For dedupe and for debugging a delivery. */
   seq: number;
+  /**
+   * `true` on a leading edge and on every ask/awaiting-human notification: a same-tag replacement
+   * should alert (Chrome/Edge default to a silent replacement otherwise). `false` on a trailing
+   * batch flush, where the count updates quietly in place. Safari/iOS and Firefox ignore the
+   * field; nothing else depends on it. See ADR 0020.
+   */
+  renotify: boolean;
 }
 
 /** What the sender knows about the event's board and card that the event row does not carry. */
@@ -147,7 +154,8 @@ export interface NotifyTarget {
   payload: NotificationPayload;
 }
 
-/** The notification this event deserves, or null when it deserves none. */
+/** The notification this event deserves, or null when it deserves none. `renotify` is `true` on
+ *  every rule below. */
 export function notificationFor(event: Event, ctx: NotifyContext): NotificationPayload | null;
 
 /** Every (subscription, payload) pair this event should produce. Empty when nothing applies. */
@@ -159,6 +167,29 @@ export function notifyTargets(
 
 /** First non-empty line, collapsed whitespace, truncated with a trailing "…". Exported for tests. */
 export function summarize(text: string, max?: number): string; // max default 140
+
+/**
+ * "urgent" = card.asked, card.moved -> awaiting-human (bypasses batching and presence).
+ * "chatter" = message.posted (the only class that batches or is suppressed by presence).
+ * Everything else is null: it never produces a notification.
+ */
+export function notificationClass(event: Event): "urgent" | "chatter" | null;
+
+/**
+ * Merges a batch of `count` folded messages into one notification: title becomes
+ * `"<count> new in <board>"` (the board title is `latest.title` for `message.posted`), body/url/
+ * tag/seq come from the latest folded message, and `renotify` is passed through explicitly by the
+ * caller (`true` on a leading-edge burst, `false` on a trailing flush).
+ */
+export function mergedNotification(
+  latest: NotificationPayload,
+  count: number,
+  renotify: boolean,
+): NotificationPayload;
+
+/** Distinct actor names of the targets, in first-seen order. The author never appears (§1.3's
+ *  `notifyTargets` filter already excludes them). */
+export function recipientsOf(targets: readonly NotifyTarget[]): string[];
 ```
 
 **`notificationFor` — the complete rule table.** Every event type not listed returns `null`.
@@ -168,6 +199,15 @@ export function summarize(text: string, max?: number): string; // max default 14
 | `message.posted` | always | `ctx.boardTitle` | `` `${event.actor}: ${summarize(data.body)}` ``, or `` `${event.actor} sent an image` `` when `data.body` is empty and `data.attachments > 0` | `#/b/<slug>/channel` | = `url` |
 | `card.asked` | always | `` `#${cardNum} needs you` `` | `` `${event.actor}: ${summarize(data.question)}` `` | `#/b/<slug>/c/<n>` | = `url` |
 | `card.moved` | `data.to === "awaiting-human"` | `` `#${cardNum} is waiting on you` `` | `ctx.cardTitle ?? ""` | `#/b/<slug>/c/<n>` | = `url` |
+
+Every row above sets `renotify: true`. A merged (batched) notification is a fourth shape, produced
+by `mergedNotification` (§1.4) rather than `notificationFor`: `title` becomes
+`` `${count} new in ${latest.title}` `` and `body`/`url`/`tag`/`seq` are copied from the latest
+folded `message.posted` payload; `renotify` is `true` on a leading-edge burst (`count > 1` the
+first time a key is seen after quiet) and `false` on a trailing flush. `notificationClass(event)`
+says which of the three rows above is "urgent" (`card.asked`, `card.moved` → `awaiting-human` —
+bypasses batching and presence entirely) versus "chatter" (`message.posted` — the only class that
+batches or can be suppressed); see ADR 0020 and §1.4.
 
 - `card.asked` and the `card.moved` → `awaiting-human` case therefore share a tag, since they share
   a URL. `askHuman` emits only `card.asked` and a manual move emits only `card.moved`, so in
@@ -193,6 +233,76 @@ export function summarize(text: string, max?: number): string; // max default 14
 Nothing else. In particular: no filter on `actorKind`, no "is this human on this board" check, no
 quiet hours, no per-event-type preference. A subscription is a standing request from one named
 human for everything on the boards it is scoped to.
+
+### 1.4 Presence and `NotificationBatcher`
+
+New file `packages/core/src/presence.ts`, re-exported from `index.ts`. In memory, no clock reads —
+`now` is always a parameter — and no dependencies. See ADR 0020.
+
+```ts
+export const PRESENCE_TTL_MS = 45_000;
+
+export interface PresenceReport {
+  client: string;
+  actor: string;
+  boardId: string | null;
+  looking: boolean;
+}
+
+export class Presence {
+  constructor(opts?: { ttlMs?: number });
+  /** `looking: true` upserts `{ actor, boardId, expiresAt: now + ttlMs }` keyed by `client`;
+   *  `looking: false` deletes that client's entry. */
+  report(r: PresenceReport, now: number): void;
+  /** True iff some (unexpired) entry has this exact actor and this exact boardId. `boardId: null`
+   *  (Home) never matches, since `isLooking`'s `boardId` parameter is always a non-null string. */
+  isLooking(actor: string, boardId: string, now: number): boolean;
+  /** Live entry count after pruning stale ones. For tests. */
+  size(now: number): number;
+}
+```
+
+New file `packages/core/src/batching.ts`, re-exported from `index.ts`.
+
+```ts
+export const BATCH_WINDOW_MS = 60_000;
+
+export interface Dispatch { actor: string; boardId: string; payload: NotificationPayload }
+
+export type IsLooking = (actor: string, boardId: string, now: number) => boolean;
+
+export class NotificationBatcher {
+  /** `isLooking` is injected, not a `Presence` instance, so this module has no dependency on
+   *  presence.ts. */
+  constructor(opts: { isLooking: IsLooking; windowMs?: number });
+
+  /**
+   * Every event goes through here, even one that notifies nobody, so the author-seen reset (D9 in
+   * the spec / ADR 0020) applies uniformly: the event's own actor has their pending batch on this
+   * board dropped and zeroed regardless of whether `payload` is null. When `payload` is non-null
+   * and `notificationClass(event) === "urgent"`, every recipient gets an immediate `Dispatch` and
+   * no batch state is touched. When it is `"chatter"`, each recipient is offered to the
+   * leading-edge throttle: `isLooking` true drops the pending batch and dispatches nothing; a
+   * quiet key dispatches immediately (plain if this is the first message since last seen,
+   * `mergedNotification` otherwise) and opens a `windowMs` window; a key already inside its window
+   * folds the payload with no dispatch.
+   */
+  onEvent(
+    event: Event,
+    payload: NotificationPayload | null,
+    recipients: readonly string[],
+    now: number,
+  ): Dispatch[];
+
+  /** Every key whose window has closed and has a folded payload pending: dispatches
+   *  `mergedNotification(latest, count, false)` and opens the next window. A key whose actor
+   *  `isLooking` is dropped (batch and count reset) instead of flushed. */
+  due(now: number): Dispatch[];
+
+  /** Earliest pending flush across every key, or null. For tests. */
+  nextDueAt(): number | null;
+}
+```
 
 ---
 
@@ -264,6 +374,17 @@ All under `/api/push`, all taking the actor from `actorOf(c)` like every other r
 | `POST` | `/api/push/subscriptions` | `{ endpoint, keys: { p256dh, auth }, boardId?, userAgent? }` | `201 PushSubscriptionRecord` (keys omitted) |
 | `DELETE` | `/api/push/subscriptions` | `{ endpoint }` | `204` (also `204` when it was not registered) |
 | `POST` | `/api/push/test` | — | `200 { "sent": n, "pruned": m }` |
+| `POST` | `/api/presence` | `{ client: string, board: string \| null, looking: boolean }` | `204`; `400 { error, code: "invalid" }` on a bad body; **never** `404` |
+
+`POST /api/presence` (§1.4, §3.7) is mounted whether or not push is enabled: it is tiny, in memory,
+and a device with no subscription of its own still needs to suppress a device that does. Validation:
+`client` a non-empty string ≤ 64 characters; `looking` a boolean; `board` a string or `null`/absent
+— any violation is 400 `invalid`. `board`, when given, is resolved with `flock.board(slug)`; an
+**unknown slug is stored as `boardId: null`, not 404**, since presence is best-effort and a stale
+tab pointed at a deleted board should not spam the console. The actor comes from `actorOf(c)` like
+every other route; `presence.report({ client, actor, boardId, looking }, now())` is called with the
+same clock (`now`, defaulting to `Date.now`, a `ServerOptions` test seam shared with the pump) that
+drives the batch windows below, so a server-side test can move both in lockstep.
 
 - `publicKey` is the base64url-encoded uncompressed P-256 point, 87 characters, exactly as
   `generateVAPIDKeys()` returns it. The web app converts it to a `Uint8Array` itself (§3.3).
@@ -294,7 +415,12 @@ export type PushSend = (
 export interface PushPump {
   /** Deliver everything this one event calls for. Exported for tests; the loop calls it. */
   deliver(event: Event): Promise<{ sent: number; pruned: number }>;
-  /** Stop the tail. Called from the server's shutdown path and from tests. */
+  /** Flush trailing batch flushes whose window has closed. The tick calls it after draining
+   *  events each poll; tests call it directly against a fake `now`. */
+  flush(): Promise<{ sent: number; pruned: number }>;
+  /** Stop the tail. Called from the server's shutdown path and from tests. Drops pending batch
+   *  state rather than flushing it (ADR 0020's §2.7: a restart-equivalent shutdown never awaits a
+   *  send). */
   stop(): void;
 }
 
@@ -307,6 +433,12 @@ export function startPushPump(opts: {
   intervalMs?: number;
   /** Where to start. Default flock.lastSeq() — a restart never replays history. */
   since?: number;
+  /** Who is looking at what board, for suppressing chatter (§1.4). Default: a fresh `Presence`,
+   *  i.e. nobody looking. */
+  presence?: Presence;
+  /** Clock. Default `Date.now`. Tests inject a fake clock to drive the batch window and presence
+   *  TTL without real timers. */
+  now?: () => number;
 }): PushPump;
 ```
 
@@ -316,17 +448,40 @@ of the process. It is deliberately *not* wired into the SSE handler: SSE streams
 a browser has the page open, and the entire point of push is to reach a device with no page open.
 Cursor starts at `flock.lastSeq()` so a restart does not re-notify the backlog.
 
-**Per event:**
+**Per tick** (unchanged 500ms cadence; no new timers), per ADR 0020 §4 of the spec:
 
-1. Resolve the context. `flock.board(event.boardId)` for slug and title; `flock.card(event.boardId,
-   event.cardNum)` for `cardTitle` when `event.cardNum !== null`. Skip the event if either throws
-   (a board deleted between the write and the tail).
-2. `const subs = flock.pushSubscriptions({ boardId: event.boardId })`.
-3. `notifyTargets(event, ctx, subs)`. Empty → done, no work.
-4. Send each target: `send(target.subscription, JSON.stringify(target.payload))`, all in parallel
-   with `Promise.allSettled`.
-5. Success → `flock.touchPushSubscription(endpoint)`.
-6. Failure:
+```
+for event in flock.events({ since }):
+    ctx = resolve board/card, skip if either throws                  (unchanged)
+    payload = notificationFor(event, ctx)                            (null for most events)
+    subs = payload ? flock.pushSubscriptions({ boardId: event.boardId }) : []
+    recipients = recipientsOf(notifyTargets(event, ctx, subs))       (author + scope filter unchanged)
+    for d in batcher.onEvent(event, payload, recipients, now()): sendAll([d])
+for d in batcher.due(now()): sendAll([d])   # the tick's own call to flush()
+```
+
+1. Resolve the context exactly as before: `flock.board(event.boardId)` for slug and title;
+   `flock.card(event.boardId, event.cardNum)` for `cardTitle` when `event.cardNum !== null`. Skip
+   the event if either throws (a board deleted between the write and the tail).
+2. Every event — even one `notificationFor` returns `null` for — goes through
+   `batcher.onEvent(...)`, so the author-seen batch reset (§1.4) applies uniformly.
+3. `onEvent` returns zero or more `Dispatch`es to send **now**: an urgent bypass (every recipient,
+   immediately) or a leading-edge throttle dispatch. Trailing flushes never come from `onEvent` —
+   only from `due()`/`flush()`.
+4. `flush()` (`batcher.due(now())`) runs once per tick, after every event in the batch has been
+   drained, and is also exposed for tests to call directly with a fake `now`.
+5. `sendAll(dispatches)`: for each `Dispatch`, `flock.pushSubscriptions({ boardId: d.boardId, actor:
+   d.actor })` — read fresh at send time, so a device subscribed or pruned mid-window is handled
+   correctly — then `send(sub, JSON.stringify(d.payload))` for every one of that actor's
+   subscriptions for that board. **Every dispatch, and every subscription within a dispatch, is
+   sent in parallel with `Promise.allSettled`** (ADR 0020 / review finding S1): one recipient's
+   slow send, thrown error, or failed database write must never delay or drop another recipient's
+   push, including an ask or a different key's trailing flush the same tick already resolved. Each
+   `touchPushSubscription`/`unsubscribePush` write is its own try/catch for the same reason. A
+   web-push send carries a 10 second timeout (`webpush.sendNotification(..., { timeout: 10_000 })`)
+   so one unreachable push service cannot stall the batch indefinitely.
+6. Success → `flock.touchPushSubscription(endpoint)`.
+7. Failure:
    - `statusCode` **404 or 410** → `flock.unsubscribePush(endpoint)`. Gone means gone: the browser
      profile was cleared, the home-screen app was deleted, or the subscription expired.
    - `statusCode` **403** → also prune, and log once. 403 is "this subscription was made with a
@@ -334,9 +489,17 @@ Cursor starts at `flock.lastSeq()` so a restart does not re-notify the backlog.
    - **413** (payload too large) → log, keep the subscription. A bug on our side, not the device's.
    - **429** → log, keep. Back-pressure, not a dead device.
    - anything else, including a network error with no `statusCode` → log one line to stderr, keep.
-7. Never let a send failure escape the loop. One bad endpoint must not stop the tail.
+8. Never let a send failure escape the loop. One bad endpoint must not stop the tail.
 
-Logging is `console.error` with a `[push]` prefix, matching `[board-create ...]` elsewhere.
+Logging is `console.error` with a `[push]` prefix, matching `[board-create ...]` elsewhere; a
+failed fan-out dispatch logs `[push] sendDispatch failed for <actor> on board <id>: <reason>`.
+
+`stop()` clears the poll interval and replaces the batcher with a fresh `NotificationBatcher`,
+dropping every pending count and trailing flush rather than awaiting one last `flush()` — see ADR
+0020's restart consequence.
+
+`POST /api/push/test` is untouched by any of this: it bypasses `notifyTargets`, the batcher and
+presence entirely, sending a fixed payload straight through `send`.
 
 ### 2.5 Serving the service worker
 
@@ -390,6 +553,11 @@ self.addEventListener("push", (event) => {
       data: { url: p.url },
       icon: "/icon-192.png",
       badge: "/icon-192.png",
+      // ADR 0020: alert on a same-tag replacement for a leading-edge burst or an ask, stay quiet
+      // for a trailing flush. Guarded against an empty tag (Chrome throws if renotify is true with
+      // one) even though tag is never empty in practice — belt and braces. Safari, iOS Safari and
+      // Firefox ignore the field.
+      renotify: p.renotify === true && !!(p.tag || p.url),
     }),
   );
 });
@@ -420,12 +588,14 @@ served immutable; offline is out of scope. A caching worker would be a brand-new
 separate class of stale-app bug, and it would land on the one platform (a home-screen install)
 where a stuck cache is hardest for a user to clear.
 
-`showNotification` fields beyond `title`, `body`, `tag`, `data`, `icon` and `badge` are not used.
-MDN's compat data records `actions`, `renotify`, `requireInteraction`, `image` and `vibrate` as
-unsupported on Safari and iOS Safari, so a design that leaned on any of them would work on the
-desktop and quietly do nothing on the primary target. `icon` and `badge` are set because they cost
-nothing and help on Chrome and Android; expect iOS to ignore `badge` (WebKit bug 280160) and to
-use the home-screen icon regardless.
+`showNotification` fields beyond `title`, `body`, `tag`, `data`, `icon`, `badge` and (since ADR
+0020) `renotify` are not used. MDN's compat data records `actions`, `requireInteraction`, `image`
+and `vibrate` as unsupported on Safari and iOS Safari, so a design that leaned on any of them would
+work on the desktop and quietly do nothing on the primary target. `renotify` is the one exception,
+and it is still safe to set unconditionally: it is an enhancement Chrome/Edge honour and every other
+target silently ignores, never gating any behaviour those platforms need. `icon` and `badge` are
+set because they cost nothing and help on Chrome and Android; expect iOS to ignore `badge` (WebKit
+bug 280160) and to use the home-screen icon regardless.
 
 ### 3.2 The page side: `packages/web/src/push.ts`
 
@@ -682,6 +852,72 @@ app saved to the home screen" and "the app's manifest must have a non-default `d
 Setting it back to `browser` (the default) would silently turn notifications off on iPhone while
 everything kept working on the desktop.
 
+### 3.7 The presence client: `packages/web/src/presence.ts`
+
+New file. Pure logic, plus one hook wired into `Shell` (always mounted, so this runs on Home too).
+See ADR 0020.
+
+```ts
+export const HEARTBEAT_MS = 15_000;   // matches PRESENCE_TTL_MS's three-heartbeat budget (§1.4)
+export const IDLE_MS = 180_000;
+
+export interface LookingInputs { visible: boolean; focused: boolean; lastInputAt: number; now: number }
+
+/** Pure. `visibilityState === "visible" && document.hasFocus() && now - lastInputAt < IDLE_MS`. */
+export function isLooking(inputs: LookingInputs): boolean;
+
+export interface PresenceState { looking: boolean; board: string | null; lastSentAt: number }
+export type PresenceAction = "send" | "beat" | "none";
+
+/** Pure. "send" on any change of `looking` or `board` (including the first evaluation, `prev ===
+ *  null`); "beat" while still looking once `HEARTBEAT_MS` has elapsed since the last send;
+ *  otherwise "none". */
+export function presenceStep(
+  prev: PresenceState | null,
+  next: { looking: boolean; board: string | null },
+  now: number,
+): PresenceAction;
+
+/** One heartbeat per page load, wired into `Shell`. */
+export function usePresence(actor: string, hash: string): void;
+```
+
+**Client id.** A module-level id generated once (`crypto.randomUUID()`, falling back to
+`Math.random` only if `crypto.randomUUID` is unavailable) and held in ordinary module memory —
+**never `sessionStorage`**, which Chrome copies into a duplicated tab and would merge two tabs'
+presence into one (§1.4).
+
+**Board.** Parsed from the hash directly (`#/b/<slug>/...` → `<slug>`; anything else, Home
+included, → `null`) by a small local matcher that mirrors `App.tsx`'s route parsing without
+importing it, so `presence.ts` has no dependency on the shell that mounts it.
+
+**When it sends**, all driven by one `useEffect` in `usePresence`:
+
+- Nothing at all while `actor` is empty (before `/api/me` resolves).
+- Immediately on `visibilitychange`, `focus`, `blur`, `pageshow`, and on the board changing
+  (hash-driven, since `usePresence` re-runs its effect on `[actor, board]`) — any of these can flip
+  `looking` or `board`, and `presenceStep` fires `"send"` on either changing.
+- Every `HEARTBEAT_MS` while still looking, via a 5 second re-evaluation interval that also catches
+  the idle threshold lapsing (`IDLE_MS`) with no event of its own to trigger it.
+- Once more with `looking: false` the moment looking stops, including on `pagehide` — sent via
+  `fetch(..., { keepalive: true })` (`api.presence(body, { keepalive: true })`) so the leave signal
+  survives the page going away; `sendBeacon` is not used because it cannot carry the
+  `x-flock-actor` header.
+
+`lastInputAt` is bumped by `pointerdown`, `keydown`, `wheel`, `touchstart`, `scroll` (capture
+phase), and `pointermove` throttled to once per second, plus on the focus/visible transitions
+themselves.
+
+**`api.ts`** gains a `keepalive` passthrough on `req()` and:
+
+```ts
+presence: (body: { client: string; board: string | null; looking: boolean }, opts?: { keepalive?: boolean }) =>
+  req<void>("POST", "/presence", body, undefined, opts),
+```
+
+**`App.tsx`**: `usePresence(actor, hash)` is mounted in `Shell`, right after the `actor` state
+declaration; `main.tsx` is untouched, same as ADR 0017's iOS viewport work.
+
 ---
 
 ## 4. Testing
@@ -709,6 +945,29 @@ its scoped subscriptions away; `touchPushSubscription` moves `lastUsedAt`.
 Add a `SCHEMA_VERSION` test if one does not exist: opening a database stamped 5 with this binary
 still throws `SchemaVersionError`, and a v3 database opens and gains the new table.
 
+`packages/core/test/presence.test.ts`: `report` with `looking: true` makes `isLooking` true for
+that exact actor+board only (a different actor, a different board, and `boardId: null` all false);
+TTL boundary at `t + PRESENCE_TTL_MS - 1` (true) and `t + PRESENCE_TTL_MS` (false); `looking: false`
+removes the entry immediately; two clients of one actor are tracked independently (one leaving
+doesn't clear the other); a client re-reporting a different board moves rather than duplicates;
+`size()` prunes stale entries.
+
+`packages/core/test/batching.test.ts` (stub `IsLooking` backed by a `Set`): a lone message
+dispatches at once, plain payload, `renotify: true`; a second and third message inside the window
+produce no dispatch and `due()` before `t0 + W` is empty; `due(t0 + W)` flushes one merged dispatch
+(`"<n> new in <board>"`, latest body, `renotify: false`); a flush reopens the next window, so a
+message right after it folds and a fully quiet window's next message is a fresh leading edge with
+the accumulated count; `card.asked` and `card.moved` → `awaiting-human` mid-window dispatch
+immediately with `renotify: true` and leave the message key's count/pending untouched; `isLooking`
+true at offer time drops the pending batch with no dispatch, true at `due()` time drops it instead
+of flushing; the recipient's own event on that board resets their key, on another board it does
+not; keys are independent across actors and boards and the event's own author never appears as a
+recipient.
+
+`packages/core/test/notify.test.ts` (extended): `renotify: true` on all three `notificationFor`
+rules; a `notificationClass` table covering every event type; `mergedNotification`'s title/body/
+url/tag/seq and both `renotify` values; `recipientsOf` dedupes and preserves first-seen order.
+
 ### 4.2 Server — `packages/server/src/push.test.ts`
 
 The injected `PushSend` is the whole strategy. A fake that records `(endpoint, payload)` and can
@@ -731,6 +990,26 @@ VAPID: point `flockHome` at a temp directory, assert `vapid.json` is created wit
 second call returns the identical keys, and that `FLOCK_VAPID_PUBLIC_KEY`/`_PRIVATE_KEY` win over
 the file.
 
+**Batching and presence** (fake `now`, huge `intervalMs` so the real timer never fires; tests drive
+`deliver`/`flush` directly): a burst of messages inside the window yields exactly one send, then
+`now += BATCH_WINDOW_MS; await pump.flush()` sends one more, merged; `stop()` with a pending batch
+sends nothing even after advancing the clock and calling `flush()`; a `Presence` reporting one actor
+looking at the board suppresses that actor's channel message only (another recipient still gets it)
+and does not suppress an ask to the looking actor; the pump's own `setInterval` tick flushes a due
+batch on its own with no new event to trigger it (a real short interval plus a real sleep, not a
+manual `flush()` call); a `POST /api/presence` sent through a real `app.request()` suppresses a
+subsequent `flock.say` through the actual pump and `Presence` end to end, then un-suppresses once
+that actor stops reporting looking.
+
+**Send isolation (S1)**: a throwing send for one actor's dispatch does not stop another actor's ask
+in the same batch; two dispatches are demonstrably sent in parallel, not sequentially (gate one
+send, assert the other has already started before the first resolves); a throwing database write
+(`touchPushSubscription`/`unsubscribePush`) for one endpoint does not block bookkeeping for another.
+
+`app.request()` tests for `POST /api/presence`: 204 on a valid body, including with `push: false`;
+400 on a missing `client`; 400 on a non-boolean `looking`; an unknown board slug is still 204, never
+404.
+
 **Not** in `bun test`: a round trip through the real `web-push` transport. It needs a TLS listener
 because `web-push` calls `node:https` unconditionally, which means a self-signed certificate and
 `NODE_TLS_REJECT_UNAUTHORIZED=0` in the suite — too much machinery for what it proves. It was
@@ -747,6 +1026,11 @@ key format.
 
 The service worker itself, the permission prompt, and the subscribe round trip are not unit
 testable and are not faked. They are card #5's manual iOS checklist.
+
+`packages/web/src/presence.test.ts`: `isLooking` truth table (hidden, unfocused, idle boundary at
+exactly `IDLE_MS - 1` true and `IDLE_MS` false); `presenceStep` sends on the first evaluation and on
+any change of `looking` or `board`, beats once `HEARTBEAT_MS` has elapsed while still looking, and
+never beats while not looking.
 
 ### 4.4 Card #5's manual checklist
 
@@ -765,3 +1049,9 @@ testable and are not faked. They are card #5's manual iOS checklist.
 8. Desktop Chrome and desktop Safari 16+: enable, background the window, confirm a banner. Neither
    needs installing — macOS Safari supports push from an ordinary webpage, so the `needs-install`
    state must **not** appear there.
+9. Batching and presence (ADR 0020), one actor on both a desktop Mac and the iPhone standalone app:
+   board focused on the Mac → an agent's `flock say` does not buzz the phone; blur the Mac (or move
+   focus to another app) → the next `say` buzzes with the accumulated count; ten `say`s within 5
+   seconds → one alert immediately, then one quiet "10 new in …" update roughly a minute later;
+   `flock ask` buzzes both devices regardless of presence on either. Use a throwaway board or
+   `FLOCK_DB` pointed at the scratchpad, deleted (or discarded) before close-out.
