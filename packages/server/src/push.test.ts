@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Flock, type Actor } from "@flock/core";
+import { Flock, Presence, type Actor } from "@flock/core";
 import { loadOrCreateVapidKeys, startPushPump, type PushSend } from "./push.ts";
 import { createApp } from "./index.ts";
 
@@ -423,5 +423,152 @@ describe("push routes", () => {
     } finally {
       delete process.env.FLOCK_NO_PUSH;
     }
+  });
+});
+
+// ---------- batching and presence (spec 9, card C) ----------
+
+describe("PushPump batching", () => {
+  test("a burst of messages within the window yields one send, then one merged send after flush() at +60s", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    let t = 1_000_000;
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000, now: () => t });
+    try {
+      flock.say(ada, board.id, "one");
+      await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
+      expect(calls.length).toBe(1); // leading edge, dispatched at once
+
+      t += 1_000;
+      flock.say(ada, board.id, "two");
+      await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
+
+      t += 1_000;
+      flock.say(ada, board.id, "three");
+      await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
+
+      // "two" and "three" fold inside the window: still exactly one send.
+      expect(calls.length).toBe(1);
+
+      t += 60_000;
+      const result = await pump.flush();
+      expect(result.sent).toBe(1);
+      expect(calls.length).toBe(2);
+      const merged = JSON.parse(calls[1]!.payload);
+      expect(merged.title).toBe(`3 new in ${board.title}`);
+      expect(merged.body).toBe("ada: three");
+      expect(merged.renotify).toBe(false);
+
+      // Nothing pending; a second flush at the same or later time is a no-op.
+      const again = await pump.flush();
+      expect(again).toEqual({ sent: 0, pruned: 0 });
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("stop() drops a pending batch: no send after stop", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    let t = 1_000_000;
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000, now: () => t });
+
+    flock.say(ada, board.id, "one");
+    await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
+    t += 1_000;
+    flock.say(ada, board.id, "two");
+    await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
+    expect(calls.length).toBe(1);
+
+    pump.stop();
+    t += 60_000;
+    const result = await pump.flush();
+    expect(result).toEqual({ sent: 0, pruned: 0 });
+    expect(calls.length).toBe(1);
+  });
+});
+
+describe("PushPump presence", () => {
+  test("presence suppresses channel messages to the looking actor only, and never suppresses an ask", async () => {
+    const { flock, board } = fixture();
+    const designer: Actor = { name: "designer", kind: "agent" };
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+    flock.subscribePush(designer, { endpoint: "https://push.example/designer", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    const presence = new Presence();
+    let t = 1_000_000;
+    presence.report({ client: "c1", actor: "ada", boardId: board.id, looking: true }, t);
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000, now: () => t, presence });
+    try {
+      flock.say(scout, board.id, "hi everyone");
+      const message = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
+      await pump.deliver(message);
+      // ada is looking at this board: suppressed, never asked. designer is not: still notified.
+      expect(calls.map((c) => c.endpoint)).toEqual(["https://push.example/designer"]);
+
+      const card = flock.createCard(scout, board.id, { title: "Fix the thing" });
+      flock.askHuman(scout, board.id, card.num, "Which way?");
+      const ask = flock.events({ boardId: board.id }).find((e) => e.type === "card.asked")!;
+      const before = calls.length;
+      await pump.deliver(ask);
+      // The ask reaches ada too, even though she is looking at the board.
+      const newEndpoints = calls.slice(before).map((c) => c.endpoint).sort();
+      expect(newEndpoints).toEqual(["https://push.example/ada", "https://push.example/designer"].sort());
+    } finally {
+      pump.stop();
+    }
+  });
+});
+
+describe("POST /api/presence", () => {
+  let home: string;
+  beforeEach(() => {
+    home = tempHome();
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("a valid report returns 204, even with push disabled", async () => {
+    const flock = new Flock(":memory:");
+    const app = createApp({ flock, dbPath: ":memory:", push: false });
+    const res = await app.request("/api/presence", {
+      method: "POST",
+      headers: scoutHeaders,
+      body: JSON.stringify({ client: "c1", board: null, looking: true }),
+    });
+    expect(res.status).toBe(204);
+  });
+
+  test("a missing client is 400", async () => {
+    const { app } = appWithPush({ flockHome: home });
+    const res = await app.request("/api/presence", {
+      method: "POST",
+      headers: scoutHeaders,
+      body: JSON.stringify({ board: null, looking: true }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("a non-boolean looking is 400", async () => {
+    const { app } = appWithPush({ flockHome: home });
+    const res = await app.request("/api/presence", {
+      method: "POST",
+      headers: scoutHeaders,
+      body: JSON.stringify({ client: "c1", board: null, looking: "yes" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("an unknown board slug is still 204, not 404", async () => {
+    const { app } = appWithPush({ flockHome: home });
+    const res = await app.request("/api/presence", {
+      method: "POST",
+      headers: scoutHeaders,
+      body: JSON.stringify({ client: "c1", board: "no-such-board", looking: true }),
+    });
+    expect(res.status).toBe(204);
   });
 });
