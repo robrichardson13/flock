@@ -46,6 +46,19 @@ export interface Snapshot {
 
 export type NeedsHuman = Card & { boardSlug: string; boardTitle: string };
 
+/** `GET/POST /api/push/subscriptions`'s shape: a `PushSubscriptionRecord` with `keys` omitted —
+ * the server never echoes a device's decryption secret back to a client. */
+export interface PushSubscriptionSummary {
+  id: string;
+  endpoint: string;
+  actor: string;
+  actorKind: string;
+  boardId: string | null;
+  userAgent: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
 /** The actors roll-up: latest-seen name/kind, with runtime cached from that actor's last write. */
 export interface ActorInfo {
   name: string;
@@ -166,6 +179,12 @@ export const api = {
   events: (b: string, since = 0) => req<Event[]>("GET", `/boards/${b}/events?since=${since}`),
   eventsTail: (b: string, limit = 50) => req<Event[]>("GET", `/boards/${b}/events?tail=1&limit=${limit}`),
   allEvents: (since = 0) => req<Event[]>("GET", `/events?since=${since}`),
+  pushKey: () => req<{ enabled: boolean; publicKey?: string; reason?: string }>("GET", "/push/key"),
+  pushSubscriptions: () => req<PushSubscriptionSummary[]>("GET", "/push/subscriptions"),
+  pushSubscribe: (input: { endpoint: string; keys: { p256dh: string; auth: string }; boardId?: string | null; userAgent?: string }) =>
+    req<PushSubscriptionSummary>("POST", "/push/subscriptions", input),
+  pushUnsubscribe: (endpoint: string) => req<void>("DELETE", "/push/subscriptions", { endpoint }),
+  pushTest: () => req<{ sent: number; pruned: number }>("POST", "/push/test"),
 };
 
 export function attachmentUrl(board: string, id: string): string {

@@ -2,6 +2,7 @@ export * from "./types.ts";
 export * from "./attachments.ts";
 export * from "./flock.ts";
 export * from "./markdown.ts";
+export * from "./notify.ts";
 export * from "./tasks.ts";
 export { detectRuntime, normalizeRuntime } from "./runtime.ts";
 export * from "./hooks.ts";

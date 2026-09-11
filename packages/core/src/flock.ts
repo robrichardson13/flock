@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { ATTACHMENT_MIMES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES, ORPHAN_TTL_MS, normalizeMime, sanitizeAttachmentName, sniffImageMime } from "./attachments.ts";
 import { openDatabase } from "./db.ts";
 import { setTaskChecked, taskItems } from "./tasks.ts";
+import type { PushSubscriptionInput, PushSubscriptionRecord } from "./notify.ts";
 import {
   ACTOR_CARD_ROLES,
   CARD_STATUSES,
@@ -12,6 +13,7 @@ import {
   type Actor,
   type ActorCard,
   type ActorCardRole,
+  type ActorKind,
   type ActorProfile,
   type Attachment,
   type Board,
@@ -91,6 +93,10 @@ type DecisionRow = {
 type EventRow = {
   seq: number; board_id: string; actor: string; actor_kind: string; type: string; card_num: number | null; data: string; created_at: string;
   harness: string | null; model: string | null; effort: string | null;
+};
+type PushSubscriptionRow = {
+  id: string; endpoint: string; p256dh: string; auth: string; actor: string; actor_kind: string;
+  board_id: string | null; user_agent: string | null; created_at: string; last_used_at: string | null;
 };
 
 export interface CardFilter {
@@ -1260,6 +1266,82 @@ export class Flock {
       if (changed.length) this.touchBoard(b.id);
       return changed;
     })();
+  }
+
+  // ---------- push ----------
+
+  private rowToPushSubscription(r: PushSubscriptionRow): PushSubscriptionRecord {
+    return {
+      id: r.id,
+      endpoint: r.endpoint,
+      keys: { p256dh: r.p256dh, auth: r.auth },
+      actor: r.actor,
+      actorKind: r.actor_kind as ActorKind,
+      boardId: r.board_id,
+      userAgent: r.user_agent,
+      createdAt: r.created_at,
+      lastUsedAt: r.last_used_at,
+    };
+  }
+
+  /**
+   * Register or re-register a device. Upsert keyed on `endpoint`: a browser that re-subscribes
+   * with the same endpoint rebinds the keys, actor, board scope and user agent, and keeps its
+   * original `created_at`. Emits no event: a device registering is plumbing, not board history.
+   */
+  subscribePush(actor: Actor, input: PushSubscriptionInput): PushSubscriptionRecord {
+    if (!input.endpoint || typeof input.endpoint !== "string") throw new FlockError("A subscription needs an endpoint", "invalid");
+    if (!input.keys?.p256dh || !input.keys?.auth) throw new FlockError("A subscription needs keys.p256dh and keys.auth", "invalid");
+    const id = shortId();
+    const at = now();
+    this.db
+      .query(
+        `INSERT INTO push_subscriptions(id, endpoint, p256dh, auth, actor, actor_kind, board_id, user_agent, created_at, last_used_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+         ON CONFLICT(endpoint) DO UPDATE SET
+           p256dh = excluded.p256dh,
+           auth = excluded.auth,
+           actor = excluded.actor,
+           actor_kind = excluded.actor_kind,
+           board_id = excluded.board_id,
+           user_agent = excluded.user_agent`,
+      )
+      .run(id, input.endpoint, input.keys.p256dh, input.keys.auth, actor.name, actor.kind, input.boardId ?? null, input.userAgent ?? null, at);
+    const row = this.db.query("SELECT * FROM push_subscriptions WHERE endpoint = ?").get(input.endpoint) as PushSubscriptionRow;
+    return this.rowToPushSubscription(row);
+  }
+
+  /** Remove one device. Returns false when the endpoint was not registered. Idempotent. Emits no event. */
+  unsubscribePush(endpoint: string): boolean {
+    const result = this.db.query("DELETE FROM push_subscriptions WHERE endpoint = ?").run(endpoint);
+    return result.changes > 0;
+  }
+
+  /**
+   * Subscriptions, newest first.
+   * `boardId` returns the board's own subscriptions *plus* every global (board_id IS NULL) one —
+   * that is the set a board event has to notify.
+   * `actor` filters to one person, for the web app's "on for this device" readback.
+   */
+  pushSubscriptions(opts: { boardId?: string; actor?: string } = {}): PushSubscriptionRecord[] {
+    const clauses: string[] = [];
+    const params: (string | number)[] = [];
+    if (opts.boardId !== undefined) {
+      clauses.push("(board_id IS NULL OR board_id = ?)");
+      params.push(opts.boardId);
+    }
+    if (opts.actor !== undefined) {
+      clauses.push("actor = ?");
+      params.push(opts.actor);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db.query(`SELECT * FROM push_subscriptions ${where} ORDER BY created_at DESC`).all(...params) as PushSubscriptionRow[];
+    return rows.map((r) => this.rowToPushSubscription(r));
+  }
+
+  /** Stamp `last_used_at` after a successful send. Silent no-op on an unknown endpoint. */
+  touchPushSubscription(endpoint: string): void {
+    this.db.query("UPDATE push_subscriptions SET last_used_at = ? WHERE endpoint = ?").run(now(), endpoint);
   }
 
   // ---------- aggregate ----------

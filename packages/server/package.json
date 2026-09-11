@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.ts",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@flock/core": "workspace:*", "hono": "^4.6.0" }
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@flock/core": "workspace:*",
+    "hono": "^4.6.0",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "@types/web-push": "^3.6.4"
+  }
 }

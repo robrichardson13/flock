@@ -31,6 +31,7 @@ import { bool, list, parseArgs, str } from "./args.ts";
 import { baseUrl, resolveHost } from "./dev.ts";
 import { handoffMarkdown } from "./handoff.ts";
 import { actorWasDefaulted, resolveActor } from "./identity.ts";
+import { flockHome } from "./paths.ts";
 import { embeddedAssets, installScriptPath, versionLine } from "./runtime.ts";
 import { maybeSpawnUpdateCheck } from "./update.ts";
 
@@ -540,7 +541,7 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       const staticDir = resolve(import.meta.dir, "../../web/dist");
       const assets = await embeddedAssets();
       const hostname = resolveHost(str(flags.host), process.env);
-      const server = serve({ flock, dbPath: ctx.dbPath, port, hostname, staticDir, assets, installScriptPath });
+      const server = serve({ flock, dbPath: ctx.dbPath, port, hostname, staticDir, assets, installScriptPath, flockHome: flockHome() });
       // The first advertisedUrls entry, never the literal bind host: a wildcard bind would
       // otherwise print/--open the unusable `http://0.0.0.0:PORT`.
       const url = baseUrl(hostname, server.port ?? port);

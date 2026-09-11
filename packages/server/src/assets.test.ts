@@ -15,16 +15,18 @@ function fakeDist() {
   writeFileSync(join(dir, "index.html"), "<!doctype html><title>shell</title>");
   writeFileSync(join(dir, "assets", "index-abc123.js"), "console.log('app')");
   writeFileSync(join(dir, "assets", "index-def456.css"), "body{color:red}");
+  writeFileSync(join(dir, "sw.js"), "self.addEventListener('push', () => {});");
   return {
     "/index.html": join(dir, "index.html"),
     "/assets/index-abc123.js": join(dir, "assets", "index-abc123.js"),
     "/assets/index-def456.css": join(dir, "assets", "index-def456.css"),
+    "/sw.js": join(dir, "sw.js"),
   };
 }
 
 function appWith(opts: { assets?: Record<string, string>; staticDir?: string }) {
   const flock = new Flock(":memory:");
-  return createApp({ flock, dbPath: ":memory:", ...opts });
+  return createApp({ flock, dbPath: ":memory:", push: false, ...opts });
 }
 
 describe("embedded asset map", () => {
@@ -68,6 +70,18 @@ describe("embedded asset map", () => {
     expect(await (await app.request("/")).text()).toContain("<title>on disk</title>");
   });
 
+  test("staticDir: /sw.js is carved out of the immutable cache-control too", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "flock-static-"));
+    writeFileSync(join(dir, "index.html"), "<!doctype html><title>on disk</title>");
+    writeFileSync(join(dir, "sw.js"), "self.addEventListener('push', () => {});");
+    writeFileSync(join(dir, "app.js"), "console.log('app')");
+    const app = appWith({ staticDir: dir });
+    const sw = await app.request("/sw.js");
+    expect(sw.headers.get("cache-control")).toBe("no-cache");
+    const js = await app.request("/app.js");
+    expect(js.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+  });
+
   test("an empty map is ignored rather than serving a UI-less 200", async () => {
     const app = appWith({ assets: {} });
     const res = await app.request("/");
@@ -79,6 +93,17 @@ describe("embedded asset map", () => {
     const res = await app.request("/api/boards");
     expect(res.status).toBe(200);
     expect(Array.isArray(await res.json())).toBe(true);
+  });
+
+  test("/sw.js is carved out of the immutable cache-control", async () => {
+    const app = appWith({ assets: fakeDist() });
+    const sw = await app.request("/sw.js");
+    expect(sw.status).toBe(200);
+    expect(sw.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+    expect(sw.headers.get("cache-control")).toBe("no-cache");
+    // A hashed asset right next to it keeps the immutable year, so the carve-out is specific.
+    const js = await app.request("/assets/index-abc123.js");
+    expect(js.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
   });
 });
 
@@ -94,7 +119,7 @@ describe("GET /install.sh", () => {
     const scriptPath = join(dir, "install.sh");
     writeFileSync(scriptPath, "#!/bin/sh\necho hi\n");
     const flock = new Flock(":memory:");
-    const app = createApp({ flock, dbPath: ":memory:", installScriptPath: scriptPath });
+    const app = createApp({ flock, dbPath: ":memory:", push: false, installScriptPath: scriptPath });
     const res = await app.request("/install.sh");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/x-shellscript; charset=utf-8");

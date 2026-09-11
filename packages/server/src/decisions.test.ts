@@ -4,7 +4,7 @@ import { createApp } from "./index.ts";
 
 function fresh() {
   const flock = new Flock(":memory:");
-  const app = createApp({ flock, dbPath: ":memory:" });
+  const app = createApp({ flock, dbPath: ":memory:", push: false });
   return { flock, app };
 }
 
