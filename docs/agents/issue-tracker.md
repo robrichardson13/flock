@@ -40,6 +40,6 @@ Used by `/wayfinder`. The **map** is this directory's board; its **tickets** are
 
 - **Map**: `flock init "<effort>" --body-file map.md` (or `flock board edit --body-file map.md` if the board exists). The board body holds `## Destination`, `## Notes`, `## Fog of war`, `## Out of scope`. Decisions-so-far is *not* in the body: it is the board's decision list (`flock decisions`), rendered into the export automatically.
 - **Child ticket**: `flock card new "<title>" --label wayfinder:<type> --body "## Question\n..."`.
-- **Resolve**: `flock done <n> --resolution "<answer>"`, then `flock decide "<one-line gist>" --card <n>` to append the context pointer to Decisions-so-far.
+- **Resolve**: `flock done <n> --resolution "<answer>"`, then `flock decide "<one-line gist>" --card <n>` to append the context pointer to Decisions-so-far, only when the resolution sets a rule that binds later tickets — a routine resolution stays in `--resolution` alone.
 - **Rule out of scope**: `flock done <n> --wontfix --resolution "<why>"` and edit the board body's Out of scope section (`flock board edit --body-file map.md`).
 - **Ask the human** (HITL tickets when the human is not in the session): `flock ask <n> "<question>"`, then `flock log --wait --for <me> --timeout 600000` to block until the answer arrives or ten minutes pass. `--wait`'s default timeout is 30 seconds and a timeout exits 0 with no output, indistinguishable from "nothing yet" — always pass `--timeout` for anything you actually want to wait on.
