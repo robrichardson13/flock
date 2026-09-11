@@ -6,6 +6,7 @@ import { CANONICAL_API_PORT, CANONICAL_WEB_PORT, DEFAULT_HOST, REPO_ROOT, advert
 import { flockHome } from "./paths.ts";
 import { findStrays, isAlive, listProcesses, strayLabel, terminate, type Stray } from "./procs.ts";
 import { isStandalone, version } from "./runtime.ts";
+import { fallbackDbPath, fallbackMarkerExists, fallbackNote, needsFallback, rejoinHint, schemaStamp, seedFallback, type SchemaSite } from "./schema-policy.ts";
 import { browserPort, establishTailscale, findTailscaleReal, preflightTailscale, preserveRunningTailscale, releaseTailscale, resolveTailscale, spawnRunner, type Runner } from "./tailscale.ts";
 
 /**
@@ -242,6 +243,8 @@ export interface DaemonPlan {
   children: ChildSpec[];
   /** Set when the canonical checkout fell back off :4747/:5173 because they were held elsewhere. */
   portFallbackNote?: string;
+  /** ADR 0021: set when a worktree stepped off the shared database onto a private copy. `up` seeds it. */
+  schemaFallbackNote?: string;
   /** ADR 0019: set when this plan wants a `tailscale serve` mount established for its browser port. */
   tailscale?: boolean;
   tailscaleUrl?: string;
@@ -359,14 +362,36 @@ export function resolvePlan(opts: Partial<DaemonOptions> = {}): DaemonPlan {
   const name = mode === "binary" ? BINARY_RUNFILE_NAME : checkoutRunfileName((effectiveCheckout as Checkout).name);
   const existingRunfile = readRunfile(name);
   const effectiveOpts: Partial<DaemonOptions> = { ...opts, host: preserveRunningHost(opts, process.env, existingRunfile) };
-  const db = mode === "checkout" && effectiveCheckout?.db ? effectiveCheckout.db : resolveDbPath(opts.db).path;
+  const resolvedDb = mode === "checkout" && effectiveCheckout?.db ? effectiveCheckout.db : resolveDbPath(opts.db).path;
+  const schemaFallback = worktreeDbFallback({ site: siteOf(mode, effectiveCheckout), db: resolvedDb, shared: globalDbPath(), stamp: schemaStamp });
+  const db = schemaFallback.db;
+  if (mode === "checkout" && effectiveCheckout && schemaFallback.note) effectiveCheckout = { ...effectiveCheckout, db };
   // Pure: whether this plan wants a tailscale mount. No subprocess here — preflight and the mount
   // itself happen in `up`, so `status`/`down`/`url`/`logs` (which also call resolvePlan) never probe
   // tailscale and stay fast and offline-safe.
   const tailscale = resolveTailscale(preserveRunningTailscale(opts.tailscale, process.env, existingRunfile), process.env);
   const plan = planDaemon({ mode, serveCmd: serveCmd(), bun: bunPath(), cwd, db, checkout: effectiveCheckout, opts: effectiveOpts, env: process.env, tailscale });
   if (portFallbackNote) plan.portFallbackNote = portFallbackNote;
+  if (schemaFallback.note) plan.schemaFallbackNote = schemaFallback.note;
   return plan;
+}
+
+function siteOf(mode: Mode, checkout?: Checkout): SchemaSite {
+  if (mode === "binary" || !checkout) return { standalone: mode === "binary", worktree: false, root: checkout?.root ?? process.cwd() };
+  return { standalone: false, worktree: !checkout.canonical, root: checkout.root };
+}
+
+/**
+ * ADR 0021, the daemon's half: decide *before* spawning whether this worktree's children would
+ * stamp the shared database, and point them at the private copy instead. Pure over `stamp` so
+ * it is testable without a real file; `up` does the seeding.
+ */
+export function worktreeDbFallback(args: { site: SchemaSite; db: string; shared: string; stamp: (path: string) => number; version?: number }): { db: string; note?: string } {
+  const { site, db, shared, stamp, version } = args;
+  const current = stamp(shared);
+  if (!needsFallback({ site, db, shared, stamp: current, version })) return { db };
+  const dest = fallbackDbPath(site.root);
+  return { db: dest, note: fallbackNote({ stamp: current, version, dest }) };
 }
 
 /**
@@ -696,13 +721,15 @@ async function up(plan: DaemonPlan, opts: DaemonOptions, label?: "restarted", he
     const gi = join(dirname(plan.db), ".gitignore");
     if (!existsSync(gi)) writeFileSync(gi, "*.db\n*.db-wal\n*.db-shm\n");
   }
+  // ADR 0021: the plan chose a private copy; make it exist before the children open it.
+  if (plan.schemaFallbackNote) seedFallback(globalDbPath(), plan.db);
   const existing = readRunfile(plan.name);
   guardPorts(plan, existing ? portsOf(existing) : (heldPorts ?? []));
   // Preflight only (steps 1-5 of ADR 0019 §4): entirely read-only, so a refusal here costs nothing
   // and starts nothing, whether this call goes on to do nothing (already running) or a fresh start.
   if (plan.tailscale) preflightTailscale({ run: spawnRunner, bin: findTailscaleReal() });
   let action: "already running" | "started" | "restarted" | "restarted with new settings" = "started";
-  const fallback = plan.portFallbackNote;
+  const fallback = [plan.portFallbackNote, plan.schemaFallbackNote].filter(Boolean).join("\n") || undefined;
   // Half a dev environment is not "already running": an API whose vite has died gets restarted.
   const webGone = existing?.mode === "checkout" && !(existing.webPid !== undefined && isAlive(existing.webPid));
   if (existing && !settingsDiffer(existing, plan) && !webGone) {
@@ -821,8 +848,11 @@ export async function daemonCommand(cmd: string, opts: DaemonOptions) {
       if (opts.json) return console.log(JSON.stringify({ here: mine ?? null, others, strays, plan: { name: plan.name, mode: plan.mode, apiPort: plan.apiPort, webPort: plan.webPort, root: plan.root, db: plan.db, url: plan.url }, binary }));
       console.log(binaryLine());
       if (plan.portFallbackNote) console.log(plan.portFallbackNote);
+      if (plan.schemaFallbackNote) console.log(`${plan.schemaFallbackNote.split("\n")[0]} \`flock up\` will use a private copy.`);
       if (!mine) console.log(`not running here. Start with: flock up\n\n${describe(plan)}`);
       else console.log(`${statusLine(mine)}\n\n${describe(mine)}`);
+      const rejoin = rejoinHint({ db: plan.db, marker: fallbackMarkerExists(plan.db), sharedStamp: schemaStamp(globalDbPath()), copyStamp: schemaStamp(plan.db) });
+      if (rejoin) console.log(`\n${rejoin}`);
       if (strays.length) console.log(`\nNot tracked by any runfile (\`flock down\` or \`flock up\` stops them):\n  ${strays.map(strayLabel).join("\n  ")}`);
       if (others.length) {
         console.log(`\nAlso running:`);

@@ -33,6 +33,41 @@ export class SchemaVersionError extends FlockError {
   }
 }
 
+/**
+ * Thrown by `openDatabase({ migrate: false })` when the database is stamped *older* than this
+ * build's `SCHEMA_VERSION` — the caller has declined to migrate it. Thrown before `SCHEMA` or
+ * `migrate()` run, so nothing is written. The CLI throws this from a git worktree against the
+ * shared `~/.flock/flock.db` and falls back to a private copy (ADR 0021); nothing else sets
+ * `migrate: false`.
+ */
+export class SchemaBehindError extends FlockError {
+  constructor(
+    public readonly dbVersion: number,
+    public readonly binaryVersion: number,
+  ) {
+    super(`The database is stamped schema v${dbVersion}, this build is v${binaryVersion}, and migrating it here is not allowed.`, "invalid");
+    this.name = "SchemaBehindError";
+  }
+}
+
+/** How `openDatabase` treats a stamp that differs from `SCHEMA_VERSION`. ADR 0021. */
+export interface OpenOptions {
+  /**
+   * Migrate an older database up to `SCHEMA_VERSION` and stamp it. Default true — an installed
+   * binary and the canonical checkout always do. `false` throws `SchemaBehindError` instead, so
+   * a worktree never stamps the shared database out from under every other checkout.
+   */
+  migrate?: boolean;
+  /**
+   * Open a database stamped *newer* than `SCHEMA_VERSION` instead of throwing. `SCHEMA` and
+   * `migrate()` are skipped and the stamp is left alone; since migrations are additive by
+   * contract, an older build can still read and write it. Default false — a released binary
+   * cannot vouch for a stamp it has never seen, so it keeps the hard refusal. Checkouts set
+   * this so a worktree that has not rebased past a merged bump keeps working.
+   */
+  allowNewer?: boolean;
+}
+
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS boards (
   id TEXT PRIMARY KEY,
@@ -179,26 +214,67 @@ CREATE TABLE IF NOT EXISTS comment_reactions (
 CREATE INDEX IF NOT EXISTS comment_reactions_board ON comment_reactions(board_id);
 `;
 
-export function openDatabase(path: string): Database {
+export function openDatabase(path: string, opts: OpenOptions = {}): Database {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path, { create: true });
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec("PRAGMA busy_timeout = 5000;");
 
-  // Checked before SCHEMA or migrate() touch anything: a binary older than the database's stamp
-  // must fail without writing a byte. `user_version` defaults to 0, which is indistinguishable
-  // from "never stamped" — that's intentional, see SCHEMA_VERSION above.
-  const dbVersion = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
+  // Checked before SCHEMA or migrate() touch anything: a refusal in either direction must fail
+  // without writing a byte. `user_version` defaults to 0, which is indistinguishable from
+  // "never stamped" — that's intentional, see SCHEMA_VERSION above.
+  const dbVersion = readStamp(db);
   if (dbVersion > SCHEMA_VERSION) {
+    if (opts.allowNewer) return db;
     db.close();
     throw new SchemaVersionError(dbVersion, SCHEMA_VERSION);
+  }
+  if (dbVersion < SCHEMA_VERSION && opts.migrate === false) {
+    db.close();
+    throw new SchemaBehindError(dbVersion, SCHEMA_VERSION);
   }
 
   db.exec(SCHEMA);
   migrate(db);
   if (dbVersion !== SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   return db;
+}
+
+export function readStamp(db: Database): number {
+  return (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
+}
+
+/**
+ * The stamp on a database file without opening it for writing or migrating it: 0 when the file
+ * does not exist, which is also what an unstamped file reports. Lets a caller decide a policy
+ * (ADR 0021) before any `openDatabase` side effect.
+ */
+export function schemaStamp(path: string): number {
+  if (!existsSync(path)) return 0;
+  const db = new Database(path, { readonly: true });
+  try {
+    return readStamp(db);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Copy a database to `dest` with `VACUUM INTO`, which is consistent under WAL (a plain file
+ * copy would miss whatever sits in the -wal). Refuses to overwrite: the copy is the caller's
+ * private data from then on. A missing source yields a fresh, empty database at `dest`.
+ */
+export function copyDatabase(src: string, dest: string): void {
+  if (existsSync(dest)) throw new FlockError(`Refusing to overwrite ${dest}`, "invalid");
+  mkdirSync(dirname(dest), { recursive: true });
+  if (!existsSync(src)) return;
+  const db = new Database(src, { readonly: true });
+  try {
+    db.exec(`VACUUM INTO '${dest.replace(/'/g, "''")}'`);
+  } finally {
+    db.close();
+  }
 }
 
 /** Additive migrations for databases created by older versions. */

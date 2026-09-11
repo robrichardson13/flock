@@ -36,6 +36,7 @@ import { baseUrl, resolveHost } from "./dev.ts";
 import { handoffMarkdown } from "./handoff.ts";
 import { actorWasDefaulted, resolveActor } from "./identity.ts";
 import { flockHome } from "./paths.ts";
+import { openForCli } from "./schema-policy.ts";
 import { embeddedAssets, installScriptPath, versionLine } from "./runtime.ts";
 import { maybeSpawnUpdateCheck } from "./update.ts";
 
@@ -569,8 +570,8 @@ async function main(argv: string[]) {
     console.error(`Created isolated database ${localDb}`);
   }
 
-  const { path: dbPath } = resolveDbPath(str(flags.db));
-  const flock = new Flock(dbPath);
+  // ADR 0021: a worktree never stamps the shared database; it gets a private copy instead.
+  const { flock, dbPath } = openForCli(resolveDbPath(str(flags.db)).path);
   const ctx: Ctx = { flock, actor: resolveActor(flags), json: bool(flags.json), dbPath, flags };
   try {
     await run(ctx, cmd, rest);
