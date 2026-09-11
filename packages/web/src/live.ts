@@ -1659,7 +1659,8 @@ export function useLiveStream({ path, types, onEvent, onWake, fetchSince }: Live
 export const BOARD_EVENT_TYPES = [
   "board.created", "board.updated", "card.created", "card.updated", "card.claimed", "card.released", "card.moved",
   "card.closed", "card.blocked", "card.unblocked", "card.held", "card.unheld", "card.asked", "card.answered",
-  "comment.posted", "message.posted", "message.reacted", "message.unreacted", "decision.recorded", "decision.archived", "decision.restored",
+  "comment.posted", "message.posted", "message.reacted", "message.unreacted", "comment.reacted", "comment.unreacted",
+  "decision.recorded", "decision.archived", "decision.restored",
 ] as const;
 
 /**

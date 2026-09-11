@@ -19,6 +19,7 @@ import {
   type DragEvent as ReactDragEvent,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { api, attachmentUrl, type Attachment, type Reaction } from "./api.ts";
@@ -104,6 +105,102 @@ export function failPending<T extends ThreadEntry>(pending: readonly PendingSend
   return pending.filter((p) => p.tempId !== tempId);
 }
 
+/** The emoji a double tap toggles (#6) — the same ack emoji the conductor reads a 👍 as
+ *  elsewhere on the board. */
+export const DOUBLE_TAP_EMOJI = "👍";
+
+/** Whether `viewer` is one of `emoji`'s actors — `MessageReactions`' own highlighting and the
+ *  double-tap gesture below both need "am I already reacted" and previously computed it their
+ *  own way; this is the one definition both use. */
+export function hasReaction(reactions: readonly Reaction[], viewer: string, emoji: string): boolean {
+  return !!viewer && (reactions.find((r) => r.emoji === emoji)?.actors.includes(viewer) ?? false);
+}
+
+/** Double-tap thresholds (#6): two lifts within this long and this close together are one
+ *  double tap; anything slower or further apart is two ordinary taps. */
+const DOUBLE_TAP_MS = 300;
+const DOUBLE_TAP_PX = 32;
+
+interface TapPoint {
+  x: number;
+  y: number;
+  t: number;
+}
+
+/** Pure: does `now` complete a double tap against `prev` (the previous lift, or null if there
+ *  wasn't one to pair with)? Split out from the DOM plumbing in `useDoubleTapReact` so the
+ *  threshold logic is unit-testable without pointer events. */
+export function isDoubleTap(prev: TapPoint | null, now: TapPoint): boolean {
+  if (!prev) return false;
+  if (now.t - prev.t > DOUBLE_TAP_MS) return false;
+  return Math.hypot(now.x - prev.x, now.y - prev.y) <= DOUBLE_TAP_PX;
+}
+
+/** Pure: did the pointer travel far enough between down and up that this lift was a scroll or
+ *  a drag rather than a tap? A moved lift neither reacts nor becomes a tap to pair against. */
+export function tapMoved(down: { x: number; y: number } | null, up: { x: number; y: number }): boolean {
+  return !down || Math.hypot(up.x - down.x, up.y - down.y) > DOUBLE_TAP_PX;
+}
+
+/**
+ * Double-tap-to-react (#6): one gesture detector shared by the channel message bubble and the
+ * card comment bubble — both render through `ThreadGroup` below, so it calls this once and
+ * gets back a per-entry handler factory (React needs a fixed hook count per render; the
+ * factory is plain JS, safe to call once per bubble in a `.map`).
+ *
+ * Deliberately not `onDoubleClick`: on desktop a double-click selects a word, so this pairs
+ * two `pointerup`s itself, and only on a coarse (touch) pointer — `useHasFinePointer` is the
+ * same "mouse or trackpad" check the channel's desktop-only affordances already use, negated.
+ * A lift is ignored entirely, and never recorded as a tap to pair against, when: it started on
+ * a button, a link, or the reaction picker (so single taps, link taps and the picker's own
+ * clicks are untouched); the pointer moved more than a tap's worth between down and up (a
+ * scroll or a drag, not a tap); or it ended a long-press text selection (`window.getSelection`
+ * is non-empty).
+ */
+export function useDoubleTapReact<T>(
+  onDoubleTap: (entry: T) => void,
+): (entry: T) => { onPointerDown: (e: ReactPointerEvent) => void; onPointerUp: (e: ReactPointerEvent) => void } {
+  const coarse = !useHasFinePointer();
+  const lastTap = useRef<TapPoint | null>(null);
+  const downPoint = useRef<{ x: number; y: number } | null>(null);
+  return useCallback(
+    (entry: T) => ({
+      onPointerDown: (e: ReactPointerEvent) => {
+        if (!coarse) return;
+        downPoint.current = { x: e.clientX, y: e.clientY };
+      },
+      onPointerUp: (e: ReactPointerEvent) => {
+        if (!coarse) return;
+        const target = e.target as HTMLElement;
+        if (target.closest?.("button, a, .reaction-picker-wrap")) {
+          lastTap.current = null;
+          downPoint.current = null;
+          return;
+        }
+        const down = downPoint.current;
+        downPoint.current = null;
+        if (tapMoved(down, { x: e.clientX, y: e.clientY })) {
+          lastTap.current = null;
+          return;
+        }
+        const sel = window.getSelection?.();
+        if (sel && sel.toString().length > 0) {
+          lastTap.current = null;
+          return;
+        }
+        const now: TapPoint = { x: e.clientX, y: e.clientY, t: Date.now() };
+        if (isDoubleTap(lastTap.current, now)) {
+          lastTap.current = null;
+          onDoubleTap(entry);
+        } else {
+          lastTap.current = now;
+        }
+      },
+    }),
+    [coarse, onDoubleTap],
+  );
+}
+
 /**
  * A run of entries from one actor under a single header: avatar and name and time on the
  * first line, then the bubbles. `mine` mirrors the whole group to the right on a tinted
@@ -120,6 +217,7 @@ export function ThreadGroup<T extends ThreadEntry>({
   entryClass,
   entryStyle,
   entryFooter,
+  onDoubleTapReact,
 }: {
   group: readonly T[];
   mine: boolean;
@@ -132,8 +230,21 @@ export function ThreadGroup<T extends ThreadEntry>({
    *  and add-reaction affordance (#4). Comments have nothing here; only the channel passes
    *  this. */
   entryFooter?: (entry: T) => ReactNode;
+  /** A double tap on this bubble (#6, touch only — see `useDoubleTapReact`): the caller owns
+   *  the toggle itself (it knows the entry's `num` and current reactions), this just tells it
+   *  which entry was tapped. Both callers currently pass one that toggles 👍 through the same
+   *  path their reaction chip's click already uses. */
+  onDoubleTapReact?: (entry: T) => void;
 }) {
   const mobile = useIsMobile();
+  // Which bubble just got a double tap, so its brief 👍 confirmation (styles.css `.dt-flash`)
+  // knows where to render; cleared by the animation itself (`onAnimationEnd`) so there is no
+  // timer to leak if the bubble unmounts first.
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const tapHandlers = useDoubleTapReact<T>((entry) => {
+    onDoubleTapReact?.(entry);
+    setFlashId(entry.id);
+  });
   const head = group[0];
   if (!head) return null;
   return (
@@ -157,7 +268,13 @@ export function ThreadGroup<T extends ThreadEntry>({
             style={entryStyle?.(m)}
             title={mine ? timeAgo(m.createdAt) : undefined}
             data-msg-author={m.author}
+            {...(onDoubleTapReact ? tapHandlers(m) : undefined)}
           >
+            {flashId === m.id && (
+              <span className="dt-flash" aria-hidden onAnimationEnd={() => setFlashId((id) => (id === m.id ? null : id))}>
+                {DOUBLE_TAP_EMOJI}
+              </span>
+            )}
             {m.body.trim() && <ClampedBody text={m.body} />}
             {m.attachments && m.attachments.length > 0 && (
               <MessageAttachments boardId={boardId} attachments={m.attachments} author={m.author} createdAt={m.createdAt} />
@@ -367,7 +484,7 @@ function ReactionPicker({ isMine, onPick }: { isMine: (emoji: string) => boolean
  * optimistic patch) never has to re-derive it.
  */
 export function MessageReactions({ reactions, viewer, onToggle }: { reactions: readonly Reaction[]; viewer: string; onToggle: (emoji: string, mine: boolean) => void }) {
-  const isMine = (emoji: string) => !!viewer && (reactions.find((r) => r.emoji === emoji)?.actors.includes(viewer) ?? false);
+  const isMine = (emoji: string) => hasReaction(reactions, viewer, emoji);
   return (
     <div className="msg-reactions">
       {reactions.map((r) => {

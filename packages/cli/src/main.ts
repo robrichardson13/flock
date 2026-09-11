@@ -10,11 +10,13 @@ import {
   HookError,
   exportBoard,
   findHook,
+  commentRef,
   hooksDir,
   importBoard,
   mergeBoardInput,
   messageRef,
   normalizeFields,
+  parseCommentRef,
   parseHookOutput,
   resolveDbPath,
   runHook,
@@ -92,6 +94,15 @@ IDENTITY
                     ~/.flock/config.json, then the default 0.0.0.0 (every interface). Use
                     127.0.0.1 to bind loopback only. A bare up/restart with none of these given
                     keeps a running daemon's own host rather than resetting it. See docs/adr/0015.
+  --tailscale       Front the browser-facing port with \`tailscale serve\` for an HTTPS origin on
+  --no-tailscale    the tailnet (https://<machine>.<tailnet>.ts.net). Precedence: --tailscale/
+                    --no-tailscale, FLOCK_TAILSCALE, "tailscale" in ~/.flock/config.json, then off.
+                    FLOCK_TAILSCALE_BIN overrides where the tailscale binary is found. Refuses
+                    (never warns) when tailscale is missing, logged out, or the port is already
+                    mounted elsewhere. A bare up/restart keeps a running daemon's own choice, like
+                    --host. \`flock down\` tears the mount down. \`url\`/\`status\`/the up and serve
+                    banners list the https URL first once a mount is active. See docs/adr/0019
+                    and docs/config.md.
 
 BOARDS
   boards [--all] [--here]             List boards (--here: only this directory's)
@@ -116,7 +127,8 @@ TEAM
   say [BOARD] TEXT [--attach PATH]...   Post to the board channel; --attach is repeatable and
                                       uploads an image (message text is optional with one).
                                       Prints the new message's ref (m<n>) for later \`flock react\`
-  react [BOARD] REF EMOJI [--remove]    React to a channel message; REF is "m7" or a bare "7".
+  react [BOARD] REF EMOJI [--remove]    React to a channel message or a card comment; REF is
+                                      "m7"/a bare "7" (message) or "4.2" (comment #2 on card #4).
                                       --remove removes the actor's reaction instead of adding it
   attachment get [BOARD] ID [--out PATH]   Fetch an attachment's bytes (stdout if --out omitted);
                                       --json prints its metadata only, never bytes
@@ -139,25 +151,35 @@ SETUP
   serve [--port 4747] [--host 0.0.0.0] [--open]
                                       Run the web UI + HTTP API in the foreground. Binds every
                                       interface by default; --host 127.0.0.1 (or FLOCK_HOST) for
-                                      loopback only.
+                                      loopback only. Prints the https tailnet URL first when its
+                                      parent (\`up --foreground --tailscale\`) established a mount;
+                                      --open still opens the loopback address.
   setup [--no-start] [--skill-only]   Write ~/.claude/skills/flock/SKILL.md, then \`flock up\`
                                       (a symlinked destination is left alone). --skill-only
                                       does just the skill; --no-start skips starting the daemon.
                                       Reports ~/.flock/skill.md (your personalization of the
                                       skill, see docs/config.md) when it exists; silent when not.
   up [--port N] [--host H] [--isolated | --db PATH] [--foreground] [--open]
+     [--tailscale | --no-tailscale]
                                       Start the daemon in the background (detached; survives the
                                       terminal). In a checkout it starts the dev environment
                                       instead: bun --watch + vite on this checkout's ports.
                                       Idempotent: already running / started / restarted with new
-                                      settings. --foreground runs \`serve\` here instead.
-  down [--all]                        Stop this directory's daemon (--all: every one on the machine)
-  restart                             Stop it and start it again
-  status                              This directory's daemon, plus every other one running
+                                      settings. --foreground runs \`serve\` here instead. --tailscale
+                                      fronts the browser-facing port with \`tailscale serve\`; --open
+                                      always opens the loopback address, never the tailnet one.
+  down [--all]                        Stop this directory's daemon (--all: every one on the machine).
+                                      Tears down its tailscale mount first, if it made one.
+  restart                             Stop it and start it again (keeps its tailscale choice, like host)
+  status                              This directory's daemon, plus every other one running. Adds a
+                                      \`tls\` line naming the tailscale mount when one is active.
   logs [-f] [-n 40]                   Tail ~/.flock/logs/<name>.log
-  url                                 Print the URL. Bound to 0.0.0.0 (the default): loopback,
-                                      then LAN and Tailscale addresses. Bound to loopback only:
-                                      just the loopback URL, plus a hint to reach it elsewhere.
+  url                                 Print the URL. Leads with the https tailnet URL when a
+                                      tailscale mount is active (see --tailscale above), then:
+                                      bound to 0.0.0.0 (the default): loopback, then LAN and
+                                      Tailscale addresses. Bound to loopback only: just the
+                                      loopback URL, plus a hint to reach it elsewhere (dropped once
+                                      a tailscale mount already provides one).
   upgrade [--version=V]               Reinstall flock: re-runs the installer beside this binary,
                                       refreshes the skill and restarts a running daemon. An
                                       installed flock also does this on its own once a day; set
@@ -260,7 +282,9 @@ function fmtEvent(e: Event): string {
     e.type === "card.blocked" || e.type === "card.unblocked" ? ` by #${d.by}` :
     e.type === "card.held" ? `${d.reason ? `: ${d.reason}` : ""}` :
     e.type === "message.reacted" ? ` ${d.emoji} ${d.ref} (${d.messageAuthor}: "${d.gist}")` :
-    e.type === "message.unreacted" ? ` removed ${d.emoji} from ${d.ref} (${d.messageAuthor}: "${d.gist}")` : "";
+    e.type === "message.unreacted" ? ` removed ${d.emoji} from ${d.ref} (${d.messageAuthor}: "${d.gist}")` :
+    e.type === "comment.reacted" ? ` ${d.emoji} ${d.ref} (${d.commentAuthor}: "${d.gist}")` :
+    e.type === "comment.unreacted" ? ` removed ${d.emoji} from ${d.ref} (${d.commentAuthor}: "${d.gist}")` : "";
   return `${String(e.seq).padStart(5)}  ${e.createdAt.slice(11, 19)}  ${who.padEnd(14)} ${e.type}${card}${detail}`;
 }
 
@@ -271,11 +295,17 @@ function parseDecisionNum(ref: string): number {
   return n;
 }
 
-/** Message references parse as `m7` or a bare `7`, mirroring `parseDecisionNum`. */
-function parseMessageNum(ref: string): number {
+/**
+ * `flock react`'s REF is either a comment ref (`4.2`, core's `parseCommentRef`) or a message ref
+ * (`m7`/a bare `7`). Tried in that order since a comment ref always contains a dot a message ref
+ * never has; a ref matching neither is a usage error, not a not-found.
+ */
+function parseReactRef(ref: string): { kind: "comment"; cardNum: number; num: number } | { kind: "message"; num: number } {
+  const comment = parseCommentRef(ref);
+  if (comment) return { kind: "comment", ...comment };
   const n = Number.parseInt(ref.replace(/^[mM]/, ""), 10);
-  if (!Number.isInteger(n) || n <= 0) throw new FlockError(`"${ref}" is not a message reference`, "invalid");
-  return n;
+  if (/^[mM]?\d+$/.test(ref.trim()) && Number.isInteger(n) && n > 0) return { kind: "message", num: n };
+  throw new FlockError(`"${ref}" is not a message reference (m<n>) or a comment reference (<card>.<n>)`, "invalid");
 }
 
 /** `  👍 2 (rob, conductor)` — one line per emoji, under a message in `chat` output. */
@@ -490,10 +520,38 @@ async function main(argv: string[]) {
       all: bool(flags.all),
       follow: bool(flags.follow) || bool(flags.f),
       lines: str(flags.n) ? Number(str(flags.n)) : str(flags.lines) ? Number(str(flags.lines)) : undefined,
+      // --tailscale / --no-tailscale > FLOCK_TAILSCALE > "tailscale" in config.json > off; see
+      // resolveTailscale in tailscale.ts. undefined here means "not specified on this invocation".
+      tailscale: bool(flags["no-tailscale"]) ? false : bool(flags.tailscale) ? true : undefined,
     };
     // `up --foreground` is `serve` on the port this checkout would have used: fall through.
     if ((cmd === "up" || cmd === "start") && bool(flags.foreground)) {
       if (!str(flags.port)) process.env.FLOCK_PORT = String(foregroundPort(opts));
+      const { resolveTailscale, establishTailscale, releaseTailscale, spawnRunner, findTailscaleReal } = await import("./tailscale.ts");
+      if (resolveTailscale(opts.tailscale, process.env)) {
+        const host = resolveHost(opts.host, process.env);
+        const port = Number(process.env.FLOCK_PORT);
+        const bin = findTailscaleReal();
+        const mount = establishTailscale({ run: spawnRunner, bin, host, port });
+        process.env.FLOCK_TAILSCALE_URL = mount.url;
+        let released = false;
+        const cleanup = () => {
+          if (released) return;
+          released = true;
+          releaseTailscale({ run: spawnRunner, bin, target: mount.target });
+        };
+        // A SIGKILLed foreground `serve` leaves the mount behind; the next `flock up --tailscale`
+        // re-asserts it and `flock down` clears it.
+        process.on("SIGINT", () => {
+          cleanup();
+          process.exit(0);
+        });
+        process.on("SIGTERM", () => {
+          cleanup();
+          process.exit(0);
+        });
+        process.on("exit", cleanup);
+      }
       cmd = "serve";
     } else {
       await daemonCommand(cmd, opts);
@@ -563,8 +621,11 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       const hostname = resolveHost(str(flags.host), process.env);
       const server = serve({ flock, dbPath: ctx.dbPath, port, hostname, staticDir, assets, installScriptPath, flockHome: flockHome() });
       // The first advertisedUrls entry, never the literal bind host: a wildcard bind would
-      // otherwise print/--open the unusable `http://0.0.0.0:PORT`.
-      const url = baseUrl(hostname, server.port ?? port);
+      // otherwise print/--open the unusable `http://0.0.0.0:PORT`. `FLOCK_TAILSCALE_URL` is set by
+      // `up --foreground --tailscale` just above, before this same process fell through to
+      // `serve` — it leads the printed banner (ADR 0019 §8), same as `flock url`/`status`.
+      const loopback = baseUrl(hostname, server.port ?? port);
+      const url = process.env.FLOCK_TAILSCALE_URL || loopback;
       const ui = assets?.["/index.html"] ? "embedded" : existsSync(join(staticDir, "index.html")) ? "built" : "not built (run `bun run build`, or use `bun run dev`)";
       console.log(`flock serving ${url}\n  db: ${ctx.dbPath}\n  ui: ${ui}`);
       // Spawned by `flock up`? Write the runfile now that we are listening: it is up's readiness signal.
@@ -573,7 +634,9 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       // A long-lived daemon is the one process that can keep itself current: 60s + jitter, then 6h.
       const { startDaemonUpdateChecks } = await import("./update.ts");
       startDaemonUpdateChecks();
-      if (bool(flags.open)) Bun.spawn(["open", url]);
+      // Deliberately `loopback`, not `url`: `--open` puts a browser tab on this machine, so it
+      // stays off the tailnet round-trip even when the banner above led with the https origin.
+      if (bool(flags.open)) Bun.spawn(["open", loopback]);
       await new Promise(() => {});
       return;
     }
@@ -757,7 +820,8 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
             console.log("\n   --- comments ---");
             for (const cm of comments) {
               const imgs = cm.attachments.length ? `  [+${cm.attachments.length} image${cm.attachments.length === 1 ? "" : "s"}]` : "";
-              console.log(`   [${cm.kind}] ${cm.author} ${cm.createdAt.slice(0, 16)}${imgs}\n${cm.body.replace(/^/gm, "     ")}`);
+              console.log(`   ${commentRef(cm.cardNum, cm.num)}  [${cm.kind}] ${cm.author} ${cm.createdAt.slice(0, 16)}${imgs}\n${cm.body.replace(/^/gm, "     ")}`);
+              for (const line of fmtReactions(cm)) console.log(`   ${line}`);
             }
           }
         });
@@ -866,12 +930,22 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
     }
     case "react": {
       const { board, rest } = pickBoard(); a = rest;
-      const num = parseMessageNum(need(0, "message reference (m<n>)"));
+      const target = parseReactRef(need(0, "reference (m<n> or <card>.<n>)"));
       const emoji = need(1, "emoji");
       const remove = bool(flags.remove);
-      const result = remove ? flock.unreact(actor, board, num, emoji) : flock.react(actor, board, num, emoji);
+      if (target.kind === "comment") {
+        const result = remove
+          ? flock.unreactFromComment(actor, board, target.cardNum, target.num, emoji)
+          : flock.reactToComment(actor, board, target.cardNum, target.num, emoji);
+        return out(ctx, result, () => {
+          const ref = commentRef(target.cardNum, target.num);
+          if (!result.changed) return console.log(remove ? "not reacted" : "already reacted");
+          console.log(`${emoji} ${ref} (${actor.name})${remove ? " removed" : ""}`);
+        });
+      }
+      const result = remove ? flock.unreact(actor, board, target.num, emoji) : flock.react(actor, board, target.num, emoji);
       return out(ctx, result, () => {
-        const ref = messageRef(num);
+        const ref = messageRef(target.num);
         if (!result.changed) return console.log(remove ? "not reacted" : "already reacted");
         console.log(`${emoji} ${ref} (${actor.name})${remove ? " removed" : ""}`);
       });

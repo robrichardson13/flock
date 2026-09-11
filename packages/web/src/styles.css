@@ -1691,6 +1691,7 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 .msg-head { display: flex; gap: var(--s2); align-items: baseline; font-size: var(--t-foot); line-height: var(--lh-foot); margin-bottom: 2px; }
 .msg-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: var(--lh-body); }
 .bubble {
+  position: relative;
   max-width: 88%; padding: var(--s2) var(--s3); border-radius: var(--r-md);
   background: var(--bubble-bg); box-shadow: var(--elev-1);
 }
@@ -1701,13 +1702,37 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 /* An optimistic send (#31): shown at full contrast the instant it's typed — dimming the text
    itself would fight the contrast gate below (#19) — with a small pulsing dot marking it as
    still in flight until the POST that already fired resolves. */
-.bubble.pending { position: relative; }
 .bubble.pending::after {
   content: ""; position: absolute; right: var(--s2); bottom: var(--s2);
   width: 6px; height: 6px; border-radius: 50%; background: var(--muted-2);
   animation: pending-pulse 1s ease-in-out infinite;
 }
 @keyframes pending-pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+
+/* Double-tap-to-react confirmation (#6): every bubble is a tap target for this gesture, so
+   every bubble carries the position it needs to center this over itself. A brief 👍 pops up
+   and fades — the same pill language (--ink-action-soft ring, --ink-action ink) the "mine"
+   reaction chip already wears, just floating rather than inline, since the tap can land before
+   any chip exists yet. `pointer-events: none` keeps it from ever intercepting the next tap. */
+.dt-flash {
+  position: absolute; top: 50%; left: 50%; z-index: 5; pointer-events: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 50%;
+  background: var(--ink-action-soft); color: var(--ink-action);
+  font-size: 20px; line-height: 1;
+  box-shadow: var(--shadow);
+  animation: dt-flash 550ms ease-out forwards;
+}
+@keyframes dt-flash {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
+  30% { opacity: 1; transform: translate(-50%, -50%) scale(1.1); }
+  65% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dt-flash { animation: dt-flash-reduced 550ms ease-out forwards; }
+}
+@keyframes dt-flash-reduced { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
 
 /* ---------- the phone channel's gutters (#41) ---------- */
 /* On a 390pt screen the avatar column was costing an agent bubble 40pt of its left edge that

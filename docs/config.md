@@ -5,7 +5,8 @@ Optional. flock works with no config file at all; this is only for turning somet
 ```json
 {
   "autoupdate": false,
-  "host": "127.0.0.1"
+  "host": "127.0.0.1",
+  "tailscale": true
 }
 ```
 
@@ -13,6 +14,7 @@ Optional. flock works with no config file at all; this is only for turning somet
 | --- | --- | --- | --- |
 | `autoupdate` | boolean | `true` | `false` stops an installed flock from updating itself. |
 | `host` | string | `0.0.0.0` | The bind host `flock serve`/`flock up` fall back to when there is no `--host` flag and no `FLOCK_HOST`. Precedence, highest first: `--host`, `FLOCK_HOST`, this key, then the built-in `0.0.0.0` default. Set it to `127.0.0.1` to keep every future `flock up` on this machine to loopback without having to pass `--host` (or export `FLOCK_HOST`) every time. See [ADR 0015](adr/0015-bind-to-all-interfaces-by-default-and-advertise-only-reachable-urls.md). |
+| `tailscale` | boolean | `false` | `true` makes every future `flock up`/`restart` on this machine front the browser-facing port with `tailscale serve`, for an HTTPS origin on the tailnet, without having to pass `--tailscale` every time. Precedence, highest first: `--tailscale`/`--no-tailscale`, `FLOCK_TAILSCALE`, this key, then off. A bare `up`/`restart` keeps a running daemon's own choice rather than recomputing it, same as `host`. See [ADR 0019](adr/0019-tailscale-serve-for-an-https-origin.md) and "HTTPS on the tailnet" below. |
 
 Unknown keys are ignored, and a file that is missing or not valid JSON is treated as an empty
 object — a broken config never stops a command from running.
@@ -34,6 +36,39 @@ it, any one of which is enough:
 `flock upgrade` ignores all three except the first: asking for an upgrade by hand is not the same
 as one happening behind you. It writes what it did to `~/.flock/logs/update.log`, which is also
 where the automatic checks leave their trail.
+
+## HTTPS on the tailnet
+
+See [ADR 0019](adr/0019-tailscale-serve-for-an-https-origin.md) for the full design. `flock up
+--tailscale` (or the `tailscale` config key / `FLOCK_TAILSCALE` above) makes the daemon establish a
+`tailscale serve` mount for its browser-facing port — vite's web port in a checkout, the one server
+port in an installed binary — so the app is reachable at `https://<machine>.<tailnet>.ts.net`, with
+a real certificate, from every device on the tailnet. `flock down` tears the mount down; `flock
+up`/`restart` re-assert it every time, since tailscaled's own state (a `tailscale down`, a reboot, a
+manual `tailscale serve reset`) can remove it independently of flock.
+
+This needs two things enabled on the tailnet, both in the [admin
+console](https://login.tailscale.com/admin/dns): MagicDNS (for the node's `<machine>.<tailnet>.ts.net`
+name) and HTTPS certificates. Without either, `--tailscale` refuses with a one-line error naming
+what to enable — it never starts an HTTP-only daemon with a warning instead (ADR 0017's Web Push and
+the iOS home-screen install path both need a secure origin, so a silent HTTP fallback would look
+healthy while quietly lacking the one capability it was started for).
+
+Once a mount is active, `flock url`, `flock status`, and the `up`/`serve` banners lead with the
+https URL; `flock status` also adds a `tls` line naming what it proxies to. `--open` (on `up` and on
+`serve`) always opens the loopback address on this machine, never the tailnet one — the browser tab
+it opens is local, so it does not need the tailnet round-trip.
+
+| Env var | Default | What it does |
+| --- | --- | --- |
+| `FLOCK_TAILSCALE` | unset | Same as `--tailscale`/`--no-tailscale`, for `up`/`restart`/`serve` without passing the flag. `0`/`false`/`no` (any case), or empty, are treated as an explicit *off*; any other non-empty value is *on*. Precedence: `--tailscale`/`--no-tailscale`, this var, the `tailscale` config key, then off. |
+| `FLOCK_TAILSCALE_BIN` | unset | Path to the `tailscale` binary, for an install `flock` cannot otherwise find (e.g. the macOS App Store build, which ships no CLI on `PATH` — only `/Applications/Tailscale.app/Contents/MacOS/Tailscale`). Trusted as given: a path that does not resolve fails at the first `tailscale` call with a clear error, rather than falling back silently. |
+
+A machine with no Tailscale installed, and no `--tailscale`/`FLOCK_TAILSCALE`/config key set, is
+unaffected: nothing in flock looks for the binary or runs a subprocess on that path. The pre-existing
+`*.ts.net` hint in `flock url`/`status` (from `tailscale status --self --json`, used only to name a
+possible LAN/tailnet address) keeps degrading silently when the binary is missing or the node is
+logged out; only an explicit `--tailscale` request errors, and it errors in one line.
 
 ## Web Push notifications
 

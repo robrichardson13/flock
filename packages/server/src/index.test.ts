@@ -926,3 +926,121 @@ describe("message reactions", () => {
     expect(reacted.data).toMatchObject({ emoji: "🎉", num: msg.num, ref: `m${msg.num}`, messageAuthor: "ada" });
   });
 });
+
+describe("comment reactions", () => {
+  test("POST reactions adds a reaction and returns {comment, changed}; card snapshot carries num/ref/reactions", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Comment Reactions Board" });
+    const card = flock.createCard(ada, board.id, { title: "Parser" });
+    const comment = flock.addComment(ada, board.id, card.num, "please review the parser");
+
+    const res = await app.request(`/api/boards/${board.slug}/cards/${card.num}/comments/${comment.num}/reactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({ emoji: "👀" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.changed).toBe(true);
+    expect(body.comment.num).toBe(comment.num);
+    expect(body.comment.reactions).toEqual([{ emoji: "👀", count: 1, actors: ["scout"] }]);
+
+    // Reacting again with the same emoji/actor is idempotent.
+    const again = await app.request(`/api/boards/${board.slug}/cards/${card.num}/comments/${comment.num}/reactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({ emoji: "👀" }),
+    });
+    expect((await again.json()).changed).toBe(false);
+
+    const snap = await (await app.request(`/api/boards/${board.slug}/cards/${card.num}`)).json();
+    const snapComment = snap.comments.find((cm: { num: number }) => cm.num === comment.num);
+    expect(snapComment.num).toBe(comment.num);
+    expect(snapComment.reactions).toEqual([{ emoji: "👀", count: 1, actors: ["scout"] }]);
+  });
+
+  test("DELETE reactions removes it (emoji URL-encoded); unreacting twice is idempotent", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Comment Reactions Board 2" });
+    const card = flock.createCard(ada, board.id, { title: "Ship" });
+    const comment = flock.addComment(ada, board.id, card.num, "shipped");
+    flock.reactToComment({ name: "scout", kind: "agent" }, board.id, card.num, comment.num, "👍");
+
+    const res = await app.request(
+      `/api/boards/${board.slug}/cards/${card.num}/comments/${comment.num}/reactions/${encodeURIComponent("👍")}`,
+      { method: "DELETE", headers: { "x-flock-actor": "scout", "x-flock-actor-kind": "agent" } },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.changed).toBe(true);
+    expect(body.comment.reactions).toEqual([]);
+
+    const again = await app.request(
+      `/api/boards/${board.slug}/cards/${card.num}/comments/${comment.num}/reactions/${encodeURIComponent("👍")}`,
+      { method: "DELETE", headers: { "x-flock-actor": "scout", "x-flock-actor-kind": "agent" } },
+    );
+    expect((await again.json()).changed).toBe(false);
+  });
+
+  test("reacting to an unknown comment is 404; an empty/blank emoji is 400", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Comment Reactions Board 3" });
+    const card = flock.createCard(ada, board.id, { title: "Q" });
+    const comment = flock.addComment(ada, board.id, card.num, "hi");
+
+    const notFound = await app.request(`/api/boards/${board.slug}/cards/${card.num}/comments/999/reactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({ emoji: "👍" }),
+    });
+    expect(notFound.status).toBe(404);
+
+    const badEmoji = await app.request(`/api/boards/${board.slug}/cards/${card.num}/comments/${comment.num}/reactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({ emoji: "" }),
+    });
+    expect(badEmoji.status).toBe(400);
+
+    const whitespaceEmoji = await app.request(`/api/boards/${board.slug}/cards/${card.num}/comments/${comment.num}/reactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({ emoji: "a b" }),
+    });
+    expect(whitespaceEmoji.status).toBe(400);
+  });
+
+  test("comment.reacted and comment.unreacted events flow through the SSE tail unfiltered", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Comment Reactions Board 4" });
+    const card = flock.createCard(ada, board.id, { title: "R" });
+    const comment = flock.addComment(ada, board.id, card.num, "hi");
+
+    await app.request(`/api/boards/${board.slug}/cards/${card.num}/comments/${comment.num}/reactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({ emoji: "🎉" }),
+    });
+    await app.request(`/api/boards/${board.slug}/cards/${card.num}/comments/${comment.num}/reactions/${encodeURIComponent("🎉")}`, {
+      method: "DELETE",
+      headers: { "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+    });
+
+    const events = await (await app.request(`/api/boards/${board.slug}/events`)).json();
+    const types = events.map((e: { type: string }) => e.type);
+    expect(types).toContain("comment.reacted");
+    expect(types).toContain("comment.unreacted");
+    const reacted = events.find((e: { type: string }) => e.type === "comment.reacted");
+    expect(reacted.data).toMatchObject({
+      emoji: "🎉",
+      card: card.num,
+      num: comment.num,
+      ref: `${card.num}.${comment.num}`,
+      commentAuthor: "ada",
+    });
+  });
+});
