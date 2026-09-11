@@ -21,7 +21,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { api, attachmentUrl, type Attachment } from "./api.ts";
+import { api, attachmentUrl, type Attachment, type Reaction } from "./api.ts";
 import type { ActorKind } from "@flock/core/types";
 import { ATTACHMENT_MIMES, MAX_ATTACHMENTS_PER_MESSAGE } from "@flock/core/attachments";
 import { planImage } from "./images.ts";
@@ -119,6 +119,7 @@ export function ThreadGroup<T extends ThreadEntry>({
   headerExtra,
   entryClass,
   entryStyle,
+  entryFooter,
 }: {
   group: readonly T[];
   mine: boolean;
@@ -127,6 +128,10 @@ export function ThreadGroup<T extends ThreadEntry>({
   /** Extra classes per bubble, e.g. the arrival animation's `enterClass`. */
   entryClass?: (entry: T) => string;
   entryStyle?: (entry: T) => CSSProperties | undefined;
+  /** Rendered under a bubble's body/attachments, inside it — the channel's reaction chips
+   *  and add-reaction affordance (#4). Comments have nothing here; only the channel passes
+   *  this. */
+  entryFooter?: (entry: T) => ReactNode;
 }) {
   const mobile = useIsMobile();
   const head = group[0];
@@ -157,6 +162,7 @@ export function ThreadGroup<T extends ThreadEntry>({
             {m.attachments && m.attachments.length > 0 && (
               <MessageAttachments boardId={boardId} attachments={m.attachments} author={m.author} createdAt={m.createdAt} />
             )}
+            {entryFooter?.(m)}
           </div>
         ))}
       </div>
@@ -249,6 +255,102 @@ export function MessageAttachments({ boardId, attachments, author, createdAt }: 
   );
 }
 
+
+/** The fixed palette a reaction picker offers (ADR 0017, card #4). Free-text emoji entry
+ *  was in scope but optional; this fixed set covers the acknowledgements a channel message
+ *  actually gets and costs nothing beyond a row of buttons. */
+const REACTION_PALETTE = ["👍", "👎", "❤️", "🎉", "👀", "✅", "🤔"] as const;
+
+/**
+ * The "+ 🙂" affordance under a message: a small popover of the fixed palette, closing on an
+ * outside pointerdown or Escape. Deliberately its own tiny popover rather than `ui.tsx`'s
+ * `Menu`/`AnchoredMenu` — that popover's CSS only exists inside `board-desktop.css`'s
+ * 900px-and-up media query (it never mounts styled on the phone), and this affordance has to
+ * work at every width per the card's acceptance criteria.
+ */
+function ReactionPicker({ isMine, onPick }: { isMine: (emoji: string) => boolean; onPick: (emoji: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  return (
+    <div className="reaction-picker-wrap" ref={wrap}>
+      <button
+        type="button"
+        className={`reaction-add${open ? " is-open" : ""}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Add reaction"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span aria-hidden>🙂</span>
+        {Icons.plus(10)}
+      </button>
+      {open && (
+        <div className="reaction-picker" role="menu">
+          {REACTION_PALETTE.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              role="menuitem"
+              className={`reaction-picker-item${isMine(emoji) ? " mine" : ""}`}
+              onClick={() => {
+                onPick(emoji);
+                setOpen(false);
+              }}
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The reaction chips under a channel message (#4): emoji + count, highlighted (and titled
+ * with who) when the viewer is among that emoji's actors, tapping toggles react/unreact. The
+ * add-reaction affordance always rides at the end of the row, even with zero reactions yet.
+ * `onToggle` gets `mine` precomputed so the caller (which owns the API round-trip and any
+ * optimistic patch) never has to re-derive it.
+ */
+export function MessageReactions({ reactions, viewer, onToggle }: { reactions: readonly Reaction[]; viewer: string; onToggle: (emoji: string, mine: boolean) => void }) {
+  const isMine = (emoji: string) => !!viewer && (reactions.find((r) => r.emoji === emoji)?.actors.includes(viewer) ?? false);
+  return (
+    <div className="msg-reactions">
+      {reactions.map((r) => {
+        const mine = isMine(r.emoji);
+        return (
+          <button
+            key={r.emoji}
+            type="button"
+            className={`reaction-chip${mine ? " mine" : ""}`}
+            title={r.actors.join(", ")}
+            onClick={() => onToggle(r.emoji, mine)}
+          >
+            <span aria-hidden>{r.emoji}</span>
+            {r.count}
+          </button>
+        );
+      })}
+      <ReactionPicker isMine={isMine} onPick={(emoji) => onToggle(emoji, isMine(emoji))} />
+    </div>
+  );
+}
 
 const ACCEPTED_IMAGE_TYPES: readonly string[] = ATTACHMENT_MIMES;
 
