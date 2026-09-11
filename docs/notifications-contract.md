@@ -452,16 +452,32 @@ export type PushState =
   | { kind: "blocked" }                // permission "denied"
   | { kind: "needs-install" }          // iOS, not standalone
   | { kind: "insecure" }               // not a secure context
-  | { kind: "unsupported" };
+  | { kind: "unsupported" }
+  | { kind: "server-off" };            // browser can, server has no VAPID key — see below
 
 /** Pure. Unit-tested exhaustively in push.test.ts. */
 export function pushState(env: PushEnv): PushState;
 
 export function readPushEnv(subscribed: boolean): PushEnv;   // reads the real browser
-export async function enablePush(): Promise<PushState>;      // must be called from a user gesture
+export async function enablePush(publicKey: string): Promise<PushState>;  // must be called from a user gesture
 export async function disablePush(): Promise<PushState>;
 export async function currentSubscription(): Promise<PushSubscription | null>;
 ```
+
+**`server-off` is a seventh kind, layered on top, not produced by `pushState`.** A server with no
+VAPID key is not a fact about the browser — `pushState(env)` never returns it, and its own
+precedence above is unchanged. It is applied afterward by a second, pure helper:
+
+```ts
+/** Layers the server's own availability over the browser's state. Pure. */
+export function withServerKey(state: PushState, key: { enabled: boolean; publicKey?: string } | null): PushState;
+```
+
+Precedence: everything but `off` outranks it — a device already `on` stays on, since the key only
+matters for a *new* subscription, and `insecure`/`needs-install`/`unsupported`/`blocked` all name a
+problem that would still be true with a key. A key that has not resolved yet (`key === null`) is
+assumed to work rather than guessed at, so the row never flashes `server-off` while the fetch below
+is still in flight.
 
 `pushState` precedence, highest first: `insecure` → `needs-install` → `unsupported` → `blocked` →
 `on`/`off`. Rationale: name the thing the user has to fix *first*. The ordering of the middle two
@@ -479,27 +495,58 @@ address the worker cannot register at all, and no amount of installing fixes tha
 
 ### 3.3 The subscribe flow
 
-`enablePush()`, in order, with every step inside the same user-gesture task:
+The constraint is Apple's: `Notification.requestPermission()` must be reached from the gesture's
+own handler with nothing slow awaited first. `GET /api/push/key` is a network call, so it cannot
+sit inside `enablePush()` above that line — the fix is to fetch the key *before* the click ever
+happens, not to reorder the prompt after it. `enablePush` therefore takes the key as an argument
+instead of fetching it itself:
+
+```ts
+export async function enablePush(publicKey: string): Promise<PushState>
+```
+
+and its numbered flow has no fetch above `requestPermission()`:
 
 1. `const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" })`, then
    `await navigator.serviceWorker.ready`.
 2. `const permission = await Notification.requestPermission()`. **This call must be reached from a
-   user gesture** — do not `await` anything slow before it that could break the gesture chain on
-   iOS. Apple's wording is "call the push subscription method immediately from the gesture's event
-   handler code". Registering the worker first is fine; a network fetch before it is not, which is
-   why `GET /api/push/key` comes after the prompt and not before it.
+   user gesture** — nothing else is awaited before it. Apple's wording is "call the push
+   subscription method immediately from the gesture's event handler code". Registering the worker
+   first is fine (Apple's own guidance).
 3. Bail to `{ kind: "blocked" }` unless `permission === "granted"`.
-4. `const { publicKey } = await api.pushKey()`.
-5. ```ts
+4. ```ts
    const sub = await reg.pushManager.subscribe({
      userVisibleOnly: true,              // required; iOS and Chrome both reject false
      applicationServerKey: urlBase64ToUint8Array(publicKey),
    });
    ```
-6. `await api.pushSubscribe({ ...sub.toJSON(), userAgent: navigator.userAgent })` —
+5. `await api.pushSubscribe({ ...sub.toJSON(), userAgent: navigator.userAgent })` —
    `PushSubscription.toJSON()` already yields `{ endpoint, keys: { p256dh, auth } }`, the exact
    request shape in §2.3. Send no `boardId`: subscriptions are global (§1.1).
-7. Return `{ kind: "on" }`.
+6. Return `{ kind: "on" }`.
+
+**Where the key comes from.** A module-level cache in `push.ts`, fire-and-remember:
+
+```ts
+export function primePushKey(): Promise<{ enabled: boolean; publicKey?: string; reason?: string }>;
+/** Synchronous read, for the click handler. Null = not resolved yet. */
+export function pushKeyNow(): { enabled: boolean; publicKey?: string; reason?: string } | null;
+```
+
+`primePushKey()` is called from two places, neither of them a click handler: **App root mount**, in
+the same effect that already registers the service worker — so the key is in hand long before
+anyone reaches the row — and again whenever the panel opens, to recover from a failed first
+attempt. It re-fetches only after a rejection, never after a plain `{ enabled: false }` answer,
+since that is a real cacheable answer and not an error.
+
+The click handler reads `pushKeyNow()` first. When the key is already primed (the normal case), it
+awaits nothing new before calling `enablePush(key.publicKey)` — the gesture chain stays unbroken.
+A key-less server (`!key.enabled || !key.publicKey`) resolves straight to `{ kind: "server-off" }`
+with no OS prompt fired at all. Only on the cold path — the key has not resolved yet at click time
+— does the handler fall back to `await primePushKey()` before proceeding; that is exactly today's
+risk and no worse than the old unconditional fetch, just rare instead of routine. The whole call is
+wrapped in a `.catch` that stores the thrown `Error.message` as `pushError` — the toggle handler
+never had one before this pass.
 
 `disablePush()`: `await sub.unsubscribe()` on the browser side **and** `DELETE
 /api/push/subscriptions` with the endpoint, in that order, ignoring a failure of either so the
@@ -523,36 +570,95 @@ the subscription with no extra work.
 
 ### 3.4 Where it lives in the UI
 
-A single row at the **foot of Home** — the last child of `.screen-body.home` in `App.tsx`'s `Home`,
-after the boards list, in `<section className="settings">`. On both phone and desktop.
+**One panel, two entrances**, not a single row. The row on Home still exists, but it is a door
+into a `Sheet` — the test send, the device list, the unblock hint, and every non-`on`/`off` state's
+explanation live in the panel, not on Home. Home keeps exactly one line.
 
-Home, not a board: a subscription is one device saying yes to everything, and Home is the screen
-that is the app rather than a screen that is one board. It also puts the toggle in sight of
-"Waiting on you", which is the list notifications exist to get you to.
+**Entrance 1 — Home.** A `Notifications` section, in the same left gutter as Boards/Active/Idle,
+the last group in `.screen-body.home`'s scroller (`<section className="settings">` is gone —
+`packages/web/src/Notifications.tsx`'s `PushRow` replaces it, and the old `.settings` CSS rules
+were deleted along with it). One `.list-row`: a bell icon, the title `Notifications`, a meta line
+that carries the state's summary, and a trailing dot + chevron — except in `off`, where the
+trailing slot is instead a `Turn on notifications` button (`e.stopPropagation()` on its own click,
+so it enables directly rather than opening the panel). Tapping anywhere else on the row opens the
+panel. No fixed positioning, no new scroll container, no viewport meta change — it is ordinary
+content inside the existing scroller, same as before.
 
-The row renders per `PushState`:
+**Entrance 2 — the identity control**, because the panel is "your settings" and the avatar is
+already the app's identity idiom. It used to be a single-purpose rename trigger; it is now a
+two-item menu, `Change your name` and `Notifications`, both opening the same panel:
 
-| state | what it shows |
-| --- | --- |
-| `on` | "Notifications are on for this device." + a "Turn off" button |
-| `off` | A "Turn on notifications" button. Below it, muted: "Get a notification when someone posts in a channel, or when a card needs you." |
-| `blocked` | "Notifications are blocked. Turn them back on in your browser or device settings." No button — `requestPermission` cannot recover from `denied`. |
-| `needs-install` | "Add flock to your Home Screen — Share → Add to Home Screen — then turn notifications on from there." No button. |
-| `insecure` | "Notifications need a secure connection. Open flock over HTTPS, or on localhost." No button. |
-| `unsupported` | "This browser doesn't support notifications." No button. |
+- Desktop (`AppTopBar` in `shell.tsx`): `.me-btn` is the trigger of a `Menu` (`align="right"`).
+- Phone (`TopBar.tsx`'s `home` shape): the avatar button opens an `ActionSheet` with the same two
+  entries.
 
-The button is a real `<button>` with a direct `onClick` that calls `enablePush()` — no confirm
-dialog, no `await` before the permission call. iOS will not show the system prompt otherwise.
+This makes the panel reachable from a board screen as well as Home — desktop's `AppTopBar` carries
+the identity control on every route; the phone `TopBar` carries it only on Home's shape, unchanged
+from before this pass. The panel's own open state and this device's `PushState` live in `App.tsx`
+(`pushKind`/`pushBusy`/`pushError`/`pushPanelOpen`), threaded down via an `onOpenNotifications`
+prop through `Home`, `TopBar`, `BoardView` and `AppTopBar`, so either entrance opens the one panel
+instance.
 
-Colour comes from existing tokens only (`--text`, `--muted`, `--line`, `--accent`, `--warn`); the
-`bun test` contrast gate over `styles.css` must still pass. New rules go in `styles.css` and
-define no hex.
+Home, not only a board: a subscription is one device saying yes to everything, and Home is the
+screen that is the app rather than a screen that is one board. It also puts the row in sight of
+"Waiting on you", the list notifications exist to get you to.
+
+**Seven states**, one `TREATMENT` record exported from `Notifications.tsx` keyed by
+`PushState["kind"]`, so the row and the panel read the same icon, dot colour, meta text and
+callout copy and cannot disagree:
+
+| kind | icon | dot | Home row meta | panel body | button |
+| --- | --- | --- | --- | --- | --- |
+| `on` | `bell` | accent, pulsing | `On for this device` | lead line + `Send a test notification` + the Devices list | `Turn off` (panel only) |
+| `off` | `bell` | none | `Off — turn on to get pinged when a card needs you` | lead line only | `Turn on notifications` — row *and* panel |
+| `blocked` | `bellOff` | warn | `Blocked in your browser settings` | warn `.push-note`: "Notifications are blocked for this site. flock can't ask again." + an unblock hint line | none |
+| `needs-install` | `bell` | human/await | `Add flock to your Home Screen first` | attention `.push-note` with the three `Add to Home Screen` steps as a `<ol className="push-steps">` | none |
+| `server-off` | `bellOff` | none | `Not set up on this server` | neutral `.push-note`: "This flock server has no notification key, so it can't send anything yet." + a `FLOCK_VAPID_PUBLIC_KEY`/`FLOCK_VAPID_PRIVATE_KEY` hint | none |
+| `insecure` | `bellOff` | none | `Needs a secure connection` | neutral `.push-note`: "Notifications need HTTPS. Open flock over https://, or on localhost." | none |
+| `unsupported` | `bellOff` | none | `Not supported in this browser` | neutral `.push-note`: "This browser doesn't support notifications. Chrome, Edge, Firefox and Safari 16.4+ do." | none |
+
+`server-off` (§3.2) is new since the original contract: a key-less server used to fall through to
+`unsupported`, which told the user their browser couldn't do something it actually could. It now
+gets its own honest, muted state, and — because the key is prefetched (§3.3) rather than fetched
+after the prompt — the row never fires an OS permission dialog it cannot make good on.
+`blocked`/`needs-install`/`insecure`/`unsupported`/`server-off` all render no button, because no
+button would work; the row stays tappable in every state so the panel's explanation is always one
+tap away.
+
+**Feedback.** Busy disables the acting button, sets `aria-busy="true"`, and swaps its label to
+`Turning on…`/`Turning off…`. Success is the state change itself — the dot lights accent, the meta
+flips to `On for this device`, and in `on` the test-send button and Devices section appear; no
+toast. A failure renders `.inline-error` in the panel next to the button *and*, when it was the Home
+row's own trailing button that failed, in place of the row's meta line — so an error raised there
+is visible without opening the panel. `onEnablePush`/`onDisablePush` in `App.tsx` both carry the
+`.catch` the original toggle handler never had.
+
+**Test send and the device list**, `on` only, inside the panel (`packages/web/src/Notifications.tsx`
+and `packages/web/src/devices.ts`): a `Send a test notification` button over `api.pushTest()`,
+result rendered as a `.push-hint` (`Sent to 1 device.` / `Sent to {n} devices.` /
+`No devices to send to.` — never claiming success on `{ sent: 0 }`); and a `Devices` section over
+`api.pushSubscriptions()`, fetched on panel open and re-fetched after a successful enable, disable
+or remove. This device is identified by matching `currentSubscription()?.endpoint`, labelled
+`This device`, and has no remove button (turning off is the remove for this device); every other
+row gets a `.icon-btn` trash button calling `api.pushUnsubscribe` then refetching, no confirm
+dialog. The raw user agent never appears as visible text — `deviceLabel(userAgent)` (pure, tested
+in `devices.test.ts`) renders a short platform/browser label and the full string sits only in the
+row's `title`. A failed test send or remove renders `.inline-error`, never a silent no-op. The list
+scrolls inside `.sheet-body` and stays under `--vvh * 0.88`, same as every other `Sheet`.
+
+Colour comes from existing tokens only (`--text`, `--muted`, `--danger`, `--dot-working`,
+`--status-await`, `--status-blocked`, `--warn-bg`/`--warn-line`, `--attention-bg`/`--attention-line`,
+`--bg-3`, `--line`); the `bun test` contrast gate over `styles.css` still passes. New rules live in
+`styles.css` and define no hex.
 
 **Preserve the iOS standalone work.** `main.tsx`'s viewport handling (`snapBack`, `revealField`,
 `healViewport`, `repaintShell`, `installNoScrollFocus`) and the `--vvh` shell exist because of
-real, measured iOS 26 bugs and are not to be touched. The notifications row is ordinary content
-inside the existing scroller: it adds no fixed positioning, no new scroll container, and no
-viewport meta change.
+real, measured iOS 26 bugs and are not to be touched, and `main.tsx` was not touched by this pass.
+The notifications row is ordinary content inside the existing scroller: it adds no fixed
+positioning, no new scroll container, and no viewport meta change. The panel is a plain `Sheet`
+(`className="push-sheet"`, `hideClose`, a `.btn.btn-block.btn-ghost.sheet-cancel` reading `Done`) —
+it inherits `--sab-in` and the `calc(var(--vvh) * 0.88)` cap from `Sheet` itself rather than
+re-implementing either, so it stays inside the 793pt standalone viewport for free.
 
 ### 3.5 Receiving `flock:navigate`
 
