@@ -23,6 +23,7 @@ import {
   type BoardInput,
   type Card,
   type CardStatus,
+  type Decision,
   type Event,
   type HookDescribe,
 } from "@flock/core";
@@ -116,9 +117,9 @@ TEAM
   chat [BOARD] [--limit 50]             Read the channel
   decide [BOARD] GIST [--card N] [--supersedes D]   Record a decision; --supersedes archives D
   decisions [BOARD] [--archived | --all] [--card N] [--by ACTOR]   Standing decisions by default
-  decision archive [BOARD] D... [--card N] [--by ACTOR] [--before YYYY-MM-DD] [--reason TEXT]
+  decision archive [BOARD] [D...] [--card N] [--by ACTOR] [--before YYYY-MM-DD] [--reason TEXT]
                     [--dry-run] [--yes]           A selector matching >10 needs --yes
-  decision restore [BOARD] D... [--card N] [--by ACTOR] [--before YYYY-MM-DD] [--dry-run] [--yes]
+  decision restore [BOARD] [D...] [--card N] [--by ACTOR] [--before YYYY-MM-DD] [--dry-run] [--yes]
   help formatting                     The markdown subset the web UI renders
   log [BOARD] [--all] [--since SEQ] [--wait | --follow] [--for NAME] [--timeout MS]
                                       --wait: block until a matching event, then exit. --all: every board
@@ -627,7 +628,7 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
           if (s.board.body.trim()) console.log(`${s.board.body.trim()}\n`);
           if (s.decisions.length) {
             console.log("## Decisions so far");
-            for (const d of s.decisions) console.log(`- ${d.cardNum ? `#${d.cardNum}: ` : ""}${d.gist}  (${d.author})`);
+            for (const d of s.decisions) console.log(`- d${d.num}  ${d.cardNum ? `#${d.cardNum}: ` : ""}${d.gist}  (${d.author})`);
             console.log();
           }
           for (const status of CARD_STATUSES) {
@@ -884,14 +885,21 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       const archived: boolean | "all" | undefined = bool(flags.all) ? "all" : bool(flags.archived) ? true : undefined;
       const ds = flock.decisions(board, { archived, card: str(flags.card) !== undefined ? Number(str(flags.card)) : undefined, author: str(flags.by) });
       return out(ctx, ds, () => {
-        if (!ds.length) return console.log(archived === true ? "No archived decisions." : "No decisions yet.");
         for (const d of ds) {
           const status = d.archivedAt ? (d.supersededBy ? ` [superseded by d${d.supersededBy}]` : " [archived]") : "";
           console.log(`- d${d.num}  ${d.cardNum ? `#${d.cardNum}: ` : ""}${d.gist}  (${d.author}, ${d.createdAt.slice(0, 10)})${status}`);
         }
+        if (!ds.length) console.log(archived === true ? "No archived decisions." : "No decisions yet.");
+        // The hint runs the same filters as the listing, and prints on an empty listing too:
+        // a board whose decisions are *all* archived is exactly the case that must not read
+        // as "No decisions yet." with nothing else said.
         if (archived === undefined) {
-          const archivedCount = flock.snapshot(board).archivedDecisionCount;
-          if (archivedCount > 0) console.log(`(${archivedCount} archived — flock decisions --archived)`);
+          const hidden = flock.decisions(board, {
+            archived: true,
+            card: str(flags.card) !== undefined ? Number(str(flags.card)) : undefined,
+            author: str(flags.by),
+          }).length;
+          if (hidden > 0) console.log(`(${hidden} archived — flock decisions --archived)`);
         }
       });
     }
@@ -910,8 +918,10 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       const verb = sub === "archive" ? "archive" : "restore";
       // Resolve the same way core's selector would, for the --yes gate and --dry-run preview.
       // Explicit nums: not_found on the first missing one, matching resolveDecisionSelector.
-      // A filter selector: every row it matches, regardless of current archive state — the
-      // count a human would want to see before confirming.
+      // Rows already in the target state are dropped, because core skips them silently: a
+      // preview that promises to archive ten rows the write will not touch is worse than none,
+      // and the gate should count the blast radius, not the match.
+      const wouldChange = (d: Decision) => (sub === "archive" ? !d.archivedAt : !!d.archivedAt);
       const resolveMatched = () => {
         if (nums.length > 0) {
           const all = flock.decisions(board, { archived: "all" });
@@ -919,9 +929,10 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
             const d = all.find((x) => x.num === n);
             if (!d) throw new FlockError(`No decision d${n} on board "${flock.board(board).slug}"`, "not_found");
             return d;
-          });
+          }).filter(wouldChange);
         }
-        return flock.decisions(board, { archived: "all", card, author: by }).filter((d) => before === undefined || d.createdAt < before);
+        return flock.decisions(board, { archived: "all", card, author: by })
+          .filter((d) => (before === undefined || d.createdAt < before) && wouldChange(d));
       };
       const dryRun = bool(flags["dry-run"]);
       if (usingFilter && !dryRun && !bool(flags.yes)) {

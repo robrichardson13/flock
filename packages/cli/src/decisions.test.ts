@@ -184,6 +184,32 @@ describe("flock decision archive / restore", () => {
     expect(forced.archived).toHaveLength(11);
   });
 
+  test("a board whose decisions are all archived still says how many are hidden", () => {
+    const { board } = setup();
+    for (const g of ["one", "two"]) run(["decide", board.slug, g]);
+    run(["decision", "archive", board.slug, "1", "2"]);
+
+    const human = runHuman(["decisions", board.slug]);
+    expect(human.code).toBe(0);
+    expect(human.stdout).toContain("No decisions yet.");
+    expect(human.stdout).toContain("(2 archived — flock decisions --archived)");
+  });
+
+  test("--dry-run previews only the rows the write would change", () => {
+    const { board } = setup();
+    for (const g of ["one", "two", "three"]) run(["decide", board.slug, g]);
+    run(["decision", "archive", board.slug, "1", "2"]);
+
+    const dry = JSON.parse(run(["decision", "archive", board.slug, "--by", "tester", "--dry-run"]).stdout);
+    expect(dry.matched.map((d: any) => d.num)).toEqual([3]);
+
+    const real = JSON.parse(run(["decision", "archive", board.slug, "--by", "tester"]).stdout);
+    expect(real.archived.map((d: any) => d.num)).toEqual([3]);
+
+    const dryRestore = JSON.parse(run(["decision", "restore", board.slug, "1", "3", "--dry-run"]).stdout);
+    expect(dryRestore.matched.map((d: any) => d.num)).toEqual([1, 3]);
+  });
+
   test("a selector matching nothing exits 0 with 'Nothing to archive.'", () => {
     const { board } = setup();
     const res = run(["decision", "archive", board.slug, "--card", "999"]);

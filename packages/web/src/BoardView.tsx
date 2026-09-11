@@ -1796,6 +1796,7 @@ function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap:
     setArchivedBusy(true);
     api.decisions(boardId, { archived: "1" })
       .then((rows) => live && setArchived(rows))
+      .catch(() => {})
       .finally(() => live && setArchivedBusy(false));
     return () => {
       live = false;
@@ -1808,12 +1809,12 @@ function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap:
       // If the archived list is already loaded, it's stale now — drop it so the next look
       // (it's still open) or the next open re-fetches rather than showing a gap.
       if (showArchived) setArchived(null);
-    });
+    }).catch(() => {});
   const restore = (num: number) =>
     api.restoreDecisions(boardId, { nums: [num] }).then(() => {
       onChange();
       setArchived((prev) => (prev ? prev.filter((d) => d.num !== num) : prev));
-    });
+    }).catch(() => {});
   return (
     <div className="pane" ref={paneRef}>
       <div className="pane-scroll" ref={combinedScrollRef} onScroll={scrollCollapse.onScroll}>
@@ -1837,7 +1838,7 @@ function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap:
             <span className={`disclosure-chev${showArchived ? " open" : ""}`}>{Icons.chevron(14)}</span>
           </button>
         )}
-        {showArchived && (
+        {showArchived && snap.archivedDecisionCount > 0 && (
           <div className="decision-archived-list">
             {archivedBusy && <div className="muted pad">Loading…</div>}
             {archived?.length === 0 && <div className="muted pad">No archived decisions.</div>}
