@@ -20,6 +20,12 @@ export function exportBoard(flock: Flock, boardRef: string): string {
     for (const d of snap.decisions) out.push(d.cardNum ? `- #${d.cardNum}: ${d.gist}` : `- ${d.gist}`);
     out.push("");
   }
+  if (snap.archivedDecisionCount > 0) {
+    const archived = flock.decisions(boardRef, { archived: true });
+    out.push("## Decisions (archived)", "");
+    for (const d of archived) out.push(d.cardNum ? `- #${d.cardNum}: ${d.gist}` : `- ${d.gist}`);
+    out.push("");
+  }
   for (const status of CARD_STATUSES) {
     const cards = snap.cards.filter((c) => c.status === status);
     if (!cards.length && status !== "todo") continue;
@@ -57,7 +63,7 @@ interface ParsedCard {
 export interface ParsedBoard {
   title: string;
   body: string;
-  decisions: { cardNum: number | null; gist: string }[];
+  decisions: { cardNum: number | null; gist: string; archived: boolean }[];
   cards: ParsedCard[];
 }
 
@@ -67,7 +73,7 @@ const CARD_RE = /^- \[( |x|X)\] (?:#(\d+) )?(.+)$/;
 export function parseBoard(md: string): ParsedBoard {
   const lines = md.split(/\r?\n/);
   const result: ParsedBoard = { title: "Untitled", body: "", decisions: [], cards: [] };
-  let section: "body" | "decisions" | CardStatus = "body";
+  let section: "body" | "decisions" | "decisions-archived" | CardStatus = "body";
   const bodyLines: string[] = [];
   let current: ParsedCard | null = null;
   let openBlock: "question" | "hold" | null = null;
@@ -79,7 +85,10 @@ export function parseBoard(md: string): ParsedBoard {
     }
     if (raw.startsWith("## ")) {
       const h = raw.slice(3).trim().toLowerCase();
-      const known = h === "decisions so far" || h === "decisions" ? "decisions" : STATUS_BY_HEADING.get(h);
+      const known =
+        h === "decisions so far" || h === "decisions" ? "decisions"
+        : h === "decisions (archived)" ? "decisions-archived"
+        : STATUS_BY_HEADING.get(h);
       if (!known && section === "body") {
         // Sub-headings inside the freeform body (Destination, Notes, Fog...) belong to the body.
         bodyLines.push(raw);
@@ -93,9 +102,9 @@ export function parseBoard(md: string): ParsedBoard {
       bodyLines.push(raw);
       continue;
     }
-    if (section === "decisions") {
+    if (section === "decisions" || section === "decisions-archived") {
       const m = raw.match(/^- (?:#(\d+): )?(.+)$/);
-      if (m) result.decisions.push({ cardNum: m[1] ? Number(m[1]) : null, gist: m[2].trim() });
+      if (m) result.decisions.push({ cardNum: m[1] ? Number(m[1]) : null, gist: m[2].trim(), archived: section === "decisions-archived" });
       continue;
     }
     const m = raw.match(CARD_RE);
@@ -187,6 +196,13 @@ export function importBoard(
       if (target) flock.addBlocker(actor, board.id, numMap.get(c.num)!, target);
     }
   }
-  for (const d of parsed.decisions) flock.decide(actor, board.id, d.gist, d.cardNum ? numMap.get(d.cardNum) ?? null : null);
+  const toArchive: number[] = [];
+  for (const d of parsed.decisions) {
+    const decision = flock.decide(actor, board.id, d.gist, d.cardNum ? numMap.get(d.cardNum) ?? null : null);
+    if (d.archived) toArchive.push(decision.num);
+  }
+  if (toArchive.length) {
+    flock.archiveDecisions(actor, board.id, { nums: toArchive }, { reason: "imported as archived" });
+  }
   return flock.board(board.id);
 }

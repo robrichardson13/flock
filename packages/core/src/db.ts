@@ -11,7 +11,7 @@ import { FlockError } from "./types.ts";
  * whenever `SCHEMA` or `migrate()` below changes, and only ever add columns/tables/indexes:
  * migrations must stay additive so a newer binary can always read an older database.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * Thrown by `openDatabase` when the database's stamped `user_version` is higher than this
@@ -93,7 +93,12 @@ CREATE TABLE IF NOT EXISTS decisions (
   card_num INTEGER,
   gist TEXT NOT NULL,
   author TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  num INTEGER,
+  archived_at TEXT,
+  archived_by TEXT,
+  archive_reason TEXT,
+  superseded_by INTEGER
 );
 CREATE TABLE IF NOT EXISTS events (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -191,6 +196,27 @@ function migrate(db: Database) {
   if (!cardCols.has("held_at")) db.exec("ALTER TABLE cards ADD COLUMN held_at TEXT");
   if (!cardCols.has("held_by")) db.exec("ALTER TABLE cards ADD COLUMN held_by TEXT");
   if (!cardCols.has("hold_reason")) db.exec("ALTER TABLE cards ADD COLUMN hold_reason TEXT");
+
+  // Archive + supersede (ADR 0016): a per-board `num` so a decision can be addressed at all
+  // (CLAUDE.md forbids exposing internal ids), plus archive metadata and a one-hop forwarding
+  // pointer. Additive; `num` is backfilled below in the order `decisions()` already lists in.
+  const decisionCols = new Set((db.query("PRAGMA table_info(decisions)").all() as { name: string }[]).map((c) => c.name));
+  if (!decisionCols.has("num")) db.exec("ALTER TABLE decisions ADD COLUMN num INTEGER");
+  if (!decisionCols.has("archived_at")) db.exec("ALTER TABLE decisions ADD COLUMN archived_at TEXT");
+  if (!decisionCols.has("archived_by")) db.exec("ALTER TABLE decisions ADD COLUMN archived_by TEXT");
+  if (!decisionCols.has("archive_reason")) db.exec("ALTER TABLE decisions ADD COLUMN archive_reason TEXT");
+  if (!decisionCols.has("superseded_by")) db.exec("ALTER TABLE decisions ADD COLUMN superseded_by INTEGER");
+  db.exec(`
+    UPDATE decisions SET num = (
+      SELECT COUNT(*) FROM decisions d2
+      WHERE d2.board_id = decisions.board_id
+        AND (d2.created_at, d2.rowid) <= (decisions.created_at, decisions.rowid)
+    ) WHERE num IS NULL
+  `);
+  // Indexed here rather than in SCHEMA: on a database migrated from v2, `num` does not exist
+  // until the ALTER above runs, which happens after SCHEMA.
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS decisions_board_num ON decisions(board_id, num)");
+  db.exec("CREATE INDEX IF NOT EXISTS decisions_board_standing ON decisions(board_id, archived_at)");
 }
 
 export const DB_DIRNAME = ".flock";
