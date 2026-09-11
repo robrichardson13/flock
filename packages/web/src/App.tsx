@@ -16,7 +16,7 @@ import { TopBar, TopBarProvider } from "./TopBar.tsx";
 import { keyboardShrunk, readoutRequested, shellHeight } from "./vv.ts";
 import { VVReadout } from "./VVReadout.tsx";
 import { ActorLinks, Avatar, Icons, OverlayProvider, PromptProvider, PushStack, useEdgeSwipePeek, useIsMobile, usePrompt } from "./ui.tsx";
-import { currentSubscription, disablePush, enablePush, pushState, readPushEnv, type PushState } from "./push.ts";
+import { currentSubscription, disablePush, enablePush, primePushKey, pushKeyNow, pushState, readPushEnv, withServerKey, type PushState } from "./push.ts";
 
 /**
  * Reads the hash and remembers which board was last resolved from it, so that only
@@ -435,6 +435,10 @@ function Shell() {
   useEffect(() => {
     if (!window.isSecureContext || !("serviceWorker" in navigator) || typeof PushManager === "undefined") return;
     navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+    // Prefetch the VAPID key here too, not only when the panel opens: on the phone the key is
+    // then in hand long before anyone reaches the row, so the toggle's click handler never has
+    // to await a network call before `Notification.requestPermission()`.
+    primePushKey().catch(() => {});
   }, []);
 
   // A tap on a notification asks the page to navigate rather than navigating itself (see
@@ -577,19 +581,32 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
   // nothing awaited before Notification.requestPermission() breaks the iOS gesture chain.
   const [pushKind, setPushKind] = useState<PushState["kind"]>("off");
   const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     currentSubscription().then((sub) => {
-      if (!cancelled) setPushKind(pushState(readPushEnv(!!sub)).kind);
+      if (!cancelled) setPushKind(withServerKey(pushState(readPushEnv(!!sub)), pushKeyNow()).kind);
     }).catch(() => {
-      if (!cancelled) setPushKind(pushState(readPushEnv(false)).kind);
+      if (!cancelled) setPushKind(withServerKey(pushState(readPushEnv(false)), pushKeyNow()).kind);
     });
     return () => { cancelled = true; };
   }, []);
   const onTogglePush = useCallback(() => {
     setPushBusy(true);
-    const next = pushKind === "on" ? disablePush() : enablePush();
-    next.then((s) => setPushKind(s.kind)).finally(() => setPushBusy(false));
+    setPushError(null);
+    const run = async (): Promise<PushState> => {
+      if (pushKind === "on") return disablePush();
+      // Gesture-safe: when the key is already primed this awaits nothing before enablePush.
+      // The cold path (key not yet resolved) falls back to awaiting the fetch here, which is
+      // no worse than today's unconditional fetch — the prefetch just makes it rare.
+      const key = pushKeyNow() ?? (await primePushKey());
+      if (!key.enabled || !key.publicKey) return { kind: "server-off" };
+      return enablePush(key.publicKey);
+    };
+    run()
+      .then((s) => setPushKind(s.kind))
+      .catch((e) => setPushError((e as Error).message))
+      .finally(() => setPushBusy(false));
   }, [pushKind]);
 
   return (
@@ -671,7 +688,7 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
         )}
 
         <section className="settings">
-          <PushSettingsRow kind={pushKind} busy={pushBusy} onToggle={onTogglePush} />
+          <PushSettingsRow kind={pushKind} busy={pushBusy} error={pushError} onToggle={onTogglePush} />
         </section>
       </div>
     </div>
@@ -684,12 +701,15 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
  * `blocked`/`needs-install`/`insecure`/`unsupported` have no button: `requestPermission`
  * cannot recover from `denied`, and none of the other three is a permission problem to retry.
  */
-function PushSettingsRow({ kind, busy, onToggle }: { kind: PushState["kind"]; busy: boolean; onToggle: () => void }) {
+function PushSettingsRow({ kind, busy, error, onToggle }: { kind: PushState["kind"]; busy: boolean; error: string | null; onToggle: () => void }) {
+  // Plain text for now — card B restyles this as `.inline-error` in the row's meta slot.
+  const errorLine = error && <p>{error}</p>;
   switch (kind) {
     case "on":
       return (
         <>
           <p>Notifications are on for this device.</p>
+          {errorLine}
           <button className="btn" onClick={onToggle} disabled={busy}>Turn off</button>
         </>
       );
@@ -697,6 +717,7 @@ function PushSettingsRow({ kind, busy, onToggle }: { kind: PushState["kind"]; bu
       return (
         <>
           <button className="btn btn-primary" onClick={onToggle} disabled={busy}>Turn on notifications</button>
+          {errorLine}
           <p className="muted">Get a notification when someone posts in a channel, or when a card needs you.</p>
         </>
       );
@@ -708,6 +729,8 @@ function PushSettingsRow({ kind, busy, onToggle }: { kind: PushState["kind"]; bu
       return <p className="muted">Notifications need a secure connection. Open flock over HTTPS, or on localhost.</p>;
     case "unsupported":
       return <p className="muted">This browser doesn't support notifications.</p>;
+    case "server-off":
+      return <p className="muted">This flock server has no notification key, so it can't send anything yet.</p>;
   }
 }
 

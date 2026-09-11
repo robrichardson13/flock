@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { pushState, urlBase64ToUint8Array, type PushEnv } from "./push.ts";
+import { pushState, urlBase64ToUint8Array, withServerKey, type PushEnv, type PushState } from "./push.ts";
 
 const base = (): PushEnv => ({
   hasServiceWorker: true,
@@ -75,5 +75,39 @@ describe("urlBase64ToUint8Array", () => {
     expect(Array.from(urlBase64ToUint8Array("YQ"))).toEqual([97]); // "a", padding %4 == 2
     expect(Array.from(urlBase64ToUint8Array("YWI"))).toEqual([97, 98]); // "ab", padding %4 == 3
     expect(Array.from(urlBase64ToUint8Array("YWJj"))).toEqual([97, 98, 99]); // "abc", no padding needed
+  });
+});
+
+describe("withServerKey", () => {
+  const kinds: PushState["kind"][] = ["on", "off", "blocked", "needs-install", "insecure", "unsupported", "server-off"];
+  const enabledKey = { enabled: true, publicKey: "abc" };
+  const disabledKey = { enabled: false };
+  const noKeyKey = { enabled: true }; // enabled but no publicKey set
+
+  it("leaves on/blocked/needs-install/insecure/unsupported/server-off untouched regardless of the key", () => {
+    for (const kind of kinds) {
+      if (kind === "off") continue;
+      const state = { kind } as PushState;
+      expect(withServerKey(state, null)).toEqual(state);
+      expect(withServerKey(state, enabledKey)).toEqual(state);
+      expect(withServerKey(state, disabledKey)).toEqual(state);
+    }
+  });
+
+  it("assumes off will work when the key has not resolved yet", () => {
+    expect(withServerKey({ kind: "off" }, null)).toEqual({ kind: "off" });
+  });
+
+  it("stays off when the server has a usable key", () => {
+    expect(withServerKey({ kind: "off" }, enabledKey)).toEqual({ kind: "off" });
+  });
+
+  it("becomes server-off when the server key is disabled or missing", () => {
+    expect(withServerKey({ kind: "off" }, disabledKey)).toEqual({ kind: "server-off" });
+    expect(withServerKey({ kind: "off" }, noKeyKey)).toEqual({ kind: "server-off" });
+  });
+
+  it("never turns on into server-off: a subscribed device stays on even if the key later goes away", () => {
+    expect(withServerKey({ kind: "on" }, disabledKey)).toEqual({ kind: "on" });
   });
 });

@@ -1210,4 +1210,8 @@ export const Icons = {
   trash: (s?: number) => <I size={s} d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6" />,
   /** Straight down, for "jump to the bottom" affordances (the card page's latest-comments button). */
   arrowDown: (s?: number) => <I size={s} d="M12 4v15M5 12l7 7 7-7" />,
+  /** Notifications: a bell with its clapper. Same stroke family as `lock` and `flag`. */
+  bell: (s?: number) => <I size={s} d="M6.5 9.5a5.5 5.5 0 0 1 11 0c0 3.4 1 4.9 1.7 5.8H4.8c.7-.9 1.7-2.4 1.7-5.8M9.9 18.6a2.3 2.3 0 0 0 4.2 0" />,
+  /** Notifications that cannot ring: the same bell, struck through. */
+  bellOff: (s?: number) => <I size={s} d="M6.5 9.5a5.5 5.5 0 0 1 11 0c0 3.4 1 4.9 1.7 5.8H4.8c.7-.9 1.7-2.4 1.7-5.8M9.9 18.6a2.3 2.3 0 0 0 4.2 0M4 4l16 16" />,
 };

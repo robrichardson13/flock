@@ -20,7 +20,8 @@ export type PushState =
   | { kind: "blocked" } // permission "denied"
   | { kind: "needs-install" } // iOS, not standalone
   | { kind: "insecure" } // not a secure context
-  | { kind: "unsupported" };
+  | { kind: "unsupported" }
+  | { kind: "server-off" }; // the browser can, the server has no VAPID key
 
 /**
  * Pure. Precedence, highest first: insecure -> needs-install -> unsupported -> blocked ->
@@ -36,6 +37,19 @@ export function pushState(env: PushEnv): PushState {
   if (env.permission === "denied") return { kind: "blocked" };
   if (env.permission === "granted" && env.subscribed) return { kind: "on" };
   return { kind: "off" };
+}
+
+/**
+ * Layers the server's own availability over the browser's state. Pure. `server-off` is not a
+ * fact about the browser, so `pushState(env)` itself never produces it — this is a separate
+ * step the caller applies afterward. Precedence: everything but `off` outranks it (a device
+ * already `on` stays on; the key only matters for *new* subscriptions), and a key that has not
+ * resolved yet (`key === null`) is assumed to work rather than guessed at.
+ */
+export function withServerKey(state: PushState, key: { enabled: boolean; publicKey?: string } | null): PushState {
+  if (state.kind !== "off") return state;
+  if (key === null) return state;
+  return key.enabled && key.publicKey ? state : { kind: "server-off" };
 }
 
 /**
@@ -83,20 +97,46 @@ export function urlBase64ToUint8Array(base64Url: string): Uint8Array {
   return out;
 }
 
+type PushKey = { enabled: boolean; publicKey?: string; reason?: string };
+
+let keyPromise: Promise<PushKey> | null = null;
+let keyValue: PushKey | null = null;
+
+/**
+ * Fire-and-remember fetch of the server's VAPID key, so a click handler never has to await a
+ * network call before it can decide whether to prompt. Safe to call repeatedly — later calls
+ * reuse the in-flight or resolved promise — and re-fetches only after a failure, never after a
+ * plain `{ enabled: false }` answer (that is a real, cacheable answer, not an error).
+ */
+export function primePushKey(): Promise<PushKey> {
+  if (!keyPromise) {
+    keyPromise = api.pushKey()
+      .then((k) => (keyValue = k))
+      .catch((e) => {
+        keyPromise = null;
+        throw e;
+      });
+  }
+  return keyPromise;
+}
+
+/** Synchronous read of the last resolved key. Null means `primePushKey` hasn't resolved yet. */
+export function pushKeyNow(): PushKey | null {
+  return keyValue;
+}
+
 /**
  * Must be called from a user gesture: every step up to and including
  * `Notification.requestPermission()` runs with nothing slow awaited first, so iOS still
  * recognizes the call as part of the gesture that triggered it. Registering the worker first is
- * fine (Apple's own guidance); a network fetch first is not, which is why `GET /api/push/key`
- * comes after the prompt, not before it.
+ * fine (Apple's own guidance); a network fetch first is not, so the key is the caller's job
+ * (`primePushKey`/`pushKeyNow`) and arrives here already in hand.
  */
-export async function enablePush(): Promise<PushState> {
+export async function enablePush(publicKey: string): Promise<PushState> {
   const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
   await navigator.serviceWorker.ready;
   const permission = await Notification.requestPermission();
   if (permission !== "granted") return { kind: "blocked" };
-  const { publicKey } = await api.pushKey();
-  if (!publicKey) return { kind: "unsupported" };
   const sub = await reg.pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
