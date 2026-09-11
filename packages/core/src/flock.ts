@@ -6,6 +6,9 @@ import { openDatabase, readStamp, SCHEMA_VERSION, type OpenOptions } from "./db.
 import { setTaskChecked, taskItems } from "./tasks.ts";
 import type { PushSubscriptionInput, PushSubscriptionRecord } from "./notify.ts";
 import { assertDeclarableLevel, resolveNotifySettingsFields, clampSettledThreshold, type NotifySettings, type NotifySettingsFields } from "./notify-levels.ts";
+import { upsertSessionReading, type SessionReading } from "./telemetry.ts";
+import { cardDuration as queryCardDuration, sessionsForActor as querySessionsForActor, sessionsForCard as querySessionsForCard } from "./telemetry-queries.ts";
+import type { CardDuration, HarnessSessionTelemetry } from "./telemetry.ts";
 import {
   ACTOR_CARD_ROLES,
   CARD_STATUSES,
@@ -200,7 +203,7 @@ type DecisionRow = {
 };
 type EventRow = {
   seq: number; board_id: string; actor: string; actor_kind: string; type: string; card_num: number | null; data: string; created_at: string;
-  harness: string | null; model: string | null; effort: string | null;
+  harness: string | null; model: string | null; effort: string | null; session: string | null;
 };
 type PushSubscriptionRow = {
   id: string; endpoint: string; p256dh: string; auth: string; actor: string; actor_kind: string;
@@ -277,28 +280,30 @@ export class Flock {
 
   touchActor(actor: Actor) {
     // Only overwrite a runtime column when the incoming value is non-null, so a later
-    // runtime-less write does not erase a known model/harness/effort.
+    // runtime-less write does not erase a known model/harness/effort/session.
     this.db
       .query(
-        `INSERT INTO actors(name, kind, last_seen, harness, model, effort) VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO actors(name, kind, last_seen, harness, model, effort, session) VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(name) DO UPDATE SET
            kind = excluded.kind,
            last_seen = excluded.last_seen,
            harness = COALESCE(excluded.harness, actors.harness),
            model = COALESCE(excluded.model, actors.model),
-           effort = COALESCE(excluded.effort, actors.effort)`,
+           effort = COALESCE(excluded.effort, actors.effort),
+           session = COALESCE(excluded.session, actors.session)`,
       )
-      .run(actor.name, actor.kind, now(), actor.harness ?? null, actor.model ?? null, actor.effort ?? null);
+      .run(actor.name, actor.kind, now(), actor.harness ?? null, actor.model ?? null, actor.effort ?? null, actor.session ?? null);
   }
 
-  listActors(): { name: string; kind: Actor["kind"]; lastSeen: string; harness?: string; model?: string; effort?: string }[] {
-    return (this.db.query("SELECT name, kind, last_seen, harness, model, effort FROM actors ORDER BY last_seen DESC").all() as any[]).map((r) => ({
+  listActors(): { name: string; kind: Actor["kind"]; lastSeen: string; harness?: string; model?: string; effort?: string; session?: string }[] {
+    return (this.db.query("SELECT name, kind, last_seen, harness, model, effort, session FROM actors ORDER BY last_seen DESC").all() as any[]).map((r) => ({
       name: r.name,
       kind: r.kind,
       lastSeen: r.last_seen,
       ...(r.harness ? { harness: r.harness } : {}),
       ...(r.model ? { model: r.model } : {}),
       ...(r.effort ? { effort: r.effort } : {}),
+      ...(r.session ? { session: r.session } : {}),
     }));
   }
 
@@ -423,9 +428,21 @@ export class Flock {
   private emit(actor: Actor, boardId: string, type: EventType, cardNum: number | null, data: Record<string, unknown> = {}) {
     this.db
       .query(
-        "INSERT INTO events(board_id, actor, actor_kind, type, card_num, data, created_at, harness, model, effort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO events(board_id, actor, actor_kind, type, card_num, data, created_at, harness, model, effort, session) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(boardId, actor.name, actor.kind, type, cardNum, JSON.stringify(data), now(), actor.harness ?? null, actor.model ?? null, actor.effort ?? null);
+      .run(
+        boardId,
+        actor.name,
+        actor.kind,
+        type,
+        cardNum,
+        JSON.stringify(data),
+        now(),
+        actor.harness ?? null,
+        actor.model ?? null,
+        actor.effort ?? null,
+        actor.session ?? null,
+      );
   }
 
   private rowToEvent(r: EventRow): Event {
@@ -441,6 +458,7 @@ export class Flock {
       ...(r.harness ? { harness: r.harness } : {}),
       ...(r.model ? { model: r.model } : {}),
       ...(r.effort ? { effort: r.effort } : {}),
+      ...(r.session ? { session: r.session } : {}),
     };
   }
 
@@ -1848,6 +1866,36 @@ export class Flock {
       )
       .run(actor.name, boardId, colFromBool(next.needsMe), colFromBool(next.review), colFromBool(next.info), colFromBool(next.settled), next.settledAfterMs, now());
     return next;
+  }
+
+  // ---------- telemetry (ADR 0025) ----------
+
+  /**
+   * Upsert one harness session reading. Core does no filesystem work and never resolves a
+   * transcript itself — this is the write path a reader (`packages/harness`) or the telemetry
+   * hook calls after doing that work elsewhere. No event is emitted: a refresh is not something
+   * that happened on the board (ADR 0025 §2).
+   */
+  recordSessionReading(reading: SessionReading): void {
+    upsertSessionReading(this.db, reading);
+  }
+
+  /** Every harness session that worked one card. See ADR 0025 §1: a group-by over `events`. */
+  sessionsForCard(boardRef: string, cardNum: number): HarnessSessionTelemetry[] {
+    const b = this.board(boardRef);
+    return querySessionsForCard(this.db, b.id, cardNum);
+  }
+
+  /** Every harness session one actor ran on one board. Same shape as `sessionsForCard`. */
+  sessionsForActor(boardRef: string, actorName: string): HarnessSessionTelemetry[] {
+    const b = this.board(boardRef);
+    return querySessionsForActor(this.db, b.id, actorName);
+  }
+
+  /** flock's own claim-to-close duration for a card. Never needs a harness. */
+  cardDuration(boardRef: string, cardNum: number): CardDuration {
+    const b = this.board(boardRef);
+    return queryCardDuration(this.db, b.id, cardNum);
   }
 
   // ---------- aggregate ----------

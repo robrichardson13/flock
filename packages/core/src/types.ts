@@ -1,10 +1,16 @@
 export type ActorKind = "human" | "agent";
 
-/** Runtime an agent ran under: harness (e.g. claude-code@2.1.261), model name, and effort level. */
+/**
+ * Runtime an agent ran under: harness (e.g. claude-code@2.1.261), model name, and effort level.
+ * `session` is an opaque run key (ADR 0022), `<harness family>:<session id>[#<agent id>]`, that
+ * links an event or an actor's latest write to a row in `harness_sessions`. Nothing in core ever
+ * parses it; it is a lookup key, not a structured value.
+ */
 export interface Runtime {
   harness?: string;
   model?: string;
   effort?: string;
+  session?: string;
 }
 
 export interface Actor extends Runtime {

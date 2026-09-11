@@ -11,7 +11,7 @@ import { FlockError } from "./types.ts";
  * whenever `SCHEMA` or `migrate()` below changes, and only ever add columns/tables/indexes:
  * migrations must stay additive so a newer binary can always read an older database.
  */
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /**
  * Thrown by `openDatabase` when the database's stamped `user_version` is higher than this
@@ -148,7 +148,8 @@ CREATE TABLE IF NOT EXISTS events (
   created_at TEXT NOT NULL,
   harness TEXT,
   model TEXT,
-  effort TEXT
+  effort TEXT,
+  session TEXT
 );
 CREATE INDEX IF NOT EXISTS events_board_seq ON events(board_id, seq);
 CREATE TABLE IF NOT EXISTS actors (
@@ -157,7 +158,8 @@ CREATE TABLE IF NOT EXISTS actors (
   last_seen TEXT NOT NULL,
   harness TEXT,
   model TEXT,
-  effort TEXT
+  effort TEXT,
+  session TEXT
 );
 CREATE TABLE IF NOT EXISTS attachments (
   id TEXT PRIMARY KEY,
@@ -242,6 +244,41 @@ CREATE TABLE IF NOT EXISTS notify_settings (
   updated_at        TEXT    NOT NULL,
   PRIMARY KEY (actor, board_id)
 );
+CREATE TABLE IF NOT EXISTS harness_sessions (
+  key           TEXT PRIMARY KEY,
+  harness       TEXT,
+  session_id    TEXT NOT NULL,
+  agent_id      TEXT,
+  transcript    TEXT,
+  cwd           TEXT,
+  model         TEXT,
+  context_used  INTEGER,
+  context_max   INTEGER,
+  cost_usd      REAL,
+  cost_exact    INTEGER,
+  input_tokens  INTEGER,
+  output_tokens INTEGER,
+  cache_read_tokens   INTEGER,
+  cache_write_tokens  INTEGER,
+  tool_calls    INTEGER,
+  tools         TEXT,
+  started_at    TEXT,
+  ended_at      TEXT,
+  duration_ms   INTEGER,
+  api_ms        INTEGER,
+  tool_ms       INTEGER,
+  last_activity_at TEXT,
+  liveness      TEXT,
+  liveness_note TEXT,
+  ended_reason  TEXT,
+  pid           INTEGER,
+  partial       INTEGER,
+  source        TEXT,
+  observed_at   TEXT NOT NULL,
+  extra         TEXT,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS harness_sessions_activity ON harness_sessions(last_activity_at);
 `;
 
 export function openDatabase(path: string, opts: OpenOptions = {}): Database {
@@ -316,11 +353,16 @@ function migrate(db: Database) {
   if (!eventCols.has("harness")) db.exec("ALTER TABLE events ADD COLUMN harness TEXT");
   if (!eventCols.has("model")) db.exec("ALTER TABLE events ADD COLUMN model TEXT");
   if (!eventCols.has("effort")) db.exec("ALTER TABLE events ADD COLUMN effort TEXT");
+  // Harness telemetry (ADR 0025, v8->v9): the opaque run key that links an event to a
+  // harness_sessions row. The table itself is created unconditionally above (SCHEMA runs on
+  // every open), so only the new columns on pre-existing tables need a guard here.
+  if (!eventCols.has("session")) db.exec("ALTER TABLE events ADD COLUMN session TEXT");
 
   const actorCols = new Set((db.query("PRAGMA table_info(actors)").all() as { name: string }[]).map((c) => c.name));
   if (!actorCols.has("harness")) db.exec("ALTER TABLE actors ADD COLUMN harness TEXT");
   if (!actorCols.has("model")) db.exec("ALTER TABLE actors ADD COLUMN model TEXT");
   if (!actorCols.has("effort")) db.exec("ALTER TABLE actors ADD COLUMN effort TEXT");
+  if (!actorCols.has("session")) db.exec("ALTER TABLE actors ADD COLUMN session TEXT");
 
   // An attachment belongs to a message or to a card comment (#46); older databases only knew
   // about messages. SQLite cannot add a column with a foreign-key clause via ALTER TABLE, so the
