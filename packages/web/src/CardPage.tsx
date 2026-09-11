@@ -6,7 +6,7 @@ import { Markdownish, MessageBody } from "./markdown.tsx";
 import { agoText, timeAgo } from "./App.tsx";
 import { enterClass, useNewIds } from "./live.ts";
 import { threadChunks } from "./grouping.ts";
-import { ClampedBody, failPending, LineComposer, mergeThread, nextTempId, resolvePending, ThreadGroup, type PendingSend } from "./thread.tsx";
+import { ClampedBody, DOUBLE_TAP_EMOJI, failPending, hasReaction, LineComposer, mergeThread, MessageReactions, nextTempId, resolvePending, ThreadGroup, type PendingSend } from "./thread.tsx";
 import { buildDetailRows, type DetailRow } from "./details.ts";
 import { autoFocusField, useDialogFocus } from "./focus.ts";
 import { readSnapshot, snapKey, writeSnapshot } from "./snapshot.ts";
@@ -146,6 +146,21 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boardId, card.num, card.updatedAt]);
+
+  // Toggle a reaction on a comment, then reload right away rather than waiting on the next
+  // SSE-triggered refetch — the same "own click reads as janky if it waits" reasoning as the
+  // channel's `toggleReaction` in BoardView.tsx. A failed toggle just leaves the chip as it
+  // was; the next reload reconciles it either way.
+  const toggleCommentReaction = async (commentNum: number, emoji: string, mine: boolean) => {
+    try {
+      if (mine) await api.unreactFromComment(boardId, card.num, commentNum, emoji);
+      else await api.reactToComment(boardId, card.num, commentNum, emoji);
+      onChange();
+      reload();
+    } catch {
+      // best-effort; the chip reconciles on the next refetch either way
+    }
+  };
 
   // #29: show the jump button only while the newest comment is actually scrolled out of
   // view. The sentinel sits just past the thread, so a card whose whole page already fits
@@ -433,6 +448,24 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
             boardId={boardId}
             headerExtra={<RuntimeTag harness={actors.get(chunk.items[0].author)?.harness} model={actors.get(chunk.items[0].author)?.model} effort={actors.get(chunk.items[0].author)?.effort} />}
             entryClass={(c) => enterClass(newComments.has(c.id)) + (sendingCommentIds.has(c.id) ? " pending" : "")}
+            // Double-tap-to-react (#6): same toggle path and 👍 default as the channel message
+            // bubble, through the shared `ThreadGroup`/`useDoubleTapReact` — num 0 is the
+            // unconfirmed optimistic placeholder, nothing to react to yet.
+            onDoubleTapReact={(c) => {
+              if (c.num <= 0) return;
+              toggleCommentReaction(c.num, DOUBLE_TAP_EMOJI, hasReaction(c.reactions, me, DOUBLE_TAP_EMOJI));
+            }}
+            entryFooter={(c) =>
+              // num 0 is the not-yet-confirmed optimistic placeholder (see onSubmit below);
+              // there is nothing to react to until the server has assigned a real one.
+              c.num > 0 ? (
+                <MessageReactions
+                  reactions={c.reactions}
+                  viewer={me}
+                  onToggle={(emoji, mine) => toggleCommentReaction(c.num, emoji, mine)}
+                />
+              ) : null
+            }
           />
         ),
       )}
@@ -506,6 +539,8 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
           const tempId = nextTempId();
           const optimistic: Comment = {
             id: tempId, cardId: card.id, author: me, authorKind: "human", kind: "comment",
+            // `num` is 0 until the server allocates one: an unsent comment has no ref to react to.
+            num: 0, cardNum: card.num, reactions: [],
             body: t, createdAt: new Date().toISOString(), attachments,
           };
           setPendingComments((prev) => [...prev, { tempId, entry: optimistic, sending: true, draftText: t, draftAttachmentIds: attachmentIds }]);

@@ -71,6 +71,8 @@ When the human answers, the card returns to \`doing\` with you as assignee and t
     flock say ${b} "<message>"                     # board channel; talk to other agents here
     flock react ${b} m<n> 👍 [--remove]              # react to a channel message; a 👍 on a human
                                                     # comment or message is a fine ack instead of a reply
+    flock react ${b} <card>.<n> 👍 [--remove]        # react to a card comment the same way; its ref
+                                                    # (e.g. 4.2) is shown by \`flock card show\`
     flock decide ${b} "<gist>" --card <n>          # record a rule that binds later work
     flock decisions ${b}                           # the rules in force right now
     flock card new ${b} "<title>" --body "..." --label <l> --blocked-by <n>,<m>

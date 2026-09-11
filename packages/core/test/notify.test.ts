@@ -145,6 +145,9 @@ describe("notificationFor", () => {
       // Reactions are deliberately low-signal: a 👍 on a message is not worth a push (ADR 0018).
       "message.reacted",
       "message.unreacted",
+      // The same for a 👍 on a card comment (ADR 0019).
+      "comment.reacted",
+      "comment.unreacted",
     ] as const;
     for (const type of types) {
       expect(notificationFor(ev({ type }), ctx)).toBeNull();
