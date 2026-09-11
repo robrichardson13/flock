@@ -11,7 +11,7 @@ import { FlockError } from "./types.ts";
  * whenever `SCHEMA` or `migrate()` below changes, and only ever add columns/tables/indexes:
  * migrations must stay additive so a newer binary can always read an older database.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /**
  * Thrown by `openDatabase` when the database's stamped `user_version` is higher than this
@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS messages (
   author TEXT NOT NULL,
   author_kind TEXT NOT NULL,
   body TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  num INTEGER
 );
 CREATE TABLE IF NOT EXISTS decisions (
   id TEXT PRIMARY KEY,
@@ -155,6 +156,16 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS push_subs_actor ON push_subscriptions(actor);
 CREATE INDEX IF NOT EXISTS push_subs_board ON push_subscriptions(board_id);
+CREATE TABLE IF NOT EXISTS reactions (
+  board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  actor TEXT NOT NULL,
+  actor_kind TEXT NOT NULL,
+  emoji TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (message_id, actor, emoji)
+);
+CREATE INDEX IF NOT EXISTS reactions_board ON reactions(board_id);
 `;
 
 export function openDatabase(path: string): Database {
@@ -231,6 +242,22 @@ function migrate(db: Database) {
   // until the ALTER above runs, which happens after SCHEMA.
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS decisions_board_num ON decisions(board_id, num)");
   db.exec("CREATE INDEX IF NOT EXISTS decisions_board_standing ON decisions(board_id, archived_at)");
+
+  // Reactions (ADR 0018): a channel message needs a public address before anyone can react to
+  // it, so messages get the same per-board `num` decisions got above. Backfilled in the order
+  // `messages()` already lists in, so an existing channel keeps its reading order.
+  const messageCols = new Set((db.query("PRAGMA table_info(messages)").all() as { name: string }[]).map((c) => c.name));
+  if (!messageCols.has("num")) db.exec("ALTER TABLE messages ADD COLUMN num INTEGER");
+  db.exec(`
+    UPDATE messages SET num = (
+      SELECT COUNT(*) FROM messages m2
+      WHERE m2.board_id = messages.board_id
+        AND (m2.created_at, m2.rowid) <= (messages.created_at, messages.rowid)
+    ) WHERE num IS NULL
+  `);
+  // Indexed here rather than in SCHEMA: on a database migrated from v4 or older, `num` does not
+  // exist until the ALTER above runs, which happens after SCHEMA.
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS messages_board_num ON messages(board_id, num)");
 }
 
 export const DB_DIRNAME = ".flock";

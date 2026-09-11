@@ -1,6 +1,6 @@
-import type { ActorCard, ActorCardRole, ActorProfile, Attachment, Board, BoardState, BoardSummary, Card, CardStatus, Comment, Decision, DoingCard, Event, Message, TeamMember } from "@flock/core/types";
+import type { ActorCard, ActorCardRole, ActorProfile, Attachment, Board, BoardState, BoardSummary, Card, CardStatus, Comment, Decision, DoingCard, Event, Message, Reaction, TeamMember } from "@flock/core/types";
 
-export type { ActorCard, ActorCardRole, ActorProfile, Attachment, Board, BoardState, BoardSummary, Card, CardStatus, Comment, Decision, DoingCard, Event, Message, TeamMember };
+export type { ActorCard, ActorCardRole, ActorProfile, Attachment, Board, BoardState, BoardSummary, Card, CardStatus, Comment, Decision, DoingCard, Event, Message, Reaction, TeamMember };
 
 /** Mirrors `@flock/core`'s hook field schema (not re-exported by that package's browser-safe
  * `./types` entry point, so declared locally rather than pulling in `@flock/core`'s bun:sqlite-laden
@@ -166,6 +166,8 @@ export const api = {
   block: (b: string, n: number, by: number) => req<Card>("POST", `/boards/${b}/cards/${n}/blockers`, { by }),
   unblock: (b: string, n: number, by: number) => req<Card>("DELETE", `/boards/${b}/cards/${n}/blockers/${by}`),
   say: (b: string, body: string, attachments?: string[]) => req<Message>("POST", `/boards/${b}/messages`, { body, attachments }),
+  react: (b: string, n: number, emoji: string) => req<{ message: Message; changed: boolean }>("POST", `/boards/${b}/messages/${n}/reactions`, { emoji }),
+  unreact: (b: string, n: number, emoji: string) => req<{ message: Message; changed: boolean }>("DELETE", `/boards/${b}/messages/${n}/reactions/${encodeURIComponent(emoji)}`),
   uploadAttachment: (b: string, blob: Blob, opts: { width?: number; height?: number; name?: string; mime?: string } = {}) =>
     reqRaw<Attachment>(`/boards/${b}/attachments`, blob, { mime: opts.mime ?? blob.type, width: opts.width, height: opts.height, name: opts.name }),
   decide: (b: string, gist: string, card?: number | null, supersedes?: number) =>

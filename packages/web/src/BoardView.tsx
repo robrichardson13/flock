@@ -49,7 +49,7 @@ import {
 } from "./live.ts";
 import { groupMessages, splitByDay } from "./grouping.ts";
 import { matchShortcut, SHORTCUT_HINT, type Shortcut } from "./shortcuts.ts";
-import { failPending, LineComposer, mergeThread, nextTempId, resolvePending, ThreadGroup, type PendingSend } from "./thread.tsx";
+import { failPending, LineComposer, mergeThread, MessageReactions, nextTempId, resolvePending, ThreadGroup, type PendingSend } from "./thread.tsx";
 import { AddToChatTip, quoteBlock, useAddToChat } from "./addToChat.tsx";
 import { draftKey, requestInsert } from "./compose.ts";
 import { ActivitySkeleton, BoardSideSkeleton, CardPageSkeleton, CardsSkeleton, KanbanSkeleton, Line } from "./Skeleton.tsx";
@@ -1632,6 +1632,19 @@ function Channel({ boardId, snap, onSent }: { boardId: string; snap: Snapshot; o
   const me = getActorName();
   const groups = groupMessages(messages);
   const sendingIds = new Set(pendingSends.filter((p) => p.sending).map((p) => p.entry.id));
+  // Toggle a reaction, then refresh right away rather than waiting on the next SSE-triggered
+  // coalesced refetch (#4): the actor's own click is the one case where "up to 600ms later"
+  // reads as janky, everyone else's still lands over `useCoalescedRefetch`. A failed toggle
+  // just leaves the chip as it was — no rollback to track, since nothing was applied locally.
+  const toggleReaction = async (num: number, emoji: string, mine: boolean) => {
+    try {
+      if (mine) await api.unreact(boardId, num, emoji);
+      else await api.react(boardId, num, emoji);
+      onSent();
+    } catch {
+      // best-effort; the chip reconciles on the next refetch either way
+    }
+  };
   return (
     <div className="pane" ref={paneRef}>
       <div className="pane-body">
@@ -1652,6 +1665,17 @@ function Channel({ boardId, snap, onSent }: { boardId: string; snap: Snapshot; o
               boardId={boardId}
               entryClass={(m) => enterClass(entrants.has(m.id)) + (sendingIds.has(m.id) ? " pending" : "")}
               entryStyle={(m) => enterDelay(orders.get(m.id))}
+              entryFooter={(m) =>
+                // num 0 is the not-yet-confirmed optimistic placeholder (see onSubmit below);
+                // there is nothing to react to until the server has assigned a real one.
+                m.num > 0 ? (
+                  <MessageReactions
+                    reactions={m.reactions}
+                    viewer={me}
+                    onToggle={(emoji, mine) => toggleReaction(m.num, emoji, mine)}
+                  />
+                ) : null
+              }
             />
           ))}
         </div>
@@ -1675,7 +1699,9 @@ function Channel({ boardId, snap, onSent }: { boardId: string; snap: Snapshot; o
         attachable
         onSubmit={async (t, ids, attachments) => {
           const tempId = nextTempId();
-          const optimistic: Message = { id: tempId, boardId, author: me, authorKind: "human", body: t, createdAt: new Date().toISOString(), attachments };
+          // num 0 is the "not numbered yet" placeholder: the server assigns the real one, and the
+          // optimistic row is replaced by `real` the moment it comes back.
+          const optimistic: Message = { id: tempId, boardId, num: 0, author: me, authorKind: "human", body: t, createdAt: new Date().toISOString(), attachments, reactions: [] };
           setPendingSends((prev) => [...prev, { tempId, entry: optimistic, sending: true, draftText: t, draftAttachmentIds: ids }]);
           stick();
           try {

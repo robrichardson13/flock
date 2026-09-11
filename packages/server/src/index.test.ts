@@ -818,3 +818,111 @@ describe("POST /api/boards/:b/cards/:n/hold and /unhold", () => {
     expect((await again.json()).held).toBe(false);
   });
 });
+
+describe("message reactions", () => {
+  test("POST reactions adds a reaction and returns {message, changed}; snapshot carries num/ref/reactions", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Reactions Board" });
+    const msg = flock.say(ada, board.id, "please review the parser");
+
+    const res = await app.request(`/api/boards/${board.slug}/messages/${msg.num}/reactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({ emoji: "👀" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.changed).toBe(true);
+    expect(body.message.num).toBe(msg.num);
+    expect(body.message.reactions).toEqual([{ emoji: "👀", count: 1, actors: ["scout"] }]);
+
+    // Reacting again with the same emoji/actor is idempotent.
+    const again = await app.request(`/api/boards/${board.slug}/messages/${msg.num}/reactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({ emoji: "👀" }),
+    });
+    expect((await again.json()).changed).toBe(false);
+
+    const snap = await (await app.request(`/api/boards/${board.slug}`)).json();
+    const snapMsg = snap.messages.find((m: { num: number }) => m.num === msg.num);
+    expect(snapMsg.num).toBe(msg.num);
+    expect(snapMsg.reactions).toEqual([{ emoji: "👀", count: 1, actors: ["scout"] }]);
+  });
+
+  test("DELETE reactions removes it (emoji URL-encoded); unreacting twice is idempotent", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Reactions Board 2" });
+    const msg = flock.say(ada, board.id, "shipped");
+    flock.react({ name: "scout", kind: "agent" }, board.id, msg.num, "👍");
+
+    const res = await app.request(
+      `/api/boards/${board.slug}/messages/${msg.num}/reactions/${encodeURIComponent("👍")}`,
+      { method: "DELETE", headers: { "x-flock-actor": "scout", "x-flock-actor-kind": "agent" } },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.changed).toBe(true);
+    expect(body.message.reactions).toEqual([]);
+
+    const again = await app.request(
+      `/api/boards/${board.slug}/messages/${msg.num}/reactions/${encodeURIComponent("👍")}`,
+      { method: "DELETE", headers: { "x-flock-actor": "scout", "x-flock-actor-kind": "agent" } },
+    );
+    expect((await again.json()).changed).toBe(false);
+  });
+
+  test("reacting to an unknown message is 404; an empty/blank emoji is 400", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Reactions Board 3" });
+    const msg = flock.say(ada, board.id, "hi");
+
+    const notFound = await app.request(`/api/boards/${board.slug}/messages/999/reactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({ emoji: "👍" }),
+    });
+    expect(notFound.status).toBe(404);
+
+    const badEmoji = await app.request(`/api/boards/${board.slug}/messages/${msg.num}/reactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({ emoji: "" }),
+    });
+    expect(badEmoji.status).toBe(400);
+
+    const whitespaceEmoji = await app.request(`/api/boards/${board.slug}/messages/${msg.num}/reactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({ emoji: "a b" }),
+    });
+    expect(whitespaceEmoji.status).toBe(400);
+  });
+
+  test("message.reacted and message.unreacted events flow through the SSE tail unfiltered", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Reactions Board 4" });
+    const msg = flock.say(ada, board.id, "hi");
+
+    await app.request(`/api/boards/${board.slug}/messages/${msg.num}/reactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+      body: JSON.stringify({ emoji: "🎉" }),
+    });
+    await app.request(`/api/boards/${board.slug}/messages/${msg.num}/reactions/${encodeURIComponent("🎉")}`, {
+      method: "DELETE",
+      headers: { "x-flock-actor": "scout", "x-flock-actor-kind": "agent" },
+    });
+
+    const events = await (await app.request(`/api/boards/${board.slug}/events`)).json();
+    const types = events.map((e: { type: string }) => e.type);
+    expect(types).toContain("message.reacted");
+    expect(types).toContain("message.unreacted");
+    const reacted = events.find((e: { type: string }) => e.type === "message.reacted");
+    expect(reacted.data).toMatchObject({ emoji: "🎉", num: msg.num, ref: `m${msg.num}`, messageAuthor: "ada" });
+  });
+});

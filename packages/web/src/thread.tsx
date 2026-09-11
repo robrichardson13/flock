@@ -21,7 +21,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { api, attachmentUrl, type Attachment } from "./api.ts";
+import { api, attachmentUrl, type Attachment, type Reaction } from "./api.ts";
 import type { ActorKind } from "@flock/core/types";
 import { ATTACHMENT_MIMES, MAX_ATTACHMENTS_PER_MESSAGE } from "@flock/core/attachments";
 import { planImage } from "./images.ts";
@@ -119,6 +119,7 @@ export function ThreadGroup<T extends ThreadEntry>({
   headerExtra,
   entryClass,
   entryStyle,
+  entryFooter,
 }: {
   group: readonly T[];
   mine: boolean;
@@ -127,6 +128,10 @@ export function ThreadGroup<T extends ThreadEntry>({
   /** Extra classes per bubble, e.g. the arrival animation's `enterClass`. */
   entryClass?: (entry: T) => string;
   entryStyle?: (entry: T) => CSSProperties | undefined;
+  /** Rendered under a bubble's body/attachments, inside it — the channel's reaction chips
+   *  and add-reaction affordance (#4). Comments have nothing here; only the channel passes
+   *  this. */
+  entryFooter?: (entry: T) => ReactNode;
 }) {
   const mobile = useIsMobile();
   const head = group[0];
@@ -157,6 +162,7 @@ export function ThreadGroup<T extends ThreadEntry>({
             {m.attachments && m.attachments.length > 0 && (
               <MessageAttachments boardId={boardId} attachments={m.attachments} author={m.author} createdAt={m.createdAt} />
             )}
+            {entryFooter?.(m)}
           </div>
         ))}
       </div>
@@ -249,6 +255,141 @@ export function MessageAttachments({ boardId, attachments, author, createdAt }: 
   );
 }
 
+
+/** The fixed palette a reaction picker offers (ADR 0017, card #4). Free-text emoji entry
+ *  was in scope but optional; this fixed set covers the acknowledgements a channel message
+ *  actually gets and costs nothing beyond a row of buttons. */
+const REACTION_PALETTE = ["👍", "👎", "❤️", "🎉", "👀", "✅", "🤔"] as const;
+
+/**
+ * The "+ 🙂" affordance under a message: a small popover of the fixed palette, closing on an
+ * outside pointerdown or Escape. Deliberately its own tiny popover rather than `ui.tsx`'s
+ * `Menu`/`AnchoredMenu` — that popover's CSS only exists inside `board-desktop.css`'s
+ * 900px-and-up media query (it never mounts styled on the phone), and this affordance has to
+ * work at every width per the card's acceptance criteria.
+ */
+function ReactionPicker({ isMine, onPick }: { isMine: (emoji: string) => boolean; onPick: (emoji: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  // The popover always opens anchored `left: 0` in CSS (see styles.css), which is correct
+  // for a left-aligned bubble but, on an own (right-aligned) message, can put its box mostly
+  // or entirely past the right edge of a phone-width viewport — the verifier's #4 repro at
+  // 400px, where the wrap sits far enough right that `left: 0` alone pushed 🤔 clean off
+  // screen. Rather than a CSS anchor keyed to "mine" (the wrap's own position within its
+  // bubble isn't reliably at either edge — a short reaction row can sit anywhere the bubble's
+  // content happens to end), measure the rendered box each time it opens and nudge it back
+  // inside the viewport with a `translateX`, whichever direction it overflowed.
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    if (!open) {
+      setShift(0);
+      return;
+    }
+    const el = popRef.current;
+    if (!el) return;
+    const margin = 16;
+    // `getBoundingClientRect` reports the box's actual on-screen position, transform and
+    // all, so comparing it to the viewport needs no separate tracking of the shift already
+    // applied — this recomputes correctly on resize too, not just on open.
+    const measure = () => {
+      const rect = el.getBoundingClientRect();
+      const overRight = rect.right - (window.innerWidth - margin);
+      const overLeft = margin - rect.left;
+      if (overRight > 0) setShift((s) => s - overRight);
+      else if (overLeft > 0) setShift((s) => s + overLeft);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  return (
+    <div className="reaction-picker-wrap" ref={wrap}>
+      <button
+        type="button"
+        className={`reaction-add${open ? " is-open" : ""}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Add reaction"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span aria-hidden>🙂</span>
+        {Icons.plus(10)}
+      </button>
+      {open && (
+        <div
+          ref={popRef}
+          className="reaction-picker"
+          role="menu"
+          style={shift ? { transform: `translateX(${shift}px)` } : undefined}
+        >
+          {REACTION_PALETTE.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              role="menuitem"
+              className={`reaction-picker-item${isMine(emoji) ? " mine" : ""}`}
+              onClick={() => {
+                onPick(emoji);
+                setOpen(false);
+              }}
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The reaction chips under a channel message (#4): emoji + count, highlighted (and titled
+ * with who) when the viewer is among that emoji's actors, tapping toggles react/unreact. The
+ * add-reaction affordance always rides at the end of the row, even with zero reactions yet.
+ * `onToggle` gets `mine` precomputed so the caller (which owns the API round-trip and any
+ * optimistic patch) never has to re-derive it.
+ */
+export function MessageReactions({ reactions, viewer, onToggle }: { reactions: readonly Reaction[]; viewer: string; onToggle: (emoji: string, mine: boolean) => void }) {
+  const isMine = (emoji: string) => !!viewer && (reactions.find((r) => r.emoji === emoji)?.actors.includes(viewer) ?? false);
+  return (
+    <div className="msg-reactions">
+      {reactions.map((r) => {
+        const mine = isMine(r.emoji);
+        return (
+          <button
+            key={r.emoji}
+            type="button"
+            className={`reaction-chip${mine ? " mine" : ""}`}
+            title={r.actors.join(", ")}
+            aria-label={`${r.emoji} ${r.count}: ${r.actors.join(", ")}`}
+            onClick={() => onToggle(r.emoji, mine)}
+          >
+            <span aria-hidden>{r.emoji}</span>
+            {r.count}
+          </button>
+        );
+      })}
+      <ReactionPicker isMine={isMine} onPick={(emoji) => onToggle(emoji, isMine(emoji))} />
+    </div>
+  );
+}
 
 const ACCEPTED_IMAGE_TYPES: readonly string[] = ATTACHMENT_MIMES;
 

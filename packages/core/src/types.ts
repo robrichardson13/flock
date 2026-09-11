@@ -159,14 +159,37 @@ export interface Attachment {
   createdAt: string;
 }
 
+/**
+ * One emoji on one message, already aggregated for display: the web renders a row of these
+ * without further grouping. `actors` is every actor who used this emoji, oldest reaction first;
+ * a client decides "did I react" by looking for its own name in it.
+ */
+export interface Reaction {
+  emoji: string;
+  /** Always `actors.length`; carried explicitly so a renderer never has to count. */
+  count: number;
+  actors: string[];
+}
+
 export interface Message {
   id: string;
   boardId: string;
+  /** Per-board sequential number, the human-facing id (`m7`). See ADR 0018. */
+  num: number;
   author: string;
   authorKind: ActorKind;
   body: string;
   createdAt: string;
   attachments: Attachment[];
+  /** Most-used emoji first, ties broken by first use. Empty when nobody has reacted. */
+  reactions: Reaction[];
+}
+
+/** What `react`/`unreact` return: the message as it now stands, plus whether anything changed. */
+export interface ReactionResult {
+  message: Message;
+  /** False when the reaction was already there (react) or already absent (unreact); no event was emitted. */
+  changed: boolean;
 }
 
 export interface Decision {
@@ -214,6 +237,8 @@ export type EventType =
   | "card.answered"
   | "comment.posted"
   | "message.posted"
+  | "message.reacted"
+  | "message.unreacted"
   | "decision.recorded"
   | "decision.archived"
   | "decision.restored";

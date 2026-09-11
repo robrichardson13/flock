@@ -142,6 +142,9 @@ describe("notificationFor", () => {
       "decision.recorded",
       "decision.archived",
       "decision.restored",
+      // Reactions are deliberately low-signal: a 👍 on a message is not worth a push (ADR 0018).
+      "message.reacted",
+      "message.unreacted",
     ] as const;
     for (const type of types) {
       expect(notificationFor(ev({ type }), ctx)).toBeNull();
