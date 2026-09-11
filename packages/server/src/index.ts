@@ -52,6 +52,10 @@ export interface ServerOptions {
   push?: boolean;
   /** Test seam: replaces the pump's real web-push sender. Ignored when push is disabled. */
   pushSend?: PushSend;
+  /** Test seam: clock shared by the presence route and the push pump's batch windows. Default Date.now. */
+  now?: () => number;
+  /** Test seam: the pump's poll interval. Default 500ms; ignored when push is disabled. */
+  pushIntervalMs?: number;
 }
 
 function defaultHuman(): string {
@@ -162,10 +166,22 @@ function logHookStderr(mode: string, stderr: string): void {
   if (stderr.trim()) console.error(`[${BOARD_CREATE_HOOK} ${mode}] ${stderr}`);
 }
 
-export function createApp({ flock, dbPath, staticDir, assets, installScriptPath, flockHome, push, pushSend }: ServerOptions) {
+export function createApp({
+  flock,
+  dbPath,
+  staticDir,
+  assets,
+  installScriptPath,
+  flockHome,
+  push,
+  pushSend,
+  now,
+  pushIntervalMs,
+}: ServerOptions) {
   const app = new Hono();
   app.use("/api/*", cors());
 
+  const clock = now ?? Date.now;
   const pushEnabled = (push ?? true) && process.env.FLOCK_NO_PUSH !== "1";
   const resolvedHome = flockHome ?? (process.env.FLOCK_HOME ? resolve(process.env.FLOCK_HOME) : join(homedir(), DB_DIRNAME));
   const vapid = pushEnabled ? loadOrCreateVapidKeys(resolvedHome) : null;
@@ -175,7 +191,7 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath,
   const presence = new Presence();
   let pump: PushPump | null = null;
   if (vapid && send) {
-    pump = startPushPump({ flock, keys: vapid, send, presence });
+    pump = startPushPump({ flock, keys: vapid, send, presence, now: clock, intervalMs: pushIntervalMs });
   }
 
   const actorOf = (c: { req: { header(n: string): string | undefined } }): Actor => {
@@ -531,7 +547,7 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath,
         boardId = null;
       }
     }
-    presence.report({ client: body.client, actor: actorOf(c).name, boardId, looking: body.looking }, Date.now());
+    presence.report({ client: body.client, actor: actorOf(c).name, boardId, looking: body.looking }, clock());
     return c.body(null, 204);
   });
 

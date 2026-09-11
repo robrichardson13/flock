@@ -88,6 +88,7 @@ export function defaultSend(keys: VapidKeys): PushSend {
     const result = await webpush.sendNotification(
       { endpoint: sub.endpoint, keys: sub.keys },
       payload,
+      { timeout: 10_000 },
     );
     return { statusCode: result.statusCode };
   };
@@ -136,31 +137,44 @@ export function startPushPump(opts: {
     const results = await Promise.allSettled(subs.map((sub) => send(sub, payload)));
     results.forEach((result, i) => {
       const endpoint = subs[i]!.endpoint;
-      if (result.status === "fulfilled") {
-        flock.touchPushSubscription(endpoint);
-        sent++;
-        return;
-      }
-      const statusCode = (result.reason as { statusCode?: number } | undefined)?.statusCode;
-      if (isPruneStatus(statusCode)) {
-        flock.unsubscribePush(endpoint);
-        pruned++;
-        if (statusCode === 403) console.error(`[push] pruning ${endpoint}: 403 (wrong VAPID key)`);
-      } else {
-        console.error(`[push] send to ${endpoint} failed: ${statusCode ?? (result.reason as Error)?.message ?? result.reason}`);
+      // Each DB write is its own try/catch: a throw for one endpoint (e.g. SQLITE_BUSY) must
+      // never stop the others in this dispatch, let alone the sibling dispatches in sendAll.
+      try {
+        if (result.status === "fulfilled") {
+          flock.touchPushSubscription(endpoint);
+          sent++;
+          return;
+        }
+        const statusCode = (result.reason as { statusCode?: number } | undefined)?.statusCode;
+        if (isPruneStatus(statusCode)) {
+          flock.unsubscribePush(endpoint);
+          pruned++;
+          if (statusCode === 403) console.error(`[push] pruning ${endpoint}: 403 (wrong VAPID key)`);
+        } else {
+          console.error(`[push] send to ${endpoint} failed: ${statusCode ?? (result.reason as Error)?.message ?? result.reason}`);
+        }
+      } catch (err) {
+        console.error(`[push] DB write for ${endpoint} failed:`, err);
       }
     });
     return { sent, pruned };
   }
 
+  /** Fan every dispatch out at once (S1): one recipient's slow send, throw, or DB error must never
+   *  delay or drop another's, including an ask or a trailing flush a different key already owns. */
   async function sendAll(dispatches: readonly Dispatch[]): Promise<{ sent: number; pruned: number }> {
+    const results = await Promise.allSettled(dispatches.map((d) => sendDispatch(d)));
     let sent = 0;
     let pruned = 0;
-    for (const d of dispatches) {
-      const result = await sendDispatch(d);
-      sent += result.sent;
-      pruned += result.pruned;
-    }
+    results.forEach((result, i) => {
+      if (result.status === "fulfilled") {
+        sent += result.value.sent;
+        pruned += result.value.pruned;
+        return;
+      }
+      const d = dispatches[i]!;
+      console.error(`[push] sendDispatch failed for ${d.actor} on board ${d.boardId}:`, result.reason);
+    });
     return { sent, pruned };
   }
 
