@@ -2,31 +2,6 @@ import type { ActorCard, ActorCardRole, ActorProfile, Attachment, Board, BoardSt
 
 export type { ActorCard, ActorCardRole, ActorProfile, Attachment, Board, BoardState, BoardSummary, Card, CardStatus, Comment, Decision, DoingCard, Event, Message, Reaction, TeamMember };
 
-/** Mirrors `@flock/core`'s hook field schema (not re-exported by that package's browser-safe
- * `./types` entry point, so declared locally rather than pulling in `@flock/core`'s bun:sqlite-laden
- * main index). */
-export type HookFieldType = "text" | "textarea" | "select" | "checkbox";
-export interface HookFieldOption {
-  value: string;
-  label: string;
-}
-export interface HookField {
-  name: string;
-  label: string;
-  type: HookFieldType;
-  required?: boolean;
-  placeholder?: string;
-  default?: string | boolean;
-  options?: HookFieldOption[];
-}
-export interface HookDescribeResponse {
-  enabled: boolean;
-  title?: string;
-  submit?: string;
-  fields?: HookField[];
-  warning?: string;
-}
-
 export interface Snapshot {
   board: Board;
   cards: Card[];
@@ -139,9 +114,6 @@ export const api = {
   actors: () => req<ActorInfo[]>("GET", "/actors"),
   boards: () => req<BoardSummary[]>("GET", "/boards"),
   createBoard: (input: { title: string; body?: string; project?: string }) => req<Board>("POST", "/boards", input),
-  hookDescribe: () => req<HookDescribeResponse>("GET", "/hooks/board-create"),
-  createBoardWithHook: (input: { title: string; inputs: Record<string, string | boolean> }) =>
-    req<Board>("POST", "/boards/hook", input, { "x-flock-hook": "1" }),
   updateBoard: (b: string, patch: Partial<Pick<Board, "title" | "body" | "status">>) => req<Board>("PATCH", `/boards/${b}`, patch),
   deleteBoard: (b: string) => req<void>("DELETE", `/boards/${b}`),
   snapshot: (b: string) => req<Snapshot>("GET", `/boards/${b}`),

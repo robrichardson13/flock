@@ -1,6 +1,6 @@
 # ADR 0008: A board-creation hook, one executable, before the board exists
 
-**Status:** accepted, 2026-09-06
+**Status:** accepted, 2026-09-06. **Superseded by [ADR 0022](0022-remove-the-board-creation-hook.md):** the hook, its field schema, and every route and UI surface built on it are removed. The web "+" and `flock board new` create a board from a title and an optional project directory only. Read this ADR for the history of why the hook existed; read 0022 for why it is gone.
 
 ## Context
 
