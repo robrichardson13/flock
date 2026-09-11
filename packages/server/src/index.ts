@@ -410,6 +410,14 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath,
     if (!body.body?.trim() && !body.attachments?.length) throw new FlockError("body or attachments is required");
     return c.json(flock.say(actorOf(c), c.req.param("b"), body.body ?? "", { attachments: body.attachments }), 201);
   });
+  app.post("/api/boards/:b/messages/:n/reactions", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    if (typeof body.emoji !== "string" || !body.emoji.trim()) throw new FlockError("emoji is required");
+    return c.json(flock.react(actorOf(c), c.req.param("b"), Number(c.req.param("n")), body.emoji));
+  });
+  app.delete("/api/boards/:b/messages/:n/reactions/:emoji", (c) =>
+    c.json(flock.unreact(actorOf(c), c.req.param("b"), Number(c.req.param("n")), decodeURIComponent(c.req.param("emoji")))),
+  );
   app.get("/api/boards/:b/decisions", (c) => {
     const archivedQ = c.req.query("archived");
     const archived: boolean | "all" | undefined = archivedQ === "all" ? "all" : archivedQ === "1" ? true : undefined;
