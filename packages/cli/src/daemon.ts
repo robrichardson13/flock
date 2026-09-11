@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { DB_DIRNAME, DB_FILENAME, FlockError, globalDbPath, resolveDbPath } from "@flock/core";
 import { CANONICAL_API_PORT, CANONICAL_WEB_PORT, DEFAULT_HOST, REPO_ROOT, advertisedUrls, baseUrl, devUrl, portOffset, resolveCheckout, resolveHost, type Checkout } from "./dev.ts";
 import { flockHome } from "./paths.ts";
+import { findStrays, isAlive, listProcesses, strayLabel, terminate, type Stray } from "./procs.ts";
 import { isStandalone, version } from "./runtime.ts";
 import { browserPort, establishTailscale, findTailscaleReal, preflightTailscale, preserveRunningTailscale, releaseTailscale, resolveTailscale, spawnRunner, type Runner } from "./tailscale.ts";
 
@@ -138,16 +139,6 @@ export function parseRunInfo(text: string): RunInfo | undefined {
     tailscaleUrl: typeof o.tailscaleUrl === "string" && o.tailscaleUrl ? o.tailscaleUrl : undefined,
     tailscaleTarget: typeof o.tailscaleTarget === "string" && o.tailscaleTarget ? o.tailscaleTarget : undefined,
   };
-}
-
-export function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    // EPERM means the process exists but belongs to someone else: still alive.
-    return (e as NodeJS.ErrnoException).code === "EPERM";
-  }
 }
 
 /** Read one runfile, pruning it if it is unparseable or its pid is gone. */
@@ -447,11 +438,19 @@ function serveCmd(): string[] {
 
 // ---------------------------------------------------------------------------- lifecycle
 
-function spawnChildren(plan: DaemonPlan): { api: number; web?: number } {
+interface Spawned {
+  api: number;
+  web?: number;
+  /** Flips when the API child exits: before readiness, that is a failed start. */
+  apiExited: () => boolean;
+}
+
+function spawnChildren(plan: DaemonPlan): Spawned {
   mkdirSync(logsDir(), { recursive: true });
   mkdirSync(runDir(), { recursive: true });
   const log = openSync(logPath(plan.name), "a");
   const pids: { api?: number; web?: number } = {};
+  let apiExited = false;
   for (const child of plan.children) {
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
@@ -469,42 +468,101 @@ function spawnChildren(plan: DaemonPlan): { api: number; web?: number } {
     const proc = spawn(child.cmd[0], child.cmd.slice(1), { cwd: child.cwd, env, detached: true, stdio: ["ignore", log, log] });
     proc.unref();
     if (proc.pid === undefined) throw new FlockError(`Could not start ${child.cmd[0]}.`, "invalid");
+    if (child.key === "api") proc.once("exit", () => (apiExited = true));
     pids[child.key] = proc.pid;
   }
   if (pids.api === undefined) throw new FlockError("No API child was started.", "invalid");
-  return { api: pids.api, web: pids.web };
+  return { api: pids.api, web: pids.web, apiExited: () => apiExited };
 }
 
-async function waitForRunfile(plan: DaemonPlan, timeoutMs = READY_TIMEOUT_MS): Promise<RunInfo> {
+async function waitForRunfile(plan: DaemonPlan, spawned: Spawned, logOffset: number, timeoutMs = READY_TIMEOUT_MS): Promise<RunInfo> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const info = readRunfile(plan.name);
     if (info) return info;
-    if (Date.now() >= deadline) {
-      throw new FlockError(`Timed out after ${Math.round(timeoutMs / 1000)}s waiting for the daemon to start listening.\nCheck ${logPath(plan.name)}`, "invalid");
-    }
+    if (spawned.apiExited() || !isAlive(spawned.api)) throw startupFailure(plan, logOffset, "The daemon exited before it started listening:");
+    if (Date.now() >= deadline) throw startupFailure(plan, logOffset, `Timed out after ${Math.round(timeoutMs / 1000)}s waiting for the daemon to start listening.`);
     await Bun.sleep(READY_POLL_MS);
+  }
+}
+
+/**
+ * Spawn the plan's children and wait for readiness. On any failure, every child this call spawned
+ * is stopped before the error propagates: a vite whose API never came up is exactly the orphan
+ * that otherwise holds the web port with nothing tracking it (ADR 0020).
+ */
+async function startChildren(plan: DaemonPlan): Promise<{ info: RunInfo; web?: number }> {
+  const logOffset = logSize(plan.name);
+  const spawned = spawnChildren(plan);
+  try {
+    return { info: await waitForRunfile(plan, spawned, logOffset), web: spawned.web };
+  } catch (e) {
+    await terminate([spawned.api, ...(spawned.web !== undefined ? [spawned.web] : [])], TERM_GRACE_MS);
+    throw e;
   }
 }
 
 /** SIGTERM every pid in the runfile, then SIGKILL whatever is still alive after the grace period. */
 async function stop(info: RunInfo, graceMs = TERM_GRACE_MS) {
-  const pids = [info.pid, ...(info.webPid ? [info.webPid] : [])];
-  for (const pid of pids) {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {}
-  }
-  const deadline = Date.now() + graceMs;
-  while (Date.now() < deadline && pids.some(isAlive)) await Bun.sleep(100);
-  for (const pid of pids.filter(isAlive)) {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {}
-  }
+  await terminate([info.pid, ...(info.webPid ? [info.webPid] : [])], graceMs);
   try {
     unlinkSync(runfilePath(info.name));
   } catch {}
+}
+
+/** Live runfiles' pids: those children are supervised, so they are never strays. */
+function ownedPids(runfiles: RunInfo[]): Set<number> {
+  return new Set(runfiles.flatMap((r) => [r.pid, ...(r.webPid ? [r.webPid] : [])]));
+}
+
+/** This checkout's dev children that no runfile tracks any more (ADR 0020). None outside checkout mode. */
+function straysOf(plan: DaemonPlan): Stray[] {
+  if (plan.mode !== "checkout") return [];
+  return findStrays(listProcesses(), plan.root, ownedPids(listRunfiles()));
+}
+
+async function reapStrays(plan: DaemonPlan): Promise<Stray[]> {
+  const strays = straysOf(plan);
+  if (strays.length) await terminate(strays.map((s) => s.pid), TERM_GRACE_MS);
+  return strays;
+}
+
+const straysPhrase = (strays: Stray[]) => `${strays.length} stray process${strays.length === 1 ? "" : "es"} from an earlier run: ${strays.map(strayLabel).join(", ")}`;
+
+/**
+ * `up` and `restart` clear this checkout's strays before planning, so a vite orphan squatting on
+ * :5173 neither blocks the start nor pushes the canonical checkout onto its fallback ports. Returns
+ * the plan to use: re-resolved if anything was freed, since the port fallback depends on it.
+ */
+async function healStrays(plan: DaemonPlan, opts: DaemonOptions): Promise<DaemonPlan> {
+  const strays = await reapStrays(plan);
+  if (!strays.length) return plan;
+  console.error(`Stopped ${straysPhrase(strays)}.`);
+  return resolvePlan(opts);
+}
+
+/**
+ * The lines this start appended to the log that explain a failure: error lines first, else the
+ * tail. Vite's proxy errors are dropped — an open tab polling a dead API floods the shared log.
+ */
+export function startupFailureExcerpt(appended: string, max = 5): string[] {
+  const lines = appended
+    .split("\n")
+    .map((l) => l.trimEnd())
+    .filter((l) => l && !/proxy error|ECONNREFUSED/.test(l));
+  const errors = lines.filter((l) => /^(error:|\w*Error:)/i.test(l.trim()));
+  return (errors.length ? errors : lines).slice(-max);
+}
+
+function logSize(name: string): number {
+  return existsSync(logPath(name)) ? statSync(logPath(name)).size : 0;
+}
+
+function startupFailure(plan: DaemonPlan, logOffset: number, what: string): FlockError {
+  const file = logPath(plan.name);
+  const appended = existsSync(file) ? readFileSync(file).subarray(logOffset).toString("utf8") : "";
+  const excerpt = startupFailureExcerpt(appended).map((l) => `  ${l}`);
+  return new FlockError([what, ...excerpt, `Check ${file}`].join("\n"), "invalid");
 }
 
 /** Every port a plan or a running daemon occupies: the API port, plus vite's in checkout mode. */
@@ -645,7 +703,9 @@ async function up(plan: DaemonPlan, opts: DaemonOptions, label?: "restarted", he
   if (plan.tailscale) preflightTailscale({ run: spawnRunner, bin: findTailscaleReal() });
   let action: "already running" | "started" | "restarted" | "restarted with new settings" = "started";
   const fallback = plan.portFallbackNote;
-  if (existing && !settingsDiffer(existing, plan)) {
+  // Half a dev environment is not "already running": an API whose vite has died gets restarted.
+  const webGone = existing?.mode === "checkout" && !(existing.webPid !== undefined && isAlive(existing.webPid));
+  if (existing && !settingsDiffer(existing, plan) && !webGone) {
     action = "already running";
     // Not ours to kill if the mount fails: this invocation did not start the daemon.
     const info = plan.tailscale ? { ...existing, ...mountTailscale(plan) } : existing;
@@ -665,14 +725,15 @@ async function up(plan: DaemonPlan, opts: DaemonOptions, label?: "restarted", he
     // is about to be replaced (or torn down entirely), a stale mount nothing else will notice.
     teardownTailscale(existing);
     await stop(existing);
-    action = "restarted with new settings";
+    action = settingsDiffer(existing, plan) ? "restarted with new settings" : "restarted";
   }
   try {
     unlinkSync(runfilePath(plan.name));
   } catch {}
   if (label) action = label as typeof action;
-  const pids = spawnChildren(plan);
-  let info = await waitForRunfile(plan);
+  const started = await startChildren(plan);
+  const pids = { web: started.web };
+  let info = started.info;
   if (pids.web !== undefined) info = { ...info, webPid: pids.web };
   if (plan.tailscale) {
     try {
@@ -720,23 +781,26 @@ export async function daemonCommand(cmd: string, opts: DaemonOptions) {
   switch (cmd) {
     case "up":
     case "start": {
-      await up(resolvePlan(opts), opts);
+      await up(await healStrays(resolvePlan(opts), opts), opts);
       return;
     }
     case "down":
     case "stop": {
-      const targets = opts.all ? listRunfiles() : [readRunfile(resolvePlan(opts).name)].filter((i): i is RunInfo => i !== undefined);
+      const plan = resolvePlan(opts);
+      const targets = opts.all ? listRunfiles() : [readRunfile(plan.name)].filter((i): i is RunInfo => i !== undefined);
       for (const i of targets) {
         teardownTailscale(i);
         await stop(i);
       }
-      if (opts.json) return console.log(JSON.stringify({ stopped: targets.map((i) => i.name) }));
-      if (!targets.length) return console.log("not running");
-      console.log(`stopped ${targets.map((i) => i.name).join(", ")}`);
+      const strays = await reapStrays(plan);
+      if (opts.json) return console.log(JSON.stringify({ stopped: targets.map((i) => i.name), strays: strays.map((s) => s.pid) }));
+      const parts = [...targets.map((i) => i.name), ...(strays.length ? [straysPhrase(strays)] : [])];
+      if (!parts.length) return console.log("not running");
+      console.log(`stopped ${parts.join(", ")}`);
       return;
     }
     case "restart": {
-      const plan = resolvePlan(opts);
+      const plan = await healStrays(resolvePlan(opts), opts);
       const existing = readRunfile(plan.name);
       // Guard before stopping, and hand `up` the ports we just released — they are ours to retake.
       if (existing) guardPorts(plan, portsOf(existing));
@@ -753,11 +817,13 @@ export async function daemonCommand(cmd: string, opts: DaemonOptions) {
       const mine = all.find((i) => i.name === plan.name);
       const others = all.filter((i) => i !== mine);
       const binary = { execPath: process.execPath, standalone: isStandalone(), version: version() };
-      if (opts.json) return console.log(JSON.stringify({ here: mine ?? null, others, plan: { name: plan.name, mode: plan.mode, apiPort: plan.apiPort, webPort: plan.webPort, root: plan.root, db: plan.db, url: plan.url }, binary }));
+      const strays = straysOf(plan);
+      if (opts.json) return console.log(JSON.stringify({ here: mine ?? null, others, strays, plan: { name: plan.name, mode: plan.mode, apiPort: plan.apiPort, webPort: plan.webPort, root: plan.root, db: plan.db, url: plan.url }, binary }));
       console.log(binaryLine());
       if (plan.portFallbackNote) console.log(plan.portFallbackNote);
       if (!mine) console.log(`not running here. Start with: flock up\n\n${describe(plan)}`);
       else console.log(`${statusLine(mine)}\n\n${describe(mine)}`);
+      if (strays.length) console.log(`\nNot tracked by any runfile (\`flock down\` or \`flock up\` stops them):\n  ${strays.map(strayLabel).join("\n  ")}`);
       if (others.length) {
         console.log(`\nAlso running:`);
         for (const i of others) console.log(`  ${statusLine(i)}`);
