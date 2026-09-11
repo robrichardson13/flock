@@ -114,8 +114,11 @@ TEAM
   attachment get [BOARD] ID [--out PATH]   Fetch an attachment's bytes (stdout if --out omitted);
                                       --json prints its metadata only, never bytes
   chat [BOARD] [--limit 50]             Read the channel
-  decide [BOARD] GIST [--card N]        Record a decision
-  decisions [BOARD]
+  decide [BOARD] GIST [--card N] [--supersedes D]   Record a decision; --supersedes archives D
+  decisions [BOARD] [--archived | --all] [--card N] [--by ACTOR]   Standing decisions by default
+  decision archive [BOARD] D... [--card N] [--by ACTOR] [--before YYYY-MM-DD] [--reason TEXT]
+                    [--dry-run] [--yes]           A selector matching >10 needs --yes
+  decision restore [BOARD] D... [--card N] [--by ACTOR] [--before YYYY-MM-DD] [--dry-run] [--yes]
   help formatting                     The markdown subset the web UI renders
   log [BOARD] [--all] [--since SEQ] [--wait | --follow] [--for NAME] [--timeout MS]
                                       --wait: block until a matching event, then exit. --all: every board
@@ -244,9 +247,18 @@ function fmtEvent(e: Event): string {
     e.type === "message.posted" ? `: ${d.body || (d.attachments ? `sent ${d.attachments} image${d.attachments === 1 ? "" : "s"}` : "")}` :
     e.type === "comment.posted" ? `: ${String(d.body ?? "").split("\n")[0] || (d.attachments ? `sent ${d.attachments} image${d.attachments === 1 ? "" : "s"}` : "")}` :
     e.type === "decision.recorded" ? `: ${d.gist}` :
+    e.type === "decision.archived" ? `: archived d${d.num}` :
+    e.type === "decision.restored" ? `: restored d${d.num}` :
     e.type === "card.blocked" || e.type === "card.unblocked" ? ` by #${d.by}` :
     e.type === "card.held" ? `${d.reason ? `: ${d.reason}` : ""}` : "";
   return `${String(e.seq).padStart(5)}  ${e.createdAt.slice(11, 19)}  ${who.padEnd(14)} ${e.type}${card}${detail}`;
+}
+
+/** Decision numbers parse as `7` or `d7`, mirroring `Flock.parseCardRef`'s `#7`/`7`. */
+function parseDecisionNum(ref: string): number {
+  const n = Number.parseInt(ref.replace(/^[dD]/, ""), 10);
+  if (!Number.isInteger(n) || n <= 0) throw new FlockError(`"${ref}" is not a decision number`, "invalid");
+  return n;
 }
 
 function mentions(e: Event, name: string): boolean {
@@ -863,14 +875,76 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
     }
     case "decide": {
       const { board, rest } = pickBoard(); a = rest;
-      const d = flock.decide(actor, board, need(0, "gist"), str(flags.card) ?? null);
-      return out(ctx, d, () => console.log(`Recorded: ${d.gist}`));
+      const supersedes = str(flags.supersedes) !== undefined ? parseDecisionNum(str(flags.supersedes)!) : undefined;
+      const d = flock.decide(actor, board, need(0, "gist"), str(flags.card) ?? null, { supersedes });
+      return out(ctx, d, () => console.log(`Recorded d${d.num}${supersedes !== undefined ? ` (supersedes d${supersedes})` : ""}: ${d.gist}`));
     }
     case "decisions": {
-      const ds = flock.decisions(pickBoard().board);
+      const { board } = pickBoard();
+      const archived: boolean | "all" | undefined = bool(flags.all) ? "all" : bool(flags.archived) ? true : undefined;
+      const ds = flock.decisions(board, { archived, card: str(flags.card) !== undefined ? Number(str(flags.card)) : undefined, author: str(flags.by) });
       return out(ctx, ds, () => {
-        if (!ds.length) return console.log("No decisions yet.");
-        for (const d of ds) console.log(`- ${d.cardNum ? `#${d.cardNum}: ` : ""}${d.gist}  (${d.author}, ${d.createdAt.slice(0, 10)})`);
+        if (!ds.length) return console.log(archived === true ? "No archived decisions." : "No decisions yet.");
+        for (const d of ds) {
+          const status = d.archivedAt ? (d.supersededBy ? ` [superseded by d${d.supersededBy}]` : " [archived]") : "";
+          console.log(`- d${d.num}  ${d.cardNum ? `#${d.cardNum}: ` : ""}${d.gist}  (${d.author}, ${d.createdAt.slice(0, 10)})${status}`);
+        }
+        if (archived === undefined) {
+          const archivedCount = flock.snapshot(board).archivedDecisionCount;
+          if (archivedCount > 0) console.log(`(${archivedCount} archived — flock decisions --archived)`);
+        }
+      });
+    }
+    case "decision": {
+      const sub = need(0, "subcommand (archive|restore)");
+      if (sub !== "archive" && sub !== "restore") throw new FlockError(`Unknown decision subcommand "${sub}". Run \`flock help\`.`, "invalid");
+      a = a.slice(1);
+      const { board, rest } = pickBoard(); a = rest;
+      const nums = a.flatMap((x) => x.split(",")).map((x) => x.trim()).filter(Boolean).map(parseDecisionNum);
+      const card = str(flags.card) !== undefined ? Number(str(flags.card)) : undefined;
+      const by = str(flags.by);
+      const before = str(flags.before);
+      const usingFilter = nums.length === 0 && (card !== undefined || by !== undefined || before !== undefined);
+      if (nums.length === 0 && !usingFilter) throw new FlockError("Nothing to select. Pass decision numbers, or --card/--by/--before.", "invalid");
+      const sel = nums.length > 0 ? { nums } : { card, author: by, before };
+      const verb = sub === "archive" ? "archive" : "restore";
+      // Resolve the same way core's selector would, for the --yes gate and --dry-run preview.
+      // Explicit nums: not_found on the first missing one, matching resolveDecisionSelector.
+      // A filter selector: every row it matches, regardless of current archive state — the
+      // count a human would want to see before confirming.
+      const resolveMatched = () => {
+        if (nums.length > 0) {
+          const all = flock.decisions(board, { archived: "all" });
+          return nums.map((n) => {
+            const d = all.find((x) => x.num === n);
+            if (!d) throw new FlockError(`No decision d${n} on board "${flock.board(board).slug}"`, "not_found");
+            return d;
+          });
+        }
+        return flock.decisions(board, { archived: "all", card, author: by }).filter((d) => before === undefined || d.createdAt < before);
+      };
+      const dryRun = bool(flags["dry-run"]);
+      if (usingFilter && !dryRun && !bool(flags.yes)) {
+        const matched = resolveMatched();
+        if (matched.length > 10) {
+          throw new FlockError(`${matched.length} decisions match. Re-run with --yes, or --dry-run to list them.`, "invalid");
+        }
+      }
+      if (dryRun) {
+        const matched = resolveMatched();
+        return out(ctx, { dryRun: true, matched }, () => {
+          if (!matched.length) return console.log(`Nothing to ${verb}.`);
+          console.log(`Would ${verb} ${matched.length} decision${matched.length === 1 ? "" : "s"}: ${matched.map((d) => `d${d.num}`).join(", ")}`);
+        });
+      }
+      const changed = sub === "archive"
+        ? flock.archiveDecisions(actor, board, sel, { reason: str(flags.reason) })
+        : flock.restoreDecisions(actor, board, sel);
+      const key = sub === "archive" ? "archived" : "restored";
+      const Verb = sub === "archive" ? "Archived" : "Restored";
+      return out(ctx, { [key]: changed }, () => {
+        if (!changed.length) return console.log(`Nothing to ${verb}.`);
+        console.log(`${Verb} ${changed.length} decision${changed.length === 1 ? "" : "s"}: ${changed.map((d) => `d${d.num}`).join(", ")}`);
       });
     }
     case "hook": {

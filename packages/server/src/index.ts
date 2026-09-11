@@ -382,11 +382,53 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath 
     if (!body.body?.trim() && !body.attachments?.length) throw new FlockError("body or attachments is required");
     return c.json(flock.say(actorOf(c), c.req.param("b"), body.body ?? "", { attachments: body.attachments }), 201);
   });
-  app.get("/api/boards/:b/decisions", (c) => c.json(flock.decisions(c.req.param("b"))));
+  app.get("/api/boards/:b/decisions", (c) => {
+    const archivedQ = c.req.query("archived");
+    const archived: boolean | "all" | undefined = archivedQ === "all" ? "all" : archivedQ === "1" ? true : undefined;
+    const cardQ = c.req.query("card");
+    return c.json(
+      flock.decisions(c.req.param("b"), {
+        archived,
+        card: cardQ !== undefined ? Number(cardQ) : undefined,
+        author: c.req.query("author"),
+      }),
+    );
+  });
   app.post("/api/boards/:b/decisions", async (c) => {
     const body = await c.req.json();
     if (!body.gist?.trim()) throw new FlockError("gist is required");
-    return c.json(flock.decide(actorOf(c), c.req.param("b"), body.gist, body.card ?? null), 201);
+    return c.json(
+      flock.decide(actorOf(c), c.req.param("b"), body.gist, body.card ?? null, {
+        supersedes: body.supersedes !== undefined ? Number(body.supersedes) : undefined,
+      }),
+      201,
+    );
+  });
+  app.post("/api/boards/:b/decisions/archive", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    if (body.nums === undefined && body.card === undefined && body.author === undefined && body.before === undefined) {
+      throw new FlockError("a selector is required");
+    }
+    const changed = flock.archiveDecisions(
+      actorOf(c),
+      c.req.param("b"),
+      { nums: body.nums, card: body.card, author: body.author, before: body.before },
+      { reason: body.reason },
+    );
+    return c.json({ archived: changed });
+  });
+  app.post("/api/boards/:b/decisions/restore", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    if (body.nums === undefined && body.card === undefined && body.author === undefined && body.before === undefined) {
+      throw new FlockError("a selector is required");
+    }
+    const changed = flock.restoreDecisions(actorOf(c), c.req.param("b"), {
+      nums: body.nums,
+      card: body.card,
+      author: body.author,
+      before: body.before,
+    });
+    return c.json({ restored: changed });
   });
 
   // ----- events -----
