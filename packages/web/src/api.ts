@@ -168,6 +168,10 @@ export const api = {
   say: (b: string, body: string, attachments?: string[]) => req<Message>("POST", `/boards/${b}/messages`, { body, attachments }),
   react: (b: string, n: number, emoji: string) => req<{ message: Message; changed: boolean }>("POST", `/boards/${b}/messages/${n}/reactions`, { emoji }),
   unreact: (b: string, n: number, emoji: string) => req<{ message: Message; changed: boolean }>("DELETE", `/boards/${b}/messages/${n}/reactions/${encodeURIComponent(emoji)}`),
+  reactToComment: (b: string, cardNum: number, commentNum: number, emoji: string) =>
+    req<{ comment: Comment; changed: boolean }>("POST", `/boards/${b}/cards/${cardNum}/comments/${commentNum}/reactions`, { emoji }),
+  unreactFromComment: (b: string, cardNum: number, commentNum: number, emoji: string) =>
+    req<{ comment: Comment; changed: boolean }>("DELETE", `/boards/${b}/cards/${cardNum}/comments/${commentNum}/reactions/${encodeURIComponent(emoji)}`),
   uploadAttachment: (b: string, blob: Blob, opts: { width?: number; height?: number; name?: string; mime?: string } = {}) =>
     reqRaw<Attachment>(`/boards/${b}/attachments`, blob, { mime: opts.mime ?? blob.type, width: opts.width, height: opts.height, name: opts.name }),
   decide: (b: string, gist: string, card?: number | null, supersedes?: number) =>

@@ -6,7 +6,7 @@ import { Markdownish, MessageBody } from "./markdown.tsx";
 import { agoText, timeAgo } from "./App.tsx";
 import { enterClass, useNewIds } from "./live.ts";
 import { threadChunks } from "./grouping.ts";
-import { ClampedBody, failPending, LineComposer, mergeThread, nextTempId, resolvePending, ThreadGroup, type PendingSend } from "./thread.tsx";
+import { ClampedBody, failPending, LineComposer, mergeThread, MessageReactions, nextTempId, resolvePending, ThreadGroup, type PendingSend } from "./thread.tsx";
 import { buildDetailRows, type DetailRow } from "./details.ts";
 import { autoFocusField, useDialogFocus } from "./focus.ts";
 import { readSnapshot, snapKey, writeSnapshot } from "./snapshot.ts";
@@ -146,6 +146,21 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boardId, card.num, card.updatedAt]);
+
+  // Toggle a reaction on a comment, then reload right away rather than waiting on the next
+  // SSE-triggered refetch — the same "own click reads as janky if it waits" reasoning as the
+  // channel's `toggleReaction` in BoardView.tsx. A failed toggle just leaves the chip as it
+  // was; the next reload reconciles it either way.
+  const toggleCommentReaction = async (commentNum: number, emoji: string, mine: boolean) => {
+    try {
+      if (mine) await api.unreactFromComment(boardId, card.num, commentNum, emoji);
+      else await api.reactToComment(boardId, card.num, commentNum, emoji);
+      onChange();
+      reload();
+    } catch {
+      // best-effort; the chip reconciles on the next refetch either way
+    }
+  };
 
   // #29: show the jump button only while the newest comment is actually scrolled out of
   // view. The sentinel sits just past the thread, so a card whose whole page already fits
@@ -433,6 +448,17 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
             boardId={boardId}
             headerExtra={<RuntimeTag harness={actors.get(chunk.items[0].author)?.harness} model={actors.get(chunk.items[0].author)?.model} effort={actors.get(chunk.items[0].author)?.effort} />}
             entryClass={(c) => enterClass(newComments.has(c.id)) + (sendingCommentIds.has(c.id) ? " pending" : "")}
+            entryFooter={(c) =>
+              // num 0 is the not-yet-confirmed optimistic placeholder (see onSubmit below);
+              // there is nothing to react to until the server has assigned a real one.
+              c.num > 0 ? (
+                <MessageReactions
+                  reactions={c.reactions}
+                  viewer={me}
+                  onToggle={(emoji, mine) => toggleCommentReaction(c.num, emoji, mine)}
+                />
+              ) : null
+            }
           />
         ),
       )}
