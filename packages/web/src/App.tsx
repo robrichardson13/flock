@@ -16,6 +16,7 @@ import { TopBar, TopBarProvider } from "./TopBar.tsx";
 import { keyboardShrunk, readoutRequested, shellHeight } from "./vv.ts";
 import { VVReadout } from "./VVReadout.tsx";
 import { ActorLinks, Avatar, Icons, OverlayProvider, PromptProvider, PushStack, useEdgeSwipePeek, useIsMobile, usePrompt } from "./ui.tsx";
+import { currentSubscription, disablePush, enablePush, pushState, readPushEnv, type PushState } from "./push.ts";
 
 /**
  * Reads the hash and remembers which board was last resolved from it, so that only
@@ -427,6 +428,30 @@ function Shell() {
     load();
   }, [load]);
 
+  // Register the service worker up front, not only when the notifications toggle is used: a
+  // registration has to exist for `currentSubscription()` to read this device's state, and for
+  // the postMessage listener below to have anything to listen to. Only where it could work —
+  // a secure context with the Push API — so a Tailscale/LAN http:// tab never even tries.
+  useEffect(() => {
+    if (!window.isSecureContext || !("serviceWorker" in navigator) || typeof PushManager === "undefined") return;
+    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+  }, []);
+
+  // A tap on a notification asks the page to navigate rather than navigating itself (see
+  // sw.js): `client.navigate` needs a controlled client, which an uncontrolled tab a push
+  // arrived at is not guaranteed to be. `location.hash =`, not `replaceState`, because a tap is
+  // a fresh navigation and belongs in the back stack.
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const onMessage = (e: MessageEvent) => {
+      if (e.data?.type === "flock:navigate" && typeof e.data.url === "string") {
+        window.location.hash = e.data.url;
+      }
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, []);
+
   useEffect(() => {
     document.title = needs.length ? `(${needs.length}) flock` : "flock";
   }, [needs.length]);
@@ -546,6 +571,27 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
   const needOrders = enterOrders(needs.map((n) => `q:${n.id}`), entrants);
   const boardOrders = enterOrders(boards.map((b) => b.id), entrants);
   const { active: activeBoards, idle: idleBoards } = groupBoardsByActivity(boards, now);
+
+  // Read this device's own state on arrival — never inside a click handler, so the enable
+  // button's onClick can call enablePush()/disablePush() as the very first thing it does, with
+  // nothing awaited before Notification.requestPermission() breaks the iOS gesture chain.
+  const [pushKind, setPushKind] = useState<PushState["kind"]>("off");
+  const [pushBusy, setPushBusy] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    currentSubscription().then((sub) => {
+      if (!cancelled) setPushKind(pushState(readPushEnv(!!sub)).kind);
+    }).catch(() => {
+      if (!cancelled) setPushKind(pushState(readPushEnv(false)).kind);
+    });
+    return () => { cancelled = true; };
+  }, []);
+  const onTogglePush = useCallback(() => {
+    setPushBusy(true);
+    const next = pushKind === "on" ? disablePush() : enablePush();
+    next.then((s) => setPushKind(s.kind)).finally(() => setPushBusy(false));
+  }, [pushKind]);
+
   return (
     <div className="screen screen-home">
       {!mobile && (
@@ -623,9 +669,46 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
             })}
           </>
         )}
+
+        <section className="settings">
+          <PushSettingsRow kind={pushKind} busy={pushBusy} onToggle={onTogglePush} />
+        </section>
       </div>
     </div>
   );
+}
+
+/**
+ * One row at the foot of Home. It says what is actually wrong rather than "unsupported",
+ * which is the failure mode that would make this feature look broken to the person it is for.
+ * `blocked`/`needs-install`/`insecure`/`unsupported` have no button: `requestPermission`
+ * cannot recover from `denied`, and none of the other three is a permission problem to retry.
+ */
+function PushSettingsRow({ kind, busy, onToggle }: { kind: PushState["kind"]; busy: boolean; onToggle: () => void }) {
+  switch (kind) {
+    case "on":
+      return (
+        <>
+          <p>Notifications are on for this device.</p>
+          <button className="btn" onClick={onToggle} disabled={busy}>Turn off</button>
+        </>
+      );
+    case "off":
+      return (
+        <>
+          <button className="btn btn-primary" onClick={onToggle} disabled={busy}>Turn on notifications</button>
+          <p className="muted">Get a notification when someone posts in a channel, or when a card needs you.</p>
+        </>
+      );
+    case "blocked":
+      return <p className="muted">Notifications are blocked. Turn them back on in your browser or device settings.</p>;
+    case "needs-install":
+      return <p className="muted">Add flock to your Home Screen — Share → Add to Home Screen — then turn notifications on from there.</p>;
+    case "insecure":
+      return <p className="muted">Notifications need a secure connection. Open flock over HTTPS, or on localhost.</p>;
+    case "unsupported":
+      return <p className="muted">This browser doesn't support notifications.</p>;
+  }
 }
 
 /** A bare clock: re-renders on an interval so `timeAgo` and `isActive` keep up with time. */

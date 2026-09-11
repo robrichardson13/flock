@@ -1404,6 +1404,11 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 .empty p { margin: 0; max-width: 32ch; }
 .stat-row { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); font-size: var(--t-foot); color: var(--muted); }
 
+/* The notifications row at the foot of Home (ADR 0017): ordinary content in the existing
+   scroller, aligned to the same left gutter as every list title above it. */
+.settings { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s2); padding: 0 var(--row-pad-r) 0 var(--row-pad-l); }
+.settings p { margin: 0; max-width: 42ch; }
+
 /* ---------- cold-start skeletons (#43) ---------- */
 /* A cached snapshot paints the settled screen on every refresh of something already seen,
    so these only run on a first visit or a cleared store — which is exactly why they have to
