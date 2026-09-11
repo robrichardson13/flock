@@ -3,7 +3,8 @@ import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planCheckout, portOffset, CANONICAL_API_PORT, CANONICAL_WEB_PORT } from "./dev.ts";
-import { canonicalFallbackPlan, checkoutRunfileName, isAlive, listRunfiles, parseRunInfo, planDaemon, portFree, portHeldByOther, portsOf, preserveRunningHost, readRunfile, runfilePath, settingsDiffer, type DaemonPlan, type RunInfo } from "./daemon.ts";
+import { canonicalFallbackPlan, checkoutRunfileName, listRunfiles, parseRunInfo, planDaemon, portFree, portHeldByOther, portsOf, preserveRunningHost, readRunfile, runfilePath, settingsDiffer, startupFailureExcerpt, type DaemonPlan, type RunInfo } from "./daemon.ts";
+import { isAlive } from "./procs.ts";
 
 const dirs: string[] = [];
 function scratch(): string {
@@ -437,6 +438,25 @@ describe("preserveRunningHost", () => {
  * `down`. Everything is redirected into a scratch FLOCK_HOME and onto a free port, so it never
  * touches ~/.flock or the canonical :4747/:5173.
  */
+describe("startupFailureExcerpt", () => {
+  test("surfaces the API's error line out of vite's noise", () => {
+    const log = [
+      "  VITE v5.4.21  ready in 100 ms",
+      "  ➜  Local:   http://localhost:5238/",
+      "error: This flock binary supports schema v5, but the database is stamped v6 (newer). Upgrade flock.",
+      "12:07:14 PM [vite] http proxy error: /api/me",
+      "Error: connect ECONNREFUSED 127.0.0.1:4838",
+      "",
+    ].join("\n");
+    expect(startupFailureExcerpt(log)).toEqual(["error: This flock binary supports schema v5, but the database is stamped v6 (newer). Upgrade flock."]);
+  });
+
+  test("an uncaught SQLiteError counts as an error line; with none, the tail stands in", () => {
+    expect(startupFailureExcerpt("  at x\nSQLiteError: unable to open database file\n  at y\n")).toEqual(["SQLiteError: unable to open database file"]);
+    expect(startupFailureExcerpt("a\nb\nc\nd\ne\nf\n")).toEqual(["b", "c", "d", "e", "f"]);
+  });
+});
+
 describe("up / status / down, for real", () => {
   const cli = join(import.meta.dir, "main.ts");
 
@@ -562,6 +582,25 @@ describe("up / status / down, for real", () => {
       } finally {
         await squatter.stop(true);
       }
+    },
+    30_000,
+  );
+
+  test(
+    "fails fast, naming the cause, when the daemon dies before it is listening",
+    async () => {
+      const home = scratch();
+      const work = scratch();
+      const port = await freePort();
+      // A directory is not a database: `serve` exits on open, before it ever writes a runfile.
+      const started = Date.now();
+      const res = await run(work, { FLOCK_HOME: home, FLOCK_DB: scratch(), FLOCK_PORT: "", FLOCK_WEB_PORT: "" }, ["up", "--port", String(port)]);
+      expect(res.code).toBe(1);
+      expect(res.err).toContain("exited before it started listening");
+      expect(res.err).toContain("unable to open database file");
+      expect(Date.now() - started).toBeLessThan(15_000);
+      expect(existsSync(join(home, "run", "flock.json"))).toBe(false);
+      expect(portFree(port, "127.0.0.1")).toBe(true);
     },
     30_000,
   );
