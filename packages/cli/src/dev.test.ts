@@ -156,6 +156,31 @@ describe("advertisedUrls", () => {
   test("an already-bracketed host is left alone", () => {
     expect(advertisedUrls("[fe80::1]", 4747, [])).toEqual({ urls: ["http://[fe80::1]:4747"] });
   });
+
+  // ADR 0019: a live tailscale mount's https URL leads urls[], ahead of the http entries above,
+  // in every host branch; the loopback-bind hint is dropped once the mount already provides a way
+  // to reach the daemon from elsewhere.
+  const TS_URL = "https://robs-macbook-pro.tailnet.ts.net";
+
+  test("wildcard bind with a tailscale URL: https first, then loopback, then every interface", () => {
+    expect(advertisedUrls("0.0.0.0", 4747, interfaces, TS_URL)).toEqual({
+      urls: [TS_URL, "http://localhost:4747", "http://10.0.0.5:4747", "http://my-machine.tailnet.ts.net:4747"],
+    });
+  });
+
+  test("loopback bind with a tailscale URL: https first, then loopback, no hint", () => {
+    for (const host of ["127.0.0.1", "localhost", "::1"]) {
+      expect(advertisedUrls(host, 4747, interfaces, TS_URL)).toEqual({ urls: [TS_URL, "http://localhost:4747"] });
+    }
+  });
+
+  test("a specific non-loopback host with a tailscale URL: https first, then that host's URL", () => {
+    expect(advertisedUrls("192.168.1.5", 4747, interfaces, TS_URL)).toEqual({ urls: [TS_URL, "http://192.168.1.5:4747"] });
+  });
+
+  test("without a tailscale URL, every branch is unaffected (the existing expectations above)", () => {
+    expect(advertisedUrls("0.0.0.0", 4747, interfaces, undefined)).toEqual(advertisedUrls("0.0.0.0", 4747, interfaces));
+  });
 });
 
 describe("baseUrl", () => {
@@ -164,6 +189,13 @@ describe("baseUrl", () => {
     expect(baseUrl("127.0.0.1", 4747)).toBe("http://localhost:4747");
     expect(baseUrl("192.168.1.5", 4747)).toBe("http://192.168.1.5:4747");
     expect(baseUrl("::1", 4747)).toBe("http://localhost:4747");
+  });
+
+  test("returns the https URL when given one, in every host branch", () => {
+    const ts = "https://robs-macbook-pro.tailnet.ts.net";
+    expect(baseUrl("0.0.0.0", 4747, ts)).toBe(ts);
+    expect(baseUrl("127.0.0.1", 4747, ts)).toBe(ts);
+    expect(baseUrl("192.168.1.5", 4747, ts)).toBe(ts);
   });
 });
 

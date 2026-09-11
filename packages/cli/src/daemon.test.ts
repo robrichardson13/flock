@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planCheckout, portOffset, CANONICAL_API_PORT, CANONICAL_WEB_PORT } from "./dev.ts";
@@ -46,6 +46,25 @@ describe("parseRunInfo", () => {
     expect(i?.host).toBe("127.0.0.1");
     expect(i?.url).toBe("http://localhost:4801");
     expect(i?.version).toBeUndefined();
+  });
+
+  test("round-trips the ADR 0019 tailscale fields", () => {
+    const info = runfile({ tailscale: true, tailscaleUrl: "https://m.tail.ts.net", tailscaleTarget: "http://127.0.0.1:5173" });
+    expect(parseRunInfo(JSON.stringify(info))).toEqual(info);
+  });
+
+  test("a pre-0019 runfile (none of the three fields) reads as tailscale-off", () => {
+    const i = parseRunInfo('{"name":"flock","pid":7,"apiPort":4747}');
+    expect(i?.tailscale).toBeUndefined();
+    expect(i?.tailscaleUrl).toBeUndefined();
+    expect(i?.tailscaleTarget).toBeUndefined();
+  });
+
+  test("ignores junk values for the tailscale fields rather than throwing", () => {
+    const i = parseRunInfo('{"name":"flock","pid":7,"apiPort":4747,"tailscale":"yes","tailscaleUrl":5,"tailscaleTarget":""}');
+    expect(i?.tailscale).toBeUndefined();
+    expect(i?.tailscaleUrl).toBeUndefined();
+    expect(i?.tailscaleTarget).toBeUndefined();
   });
 });
 
@@ -339,6 +358,45 @@ describe("settingsDiffer", () => {
   test("pid, url and startedAt are not settings", () => {
     expect(settingsDiffer({ ...live, pid: 1, url: "http://elsewhere", startedAt: "then" }, p)).toBe(false);
   });
+
+  test("toggling tailscale is a settings change", () => {
+    const withTailscale = { ...p, tailscale: true };
+    expect(settingsDiffer(live, withTailscale)).toBe(true);
+    expect(settingsDiffer({ ...live, tailscale: true }, withTailscale)).toBe(false);
+  });
+
+  test("tailscaleUrl alone is not a setting — it is derived, not chosen", () => {
+    expect(settingsDiffer({ ...live, tailscaleUrl: "https://m.tail.ts.net" }, p)).toBe(false);
+  });
+});
+
+describe("planDaemon — tailscale (ADR 0019)", () => {
+  test("undefined/false tailscale: plan.tailscale is falsy, url unchanged", () => {
+    const p = planDaemon({ mode: "binary", serveCmd: ["/bin/flock"], cwd: "/w", db: "/db.sqlite", env: {}, opts: {} });
+    expect(p.tailscale).toBeUndefined();
+    expect(p.url).toBe("http://localhost:4747");
+  });
+
+  test("tailscale: true sets plan.tailscale in both binary and checkout mode; the URL is filled in later, by `up`, once the mount actually exists", () => {
+    const binary = planDaemon({ mode: "binary", serveCmd: ["/bin/flock"], cwd: "/w", db: "/db.sqlite", env: {}, opts: {}, tailscale: true });
+    expect(binary.tailscale).toBe(true);
+    expect(binary.url).toBe("http://localhost:4747");
+
+    const root = "/Users/dev/repos/flock";
+    const checkout = planDaemon({
+      mode: "checkout",
+      serveCmd: ["/opt/bun/bin/bun", join(root, "packages/cli/src/main.ts")],
+      bun: "/opt/bun/bin/bun",
+      cwd: root,
+      db: "/Users/dev/.flock/flock.db",
+      checkout: planCheckout({ root, canonical: true, env: {}, opts: {} }),
+      opts: {},
+      env: {},
+      tailscale: true,
+    });
+    expect(checkout.tailscale).toBe(true);
+    expect(checkout.url).toBe(`http://localhost:${CANONICAL_WEB_PORT}`);
+  });
 });
 
 describe("preserveRunningHost", () => {
@@ -504,6 +562,158 @@ describe("up / status / down, for real", () => {
       } finally {
         await squatter.stop(true);
       }
+    },
+    30_000,
+  );
+
+  /**
+   * ADR 0019, wired end to end through the real `flock` CLI, but never through a real `tailscale`:
+   * FLOCK_TAILSCALE_BIN points `up`/`down` at a tiny stub script that answers `status --json`,
+   * `serve status --json`, `serve --bg …` and `serve --https=443 off` the same shape the real
+   * binary does, and logs every argv it was called with so the test can assert the wiring (not the
+   * tailscale protocol, which tailscale.test.ts already covers against captured real output).
+   */
+  function writeTailscaleStub(dir: string): { bin: string; log: string; mountFile: string } {
+    const bin = join(dir, "tailscale-stub.sh");
+    const log = join(dir, "stub.log");
+    const mountFile = join(dir, "mount.txt");
+    writeFileSync(
+      bin,
+      `#!/bin/sh
+echo "$*" >> "${log}"
+if [ "$1" = "status" ] && [ "$2" = "--json" ]; then
+  echo '{"BackendState":"Running","Self":{"DNSName":"stub-machine.tailnet.ts.net.","CapMap":{"https":null}}}'
+  exit 0
+fi
+if [ "$1" = "serve" ] && [ "$2" = "status" ]; then
+  if [ -f "${mountFile}" ]; then
+    target=$(cat "${mountFile}")
+    echo '{"Web":{"stub-machine.tailnet.ts.net:443":{"Handlers":{"/":{"Proxy":"'"$target"'"}}}}}'
+  else
+    echo '{}'
+  fi
+  exit 0
+fi
+if [ "$1" = "serve" ] && [ "$2" = "--bg" ]; then
+  shift $(($# - 1))
+  echo "$1" > "${mountFile}"
+  exit 0
+fi
+if [ "$1" = "serve" ] && [ "$2" = "--https=443" ] && [ "$3" = "off" ]; then
+  rm -f "${mountFile}"
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(bin, 0o755);
+    return { bin, log, mountFile };
+  }
+
+  test(
+    "up --tailscale mounts through the stub, url --json leads with it, down tears it down",
+    async () => {
+      const home = scratch();
+      const work = scratch();
+      const stub = writeTailscaleStub(scratch());
+      const port = await freePort();
+      const env = { FLOCK_HOME: home, FLOCK_DB: join(home, "flock.db"), FLOCK_PORT: "", FLOCK_WEB_PORT: "", FLOCK_TAILSCALE_BIN: stub.bin };
+      let pid = 0;
+      try {
+        const started = await run(work, env, ["up", "--port", String(port), "--tailscale", "--json"]);
+        expect(started.code).toBe(0);
+        const info = JSON.parse(started.out) as RunInfo & { action: string };
+        pid = info.pid;
+        expect(info.tailscale).toBe(true);
+        expect(info.tailscaleUrl).toBe("https://stub-machine.tailnet.ts.net");
+        expect(info.tailscaleTarget).toBe(`http://127.0.0.1:${port}`);
+        expect(info.url).toBe("https://stub-machine.tailnet.ts.net");
+
+        const status = await run(work, env, ["status", "--json"]);
+        const here = JSON.parse(status.out).here as RunInfo;
+        expect(here.tailscale).toBe(true);
+        expect(here.tailscaleUrl).toBe("https://stub-machine.tailnet.ts.net");
+        expect(here.tailscaleTarget).toBe(`http://127.0.0.1:${port}`);
+
+        // Card 3: `flock url` (and `--json`) lead with the https URL, the loopback URL still
+        // follows, and human `status`/`up` text shows both plus a `tls` line naming the target.
+        const urlJson = await run(work, env, ["url", "--json"]);
+        const urls = JSON.parse(urlJson.out) as string[];
+        expect(urls[0]).toBe("https://stub-machine.tailnet.ts.net");
+        expect(urls).toContain(`http://localhost:${port}`);
+
+        const urlText = await run(work, env, ["url"]);
+        expect(urlText.out.trim().split("\n")[0]).toBe("https://stub-machine.tailnet.ts.net");
+
+        const statusText = await run(work, env, ["status"]);
+        expect(statusText.out).toContain("https://stub-machine.tailnet.ts.net");
+        expect(statusText.out).toContain(`tls tailscale serve :443 -> http://127.0.0.1:${port}`);
+
+        expect(existsSync(stub.mountFile)).toBe(true);
+
+        const stopped = await run(work, env, ["down", "--all"]);
+        expect(stopped.code).toBe(0);
+        expect(existsSync(stub.mountFile)).toBe(false);
+        pid = 0;
+
+        const argv = readFileSync(stub.log, "utf8").trim().split("\n");
+        expect(argv.filter((l) => l.startsWith("serve --bg"))).toHaveLength(1);
+        expect(argv.filter((l) => l === "serve --https=443 off")).toHaveLength(1);
+      } finally {
+        if (pid) try { process.kill(pid, "SIGKILL"); } catch {}
+      }
+    },
+    60_000,
+  );
+
+  test(
+    "up --no-tailscale on a mounted daemon tears the mount down, not just restart",
+    async () => {
+      const home = scratch();
+      const work = scratch();
+      const stub = writeTailscaleStub(scratch());
+      const port = await freePort();
+      const env = { FLOCK_HOME: home, FLOCK_DB: join(home, "flock.db"), FLOCK_PORT: "", FLOCK_WEB_PORT: "", FLOCK_TAILSCALE_BIN: stub.bin };
+      let pid = 0;
+      try {
+        const started = await run(work, env, ["up", "--port", String(port), "--tailscale", "--json"]);
+        expect(started.code).toBe(0);
+        pid = (JSON.parse(started.out) as RunInfo).pid;
+        expect(existsSync(stub.mountFile)).toBe(true);
+
+        // Settings-differ path in `up` (not `restart`): must tear down the old mount exactly like
+        // `restart` does, not just stop the old process and leave tailscaled still proxying to it.
+        const toggled = await run(work, env, ["up", "--port", String(port), "--no-tailscale", "--json"]);
+        expect(toggled.code).toBe(0);
+        const info = JSON.parse(toggled.out) as RunInfo & { action: string };
+        expect(info.action).toBe("restarted with new settings");
+        expect(info.tailscale).toBeUndefined();
+        expect(existsSync(stub.mountFile)).toBe(false);
+        pid = info.pid;
+      } finally {
+        if (pid) try { process.kill(pid, "SIGKILL"); } catch {}
+      }
+    },
+    60_000,
+  );
+
+  test(
+    "up --tailscale refuses and starts nothing when the binary cannot be found",
+    async () => {
+      const home = scratch();
+      const work = scratch();
+      const port = await freePort();
+      const env = { FLOCK_HOME: home, FLOCK_DB: join(home, "flock.db"), FLOCK_PORT: "", FLOCK_WEB_PORT: "", FLOCK_TAILSCALE_BIN: join(scratch(), "does-not-exist") };
+      const res = await run(work, env, ["up", "--port", String(port), "--tailscale"]);
+      expect(res.code).toBe(1);
+      // FLOCK_TAILSCALE_BIN names a path that does not exist: it is trusted as given (an explicit
+      // override), so this refuses at the first status call rather than the "not installed" branch,
+      // which only fires when no binary was found at all.
+      expect(res.err).toContain("status");
+      expect(res.err).toContain("failed");
+      expect(existsSync(join(home, "run"))).toBe(false);
+      const status = await run(work, env, ["status", "--json"]);
+      expect(JSON.parse(status.out).here).toBeNull();
     },
     30_000,
   );
