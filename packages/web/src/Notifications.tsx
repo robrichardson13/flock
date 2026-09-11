@@ -1,5 +1,8 @@
-import type { ReactNode } from "react";
-import type { PushState } from "./push.ts";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { api, type PushSubscriptionSummary } from "./api.ts";
+import { agoText } from "./App.tsx";
+import { deviceLabel } from "./devices.ts";
+import { currentSubscription, type PushState } from "./push.ts";
 import { Icons, Sheet } from "./ui.tsx";
 
 type PushKind = PushState["kind"];
@@ -132,8 +135,9 @@ export function PushRow({ state, busy, error, onEnable, onOpen }: {
 
 /**
  * The panel: a `Sheet` (bottom sheet on the phone, centred dialog on desktop) opened from either
- * the row or the identity menu. Test-send and the device list are card D's; this card's `on`
- * state shows only the lead line and the `Turn off` button, per the row/panel split in §5.
+ * the row or the identity menu. `on` additionally owns the test-send button and the device list
+ * (§5) — both fetched here, not threaded down from `App.tsx`, since they are this panel's own
+ * business and nothing else on the page needs them.
  */
 export function PushPanel({ open, onClose, state, busy, error, onEnable, onDisable }: {
   open: boolean;
@@ -146,6 +150,67 @@ export function PushPanel({ open, onClose, state, busy, error, onEnable, onDisab
 }) {
   const t = TREATMENT[state.kind];
   const note = t.note;
+
+  // Devices: fetched whenever the panel is open and the state is `on` (covers first open and a
+  // fresh enable), and re-fetched explicitly after a successful remove. A failed fetch renders
+  // nothing (§5: "one device is the normal case", not an error box) rather than a silent stale
+  // list — the next open/enable/remove tries again.
+  const [devices, setDevices] = useState<PushSubscriptionSummary[]>([]);
+  const [mine, setMine] = useState<string | null>(null);
+  const loadDevices = useCallback(() => {
+    Promise.all([api.pushSubscriptions(), currentSubscription()])
+      .then(([subs, sub]) => {
+        setDevices(subs);
+        setMine(sub?.endpoint ?? null);
+      })
+      .catch(() => {
+        setDevices([]);
+        setMine(null);
+      });
+  }, []);
+  useEffect(() => {
+    if (open && state.kind === "on") loadDevices();
+  }, [open, state.kind, loadDevices]);
+
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [removingEndpoint, setRemovingEndpoint] = useState<string | null>(null);
+
+  // Test result/error and any remove error are this open of the panel's business only.
+  useEffect(() => {
+    if (!open) {
+      setTestResult(null);
+      setTestError(null);
+      setRemoveError(null);
+    }
+  }, [open]);
+
+  const onTest = useCallback(() => {
+    setTesting(true);
+    setTestResult(null);
+    setTestError(null);
+    api.pushTest()
+      .then(({ sent }) => {
+        setTestResult(sent === 0 ? "No devices to send to." : sent === 1 ? "Sent to 1 device." : `Sent to ${sent} devices.`);
+      })
+      .catch((e) => setTestError((e as Error).message))
+      .finally(() => setTesting(false));
+  }, []);
+
+  const onRemove = useCallback((endpoint: string) => {
+    setRemovingEndpoint(endpoint);
+    setRemoveError(null);
+    api.pushUnsubscribe(endpoint)
+      .then(loadDevices)
+      .catch((e) => setRemoveError((e as Error).message))
+      .finally(() => setRemovingEndpoint(null));
+  }, [loadDevices]);
+
+  // This device first (§5), identified by matching the live browser subscription's endpoint.
+  const sorted = mine ? [...devices].sort((a, b) => (a.endpoint === mine ? -1 : b.endpoint === mine ? 1 : 0)) : devices;
+
   return (
     <Sheet open={open} onClose={onClose} title="Notifications" className="push-sheet" hideClose>
       <div className="push-panel">
@@ -178,7 +243,50 @@ export function PushPanel({ open, onClose, state, busy, error, onEnable, onDisab
           </div>
         )}
 
-        {/* Test send and the device list are card D's; `on` renders nothing further here. */}
+        {state.kind === "on" && (
+          <>
+            <div className="push-test">
+              <button className="btn btn-block" disabled={testing} aria-busy={testing} onClick={onTest}>
+                {testing ? "Sending…" : "Send a test notification"}
+              </button>
+              {testResult && <p className="push-hint">{testResult}</p>}
+              {testError && <div className="inline-error">{testError}</div>}
+            </div>
+
+            {devices.length > 0 && (
+              <section className="section push-devices">
+                <div className="section-head"><h2>Devices</h2><span className="section-count">{devices.length}</span></div>
+                <div className="list">
+                  {sorted.map((d) => {
+                    const isMine = d.endpoint === mine;
+                    const label = deviceLabel(d.userAgent);
+                    return (
+                      <div key={d.id} className="list-row push-device" title={d.userAgent ?? undefined}>
+                        <div className="list-main">
+                          <div className="list-title">{label}</div>
+                          <div className="push-meta">
+                            {isMine ? "This device" : d.lastUsedAt ? `Last used ${agoText(d.lastUsedAt)}` : "Never used"}
+                          </div>
+                        </div>
+                        {!isMine && (
+                          <button
+                            className="icon-btn push-device-remove"
+                            aria-label={`Remove ${label}`}
+                            disabled={removingEndpoint === d.endpoint}
+                            onClick={() => onRemove(d.endpoint)}
+                          >
+                            {Icons.trash(16)}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                {removeError && <div className="inline-error">{removeError}</div>}
+              </section>
+            )}
+          </>
+        )}
       </div>
       <button className="btn btn-block btn-ghost sheet-cancel" onClick={onClose}>Done</button>
     </Sheet>
