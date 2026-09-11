@@ -1,4 +1,4 @@
-# ADR 0020: Notification batching and presence on the push pump
+# ADR 0021: Notification batching and presence on the push pump
 
 **Status:** accepted, 2026-09-11
 

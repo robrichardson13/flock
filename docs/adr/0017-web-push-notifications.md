@@ -241,7 +241,7 @@ board'" above now has one exception: a channel message (`message.posted` only, n
 suppressed for a recipient who is actively looking at that board on any device, and the pump folds
 a burst of channel messages into one leading-edge alert plus one trailing merged update rather than
 sending every one. Both are decided in full, including every rejected alternative, in
-[ADR 0020](0020-batching-and-presence-on-the-push-pump.md); see
+[ADR 0021](0021-batching-and-presence-on-the-push-pump.md); see
 [docs/notifications-contract.md](../notifications-contract.md) §1.3, §1.4, §2.3, §2.4, §3.1 and §3.7
 for the shipped shapes. `renotify`, noted above as unused, is now set as an enhancement
 (`true` on a leading edge and every ask, `false` on a trailing flush) so Chrome/Edge alert correctly

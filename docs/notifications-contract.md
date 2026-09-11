@@ -136,7 +136,7 @@ export interface NotificationPayload {
    * `true` on a leading edge and on every ask/awaiting-human notification: a same-tag replacement
    * should alert (Chrome/Edge default to a silent replacement otherwise). `false` on a trailing
    * batch flush, where the count updates quietly in place. Safari/iOS and Firefox ignore the
-   * field; nothing else depends on it. See ADR 0020.
+   * field; nothing else depends on it. See ADR 0021.
    */
   renotify: boolean;
 }
@@ -207,7 +207,7 @@ folded `message.posted` payload; `renotify` is `true` on a leading-edge burst (`
 first time a key is seen after quiet) and `false` on a trailing flush. `notificationClass(event)`
 says which of the three rows above is "urgent" (`card.asked`, `card.moved` → `awaiting-human` —
 bypasses batching and presence entirely) versus "chatter" (`message.posted` — the only class that
-batches or can be suppressed); see ADR 0020 and §1.4.
+batches or can be suppressed); see ADR 0021 and §1.4.
 
 - `card.asked` and the `card.moved` → `awaiting-human` case therefore share a tag, since they share
   a URL. `askHuman` emits only `card.asked` and a manual move emits only `card.moved`, so in
@@ -237,7 +237,7 @@ human for everything on the boards it is scoped to.
 ### 1.4 Presence and `NotificationBatcher`
 
 New file `packages/core/src/presence.ts`, re-exported from `index.ts`. In memory, no clock reads —
-`now` is always a parameter — and no dependencies. See ADR 0020.
+`now` is always a parameter — and no dependencies. See ADR 0021.
 
 ```ts
 export const PRESENCE_TTL_MS = 45_000;
@@ -278,7 +278,7 @@ export class NotificationBatcher {
 
   /**
    * Every event goes through here, even one that notifies nobody, so the author-seen reset (D9 in
-   * the spec / ADR 0020) applies uniformly: the event's own actor has their pending batch on this
+   * the spec / ADR 0021) applies uniformly: the event's own actor has their pending batch on this
    * board dropped and zeroed regardless of whether `payload` is null. When `payload` is non-null
    * and `notificationClass(event) === "urgent"`, every recipient gets an immediate `Dispatch` and
    * no batch state is touched. When it is `"chatter"`, each recipient is offered to the
@@ -419,7 +419,7 @@ export interface PushPump {
    *  events each poll; tests call it directly against a fake `now`. */
   flush(): Promise<{ sent: number; pruned: number }>;
   /** Stop the tail. Called from the server's shutdown path and from tests. Drops pending batch
-   *  state rather than flushing it (ADR 0020's §2.7: a restart-equivalent shutdown never awaits a
+   *  state rather than flushing it (ADR 0021's §2.7: a restart-equivalent shutdown never awaits a
    *  send). */
   stop(): void;
 }
@@ -448,7 +448,7 @@ of the process. It is deliberately *not* wired into the SSE handler: SSE streams
 a browser has the page open, and the entire point of push is to reach a device with no page open.
 Cursor starts at `flock.lastSeq()` so a restart does not re-notify the backlog.
 
-**Per tick** (unchanged 500ms cadence; no new timers), per ADR 0020 §4 of the spec:
+**Per tick** (unchanged 500ms cadence; no new timers), per ADR 0021 §4 of the spec:
 
 ```
 for event in flock.events({ since }):
@@ -474,7 +474,7 @@ for d in batcher.due(now()): sendAll([d])   # the tick's own call to flush()
    d.actor })` — read fresh at send time, so a device subscribed or pruned mid-window is handled
    correctly — then `send(sub, JSON.stringify(d.payload))` for every one of that actor's
    subscriptions for that board. **Every dispatch, and every subscription within a dispatch, is
-   sent in parallel with `Promise.allSettled`** (ADR 0020 / review finding S1): one recipient's
+   sent in parallel with `Promise.allSettled`** (ADR 0021 / review finding S1): one recipient's
    slow send, thrown error, or failed database write must never delay or drop another recipient's
    push, including an ask or a different key's trailing flush the same tick already resolved. Each
    `touchPushSubscription`/`unsubscribePush` write is its own try/catch for the same reason. A
@@ -553,7 +553,7 @@ self.addEventListener("push", (event) => {
       data: { url: p.url },
       icon: "/icon-192.png",
       badge: "/icon-192.png",
-      // ADR 0020: alert on a same-tag replacement for a leading-edge burst or an ask, stay quiet
+      // ADR 0021: alert on a same-tag replacement for a leading-edge burst or an ask, stay quiet
       // for a trailing flush. Guarded against an empty tag (Chrome throws if renotify is true with
       // one) even though tag is never empty in practice — belt and braces. Safari, iOS Safari and
       // Firefox ignore the field.
@@ -855,7 +855,7 @@ everything kept working on the desktop.
 ### 3.7 The presence client: `packages/web/src/presence.ts`
 
 New file. Pure logic, plus one hook wired into `Shell` (always mounted, so this runs on Home too).
-See ADR 0020.
+See ADR 0021.
 
 ```ts
 export const HEARTBEAT_MS = 15_000;   // matches PRESENCE_TTL_MS's three-heartbeat budget (§1.4)
@@ -1049,7 +1049,7 @@ never beats while not looking.
 8. Desktop Chrome and desktop Safari 16+: enable, background the window, confirm a banner. Neither
    needs installing — macOS Safari supports push from an ordinary webpage, so the `needs-install`
    state must **not** appear there.
-9. Batching and presence (ADR 0020), one actor on both a desktop Mac and the iPhone standalone app:
+9. Batching and presence (ADR 0021), one actor on both a desktop Mac and the iPhone standalone app:
    board focused on the Mac → an agent's `flock say` does not buzz the phone; blur the Mac (or move
    focus to another app) → the next `say` buzzes with the accumulated count; ten `say`s within 5
    seconds → one alert immediately, then one quiet "10 new in …" update roughly a minute later;
