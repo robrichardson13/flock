@@ -35,6 +35,20 @@ it, any one of which is enough:
 as one happening behind you. It writes what it did to `~/.flock/logs/update.log`, which is also
 where the automatic checks leave their trail.
 
+## Web Push notifications
+
+See [ADR 0017](adr/0017-web-push-notifications.md) and
+[docs/notifications-contract.md](notifications-contract.md) for the full design. The server
+generates a VAPID key pair on first use and writes it to `~/.flock/vapid.json` (mode 0600,
+`FLOCK_HOME`-aware like everything else here) — not to `config.json`, since it is a secret rather
+than a setting.
+
+| Env var | Default | What it does |
+| --- | --- | --- |
+| `FLOCK_VAPID_PUBLIC_KEY` + `FLOCK_VAPID_PRIVATE_KEY` | none | Set both to skip `vapid.json` entirely and use these keys instead. For a deploy with no durable disk (e.g. Railway), where a generated file would be lost — and every subscription silently invalidated — on each redeploy. |
+| `FLOCK_VAPID_SUBJECT` | `https://github.com/robrichardson13/flock` | The VAPID JWT's contact subject. Must be an `https:` URL or a `mailto:` URI that resolves for real — APNs rejects a placeholder like `mailto:flock@localhost` with 403 `BadJwtToken`. |
+| `FLOCK_NO_PUSH` | unset | `1` turns off the push pump and VAPID key generation entirely; `GET /api/push/key` then reports `{ enabled: false }`. |
+
 ## `~/.flock/skill.md`
 
 Optional. This is the one place to put a standing personalization of the `/flock` skill — routing

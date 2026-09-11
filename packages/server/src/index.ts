@@ -2,8 +2,8 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { join, extname, isAbsolute } from "node:path";
-import { userInfo } from "node:os";
+import { join, extname, isAbsolute, resolve } from "node:path";
+import { homedir, userInfo } from "node:os";
 import {
   Flock,
   FlockError,
@@ -17,11 +17,13 @@ import {
   normalizeRuntime,
   parseHookOutput,
   runHook,
+  DB_DIRNAME,
   type Actor,
   type CardStatus,
   type DecisionSelector,
   type HookRef,
 } from "@flock/core";
+import { defaultSend, loadOrCreateVapidKeys, startPushPump, type PushPump, type PushSend } from "./push.ts";
 
 const BOARD_CREATE_HOOK = "board-create";
 
@@ -43,6 +45,12 @@ export interface ServerOptions {
    * makes `GET /install.sh` 404, which keeps that route testable.
    */
   installScriptPath?: string;
+  /** flockHome(): where VAPID keys are read and written. Defaults to ~/.flock when absent. */
+  flockHome?: string;
+  /** Off switch. Default true. `FLOCK_NO_PUSH=1` also turns it off. */
+  push?: boolean;
+  /** Test seam: replaces the pump's real web-push sender. Ignored when push is disabled. */
+  pushSend?: PushSend;
 }
 
 function defaultHuman(): string {
@@ -153,9 +161,18 @@ function logHookStderr(mode: string, stderr: string): void {
   if (stderr.trim()) console.error(`[${BOARD_CREATE_HOOK} ${mode}] ${stderr}`);
 }
 
-export function createApp({ flock, dbPath, staticDir, assets, installScriptPath }: ServerOptions) {
+export function createApp({ flock, dbPath, staticDir, assets, installScriptPath, flockHome, push, pushSend }: ServerOptions) {
   const app = new Hono();
   app.use("/api/*", cors());
+
+  const pushEnabled = (push ?? true) && process.env.FLOCK_NO_PUSH !== "1";
+  const resolvedHome = flockHome ?? (process.env.FLOCK_HOME ? resolve(process.env.FLOCK_HOME) : join(homedir(), DB_DIRNAME));
+  const vapid = pushEnabled ? loadOrCreateVapidKeys(resolvedHome) : null;
+  const send: PushSend | null = vapid ? (pushSend ?? defaultSend(vapid)) : null;
+  let pump: PushPump | null = null;
+  if (vapid && send) {
+    pump = startPushPump({ flock, keys: vapid, send });
+  }
 
   const actorOf = (c: { req: { header(n: string): string | undefined } }): Actor => {
     const name = c.req.header("x-flock-actor")?.trim() || defaultHuman();
@@ -462,6 +479,62 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath 
   app.get("/api/boards/:b/stream", (c) => sse(flock.board(c.req.param("b")).id)(c));
   app.get("/api/stream", (c) => sse(undefined)(c));
 
+  // ----- push -----
+  app.get("/api/push/key", (c) => {
+    if (!vapid) return c.json({ enabled: false, reason: "push is disabled" });
+    return c.json({ enabled: true, publicKey: vapid.publicKey });
+  });
+  app.get("/api/push/subscriptions", (c) =>
+    c.json(flock.pushSubscriptions({ actor: actorOf(c).name }).map(({ keys, ...rest }) => rest)),
+  );
+  app.post("/api/push/subscriptions", async (c) => {
+    const body = await c.req.json<{
+      endpoint?: unknown;
+      keys?: { p256dh?: unknown; auth?: unknown };
+      boardId?: string | null;
+      userAgent?: string | null;
+    }>();
+    if (typeof body.endpoint !== "string" || !body.endpoint) throw new FlockError("endpoint is required", "invalid");
+    if (typeof body.keys?.p256dh !== "string" || !body.keys.p256dh) throw new FlockError("keys.p256dh is required", "invalid");
+    if (typeof body.keys?.auth !== "string" || !body.keys.auth) throw new FlockError("keys.auth is required", "invalid");
+    const record = flock.subscribePush(actorOf(c), {
+      endpoint: body.endpoint,
+      keys: { p256dh: body.keys.p256dh, auth: body.keys.auth },
+      boardId: body.boardId ?? null,
+      userAgent: body.userAgent ?? null,
+    });
+    const { keys, ...rest } = record;
+    return c.json(rest, 201);
+  });
+  app.delete("/api/push/subscriptions", async (c) => {
+    const body = await c.req.json<{ endpoint?: unknown }>().catch(() => ({}) as { endpoint?: unknown });
+    if (typeof body.endpoint === "string" && body.endpoint) flock.unsubscribePush(body.endpoint);
+    return c.body(null, 204);
+  });
+  app.post("/api/push/test", async (c) => {
+    if (!send) return c.json({ sent: 0, pruned: 0 });
+    const actor = actorOf(c);
+    const subs = flock.pushSubscriptions({ actor: actor.name });
+    let sent = 0;
+    let pruned = 0;
+    const payload = JSON.stringify({ title: "flock", body: "Notifications are working.", url: "#/", tag: "test", seq: flock.lastSeq() });
+    const results = await Promise.allSettled(subs.map((sub) => send(sub, payload)));
+    results.forEach((result, i) => {
+      const endpoint = subs[i]!.endpoint;
+      if (result.status === "fulfilled") {
+        flock.touchPushSubscription(endpoint);
+        sent++;
+      } else {
+        const statusCode = (result.reason as { statusCode?: number } | undefined)?.statusCode;
+        if (statusCode === 404 || statusCode === 410 || statusCode === 403) {
+          flock.unsubscribePush(endpoint);
+          pruned++;
+        }
+      }
+    });
+    return c.json({ sent, pruned });
+  });
+
   app.get("/install.sh", (c) => {
     if (!installScriptPath || !existsSync(installScriptPath)) return c.text("install.sh not found\n", 404);
     return c.text(readFileSync(installScriptPath, "utf8"), 200, { "content-type": "text/x-shellscript; charset=utf-8" });
@@ -475,7 +548,10 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath 
       const path = new URL(c.req.url).pathname;
       const embedded = path === "/" ? undefined : assets[path];
       if (embedded && extname(path)) {
-        return c.body(await Bun.file(embedded).arrayBuffer(), 200, { "content-type": MIME[extname(path)] ?? "application/octet-stream", "cache-control": "public, max-age=31536000, immutable" });
+        return c.body(await Bun.file(embedded).arrayBuffer(), 200, {
+          "content-type": MIME[extname(path)] ?? "application/octet-stream",
+          "cache-control": path === "/sw.js" ? "no-cache" : "public, max-age=31536000, immutable",
+        });
       }
       return c.html(await Bun.file(shell).text());
     });
@@ -484,7 +560,10 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath 
       const path = new URL(c.req.url).pathname;
       const file = join(staticDir, path);
       if (path !== "/" && !path.includes("..") && existsSync(file) && extname(file)) {
-        return c.body(readFileSync(file), 200, { "content-type": MIME[extname(file)] ?? "application/octet-stream", "cache-control": "public, max-age=31536000, immutable" });
+        return c.body(readFileSync(file), 200, {
+          "content-type": MIME[extname(file)] ?? "application/octet-stream",
+          "cache-control": path === "/sw.js" ? "no-cache" : "public, max-age=31536000, immutable",
+        });
       }
       return c.html(readFileSync(join(staticDir, "index.html"), "utf8"));
     });
