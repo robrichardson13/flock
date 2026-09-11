@@ -32,7 +32,7 @@ import { clearDraft, draftKey, getDraft, saveDraft, shouldSendOnEnter, subscribe
 import { joinDraft } from "./addToChat.tsx";
 import { hasHighlight, highlightDraft } from "./draftHighlight.ts";
 import { useAutoGrow } from "./autogrow.ts";
-import { focusNoScroll } from "./focus.ts";
+import { focusNoScroll, shouldBlurOnSend } from "./focus.ts";
 import { ActorTap, Avatar, Icons, useHasFinePointer, useIsMobile } from "./ui.tsx";
 
 /** One bubble's worth of thread: what both a channel message and a card comment carry. */
@@ -598,6 +598,12 @@ export function LineComposer({
       // paint, and an empty textarea should never sit tall.
       requestAnimationFrame(resize);
       clearDraft(key);
+      // Only on a successful send, and only on touch (see shouldBlurOnSend): the mousedown
+      // guard on the send button (e958cbd) keeps focus on the field through the tap, so
+      // nothing blurs it on its own any more, and the on-screen keyboard would otherwise sit
+      // open over a message that has already gone. Desktop is untouched — a mouse/trackpad
+      // keeps focus after send exactly as before.
+      if (shouldBlurOnSend(hasFinePointer)) areaRef.current?.blur();
     } catch (err) {
       setSendError((err as Error).message || "Failed to send");
     }
