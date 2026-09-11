@@ -30,7 +30,10 @@ export interface HookDescribeResponse {
 export interface Snapshot {
   board: Board;
   cards: Card[];
+  /** Standing decisions only — archived ones are fetched separately, see `api.decisions`. */
   decisions: Decision[];
+  /** How many decisions are archived, for the disclosure that reveals them. */
+  archivedDecisionCount: number;
   messages: Message[];
   lastSeq: number;
   /** Everyone who has written on this board, newest write first. */
@@ -152,7 +155,14 @@ export const api = {
   say: (b: string, body: string, attachments?: string[]) => req<Message>("POST", `/boards/${b}/messages`, { body, attachments }),
   uploadAttachment: (b: string, blob: Blob, opts: { width?: number; height?: number; name?: string; mime?: string } = {}) =>
     reqRaw<Attachment>(`/boards/${b}/attachments`, blob, { mime: opts.mime ?? blob.type, width: opts.width, height: opts.height, name: opts.name }),
-  decide: (b: string, gist: string, card?: number | null) => req<Decision>("POST", `/boards/${b}/decisions`, { gist, card }),
+  decide: (b: string, gist: string, card?: number | null, supersedes?: number) =>
+    req<Decision>("POST", `/boards/${b}/decisions`, { gist, card, supersedes }),
+  decisions: (b: string, q?: { archived?: "1" | "all" }) =>
+    req<Decision[]>("GET", `/boards/${b}/decisions${q?.archived ? `?archived=${q.archived}` : ""}`),
+  archiveDecisions: (b: string, sel: { nums?: number[]; card?: number; author?: string; before?: string }, reason?: string) =>
+    req<{ archived: Decision[] }>("POST", `/boards/${b}/decisions/archive`, { ...sel, reason }),
+  restoreDecisions: (b: string, sel: { nums?: number[]; card?: number; author?: string; before?: string }) =>
+    req<{ restored: Decision[] }>("POST", `/boards/${b}/decisions/restore`, sel),
   events: (b: string, since = 0) => req<Event[]>("GET", `/boards/${b}/events?since=${since}`),
   eventsTail: (b: string, limit = 50) => req<Event[]>("GET", `/boards/${b}/events?tail=1&limit=${limit}`),
   allEvents: (since = 0) => req<Event[]>("GET", `/events?since=${since}`),

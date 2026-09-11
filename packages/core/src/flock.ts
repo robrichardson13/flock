@@ -22,6 +22,7 @@ import {
   type Comment,
   type CommentKind,
   type Decision,
+  type DecisionSelector,
   type DoingCard,
   type Event,
   type EventType,
@@ -83,7 +84,10 @@ type AttachmentRow = {
   id: string; board_id: string; message_id: string | null; comment_id: string | null; author: string; author_kind: string;
   mime: string; name: string | null; size: number; sha256: string; width: number | null; height: number | null; created_at: string;
 };
-type DecisionRow = { id: string; board_id: string; card_num: number | null; gist: string; author: string; created_at: string };
+type DecisionRow = {
+  id: string; board_id: string; card_num: number | null; gist: string; author: string; created_at: string;
+  num: number; archived_at: string | null; archived_by: string | null; archive_reason: string | null; superseded_by: number | null;
+};
 type EventRow = {
   seq: number; board_id: string; actor: string; actor_kind: string; type: string; card_num: number | null; data: string; created_at: string;
   harness: string | null; model: string | null; effort: string | null;
@@ -1112,24 +1116,150 @@ export class Flock {
 
   // ---------- decisions ----------
 
-  decisions(boardRef: string): Decision[] {
-    const b = this.board(boardRef);
-    const rows = this.db.query("SELECT * FROM decisions WHERE board_id = ? ORDER BY created_at, rowid").all(b.id) as DecisionRow[];
-    return rows.map((r) => ({ id: r.id, boardId: r.board_id, cardNum: r.card_num, gist: r.gist, author: r.author, createdAt: r.created_at }));
+  private rowToDecision(r: DecisionRow): Decision {
+    return {
+      id: r.id, boardId: r.board_id, num: r.num, cardNum: r.card_num, gist: r.gist, author: r.author, createdAt: r.created_at,
+      archivedAt: r.archived_at, archivedBy: r.archived_by, archiveReason: r.archive_reason, supersededBy: r.superseded_by,
+    };
   }
 
-  decide(actor: Actor, boardRef: string, gist: string, cardRef?: string | number | null): Decision {
+  private decisionRow(boardId: string, num: number): DecisionRow | null {
+    return this.db.query("SELECT * FROM decisions WHERE board_id = ? AND num = ?").get(boardId, num) as DecisionRow | null;
+  }
+
+  /**
+   * Resolve a selector to rows, in `num` order. Explicit `nums`: any missing entry throws
+   * `not_found` naming it, so an archive/restore call fails clean rather than partially. A
+   * filter selector (`card`/`author`/`before`) matching nothing simply returns `[]` — see ADR
+   * 0016; there is nothing to name as missing when the caller never named a number.
+   *
+   * A selector naming no field at all is `invalid`, never "every decision on the board": the
+   * filter branch's only other clause is `board_id`, so falling through would turn an empty
+   * `{}` or `{ nums: [] }` — which HTTP clients can send — into a board-wide archive.
+   */
+  private resolveDecisionSelector(boardId: string, boardSlug: string, sel: DecisionSelector): DecisionRow[] {
+    if (sel.nums !== undefined) {
+      if (sel.nums.length === 0) return [];
+      const byNum = new Map<number, DecisionRow>();
+      for (const n of sel.nums) {
+        const row = this.decisionRow(boardId, n);
+        if (!row) throw new FlockError(`No decision d${n} on board "${boardSlug}"`, "not_found");
+        byNum.set(n, row);
+      }
+      return [...byNum.values()].sort((a, b) => a.num - b.num);
+    }
+    if (sel.card === undefined && sel.author === undefined && sel.before === undefined) {
+      throw new FlockError("A decision selector is required: nums, card, author or before", "invalid");
+    }
+    const clauses = ["board_id = ?"];
+    const params: (string | number)[] = [boardId];
+    if (sel.card !== undefined) { clauses.push("card_num = ?"); params.push(sel.card); }
+    if (sel.author !== undefined) { clauses.push("author = ?"); params.push(sel.author); }
+    if (sel.before !== undefined) { clauses.push("created_at < ?"); params.push(sel.before); }
+    return this.db.query(`SELECT * FROM decisions WHERE ${clauses.join(" AND ")} ORDER BY num`).all(...params) as DecisionRow[];
+  }
+
+  /** Standing decisions by default; `archived: true` for only archived, `"all"` for every row. */
+  decisions(boardRef: string, opts: { archived?: boolean | "all"; card?: number; author?: string } = {}): Decision[] {
+    const b = this.board(boardRef);
+    const clauses = ["board_id = ?"];
+    const params: (string | number)[] = [b.id];
+    if (opts.archived === true) clauses.push("archived_at IS NOT NULL");
+    else if (opts.archived !== "all") clauses.push("archived_at IS NULL");
+    if (opts.card !== undefined) { clauses.push("card_num = ?"); params.push(opts.card); }
+    if (opts.author !== undefined) { clauses.push("author = ?"); params.push(opts.author); }
+    const rows = this.db.query(`SELECT * FROM decisions WHERE ${clauses.join(" AND ")} ORDER BY num`).all(...params) as DecisionRow[];
+    return rows.map((r) => this.rowToDecision(r));
+  }
+
+  /**
+   * Record a decision. `opts.supersedes` archives that decision in the same transaction and
+   * points it at the new one — a forwarding address, not a chain (ADR 0016). Superseding an
+   * unknown num is `not_found`; superseding an already-archived one is `conflict`, since only
+   * a standing decision can be superseded.
+   */
+  decide(actor: Actor, boardRef: string, gist: string, cardRef?: string | number | null, opts: { supersedes?: number } = {}): Decision {
     const b = this.board(boardRef);
     this.touchActor(actor);
     const cardNum = cardRef == null ? null : this.card(b.id, cardRef).num;
     const id = shortId();
     const ts = now();
-    this.db
-      .query("INSERT INTO decisions(id, board_id, card_num, gist, author, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(id, b.id, cardNum, gist, actor.name, ts);
-    this.touchBoard(b.id);
-    this.emit(actor, b.id, "decision.recorded", cardNum, { gist });
-    return { id, boardId: b.id, cardNum, gist, author: actor.name, createdAt: ts };
+    return this.db.transaction(() => {
+      let superseded: DecisionRow | null = null;
+      if (opts.supersedes !== undefined) {
+        superseded = this.decisionRow(b.id, opts.supersedes);
+        if (!superseded) throw new FlockError(`No decision d${opts.supersedes} on board "${b.slug}"`, "not_found");
+        if (superseded.archived_at) {
+          throw new FlockError(`d${opts.supersedes} is already archived; supersede the standing decision`, "conflict");
+        }
+      }
+      const { n } = this.db.query("SELECT COALESCE(MAX(num), 0) + 1 AS n FROM decisions WHERE board_id = ?").get(b.id) as { n: number };
+      this.db
+        .query("INSERT INTO decisions(id, board_id, card_num, gist, author, created_at, num) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(id, b.id, cardNum, gist, actor.name, ts, n);
+      this.emit(actor, b.id, "decision.recorded", cardNum, opts.supersedes !== undefined ? { num: n, gist, supersedes: opts.supersedes } : { num: n, gist });
+      if (superseded) {
+        this.db
+          .query("UPDATE decisions SET archived_at = ?, archived_by = ?, superseded_by = ? WHERE id = ?")
+          .run(ts, actor.name, n, superseded.id);
+        this.emit(actor, b.id, "decision.archived", superseded.card_num, { num: superseded.num, gist: superseded.gist, supersededBy: n });
+      }
+      this.touchBoard(b.id);
+      return {
+        id, boardId: b.id, num: n, cardNum, gist, author: actor.name, createdAt: ts,
+        archivedAt: null, archivedBy: null, archiveReason: null, supersededBy: null,
+      };
+    })();
+  }
+
+  /**
+   * Archive every decision the selector resolves to. Already-archived rows are skipped
+   * silently — no write, no event — so re-archiving is a no-op, mirroring `unholdCard` on a
+   * card that isn't held. Returns the rows actually changed, in `num` order.
+   */
+  archiveDecisions(actor: Actor, boardRef: string, sel: DecisionSelector, opts: { reason?: string } = {}): Decision[] {
+    const b = this.board(boardRef);
+    this.touchActor(actor);
+    const rows = this.resolveDecisionSelector(b.id, b.slug, sel);
+    const reason = opts.reason?.trim() || null;
+    const ts = now();
+    return this.db.transaction(() => {
+      const changed: Decision[] = [];
+      for (const row of rows) {
+        if (row.archived_at) continue;
+        this.db
+          .query("UPDATE decisions SET archived_at = ?, archived_by = ?, archive_reason = ? WHERE id = ?")
+          .run(ts, actor.name, reason, row.id);
+        this.emit(actor, b.id, "decision.archived", row.card_num, reason ? { num: row.num, gist: row.gist, reason } : { num: row.num, gist: row.gist });
+        changed.push(this.rowToDecision({ ...row, archived_at: ts, archived_by: actor.name, archive_reason: reason }));
+      }
+      if (changed.length) this.touchBoard(b.id);
+      return changed;
+    })();
+  }
+
+  /**
+   * Restore every decision the selector resolves to: clears the archive metadata and the
+   * supersede pointer, so a restored decision stands on its own again. Standing rows are
+   * skipped silently. Returns the rows actually changed, in `num` order.
+   */
+  restoreDecisions(actor: Actor, boardRef: string, sel: DecisionSelector): Decision[] {
+    const b = this.board(boardRef);
+    this.touchActor(actor);
+    const rows = this.resolveDecisionSelector(b.id, b.slug, sel);
+    return this.db.transaction(() => {
+      const changed: Decision[] = [];
+      for (const row of rows) {
+        if (!row.archived_at) continue;
+        this.db
+          .query("UPDATE decisions SET archived_at = NULL, archived_by = NULL, archive_reason = NULL, superseded_by = NULL WHERE id = ?")
+          .run(row.id);
+        this.emit(actor, b.id, "decision.restored", row.card_num, { num: row.num, gist: row.gist });
+        changed.push(this.rowToDecision({ ...row, archived_at: null, archived_by: null, archive_reason: null, superseded_by: null }));
+      }
+      if (changed.length) this.touchBoard(b.id);
+      return changed;
+    })();
   }
 
   // ---------- aggregate ----------
@@ -1138,10 +1268,14 @@ export class Flock {
   snapshot(boardRef: string) {
     const board = this.board(boardRef);
     const cards = this.listCards(board.id);
+    const archivedDecisionCount = (
+      this.db.query("SELECT COUNT(*) AS n FROM decisions WHERE board_id = ? AND archived_at IS NOT NULL").get(board.id) as { n: number }
+    ).n;
     return {
       board,
       cards,
       decisions: this.decisions(board.id),
+      archivedDecisionCount,
       messages: this.messages(board.id, { limit: 50 }),
       lastSeq: this.lastSeq(board.id),
       team: this.boardActors(board.id),

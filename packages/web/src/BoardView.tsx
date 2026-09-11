@@ -11,7 +11,7 @@ import {
   type UIEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { api, ApiError, getActorName, streamPath, type ActorInfo, type BoardSummary, type Card, type CardStatus, type Event, type Message, type NeedsHuman, type Snapshot } from "./api.ts";
+import { api, ApiError, getActorName, streamPath, type ActorInfo, type BoardSummary, type Card, type CardStatus, type Decision, type Event, type Message, type NeedsHuman, type Snapshot } from "./api.ts";
 import { closedOrder } from "./closedOrder.ts";
 import { holdTitle } from "./details.ts";
 import { autoFocusField } from "./focus.ts";
@@ -1762,6 +1762,22 @@ function boardState(counts: Snapshot["counts"]): { state: "warn" | "doing" | "id
   return { state, label };
 }
 
+/** `d7 #12 <gist>` — the shared head of a decision entry, standing or archived. */
+function DecisionGist({ d, boardSlug }: { d: Decision; boardSlug: string }) {
+  return (
+    <div className="decision-gist">
+      <span className="muted tiny">d{d.num}</span> {d.cardNum && <a href={`#/b/${boardSlug}/c/${d.cardNum}`}>#{d.cardNum}</a>} <MessageBody text={d.gist} />
+    </div>
+  );
+}
+
+/** Why an archived decision is archived, as a suffix on its meta line. */
+function archivedNote(d: Decision): string {
+  if (d.supersededBy) return ` · superseded by d${d.supersededBy}`;
+  if (d.archiveReason) return ` · ${d.archiveReason}`;
+  return " · archived";
+}
+
 function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap: Snapshot; onChange: () => void; newIds: ReadonlySet<string | number> }) {
   const mobile = useIsMobile();
   // #8: the same scroll-linked collapse the channel uses, on the same hook and the same CSS.
@@ -1785,16 +1801,73 @@ function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap:
   // Activity's (#5, reworked), leaving the pane crossfade to carry the list in.
   const entrants = new Set(newIds);
   const orders = enterOrders(snap.decisions.map((d) => d.id), entrants);
+  // #4: standing decisions default; archived ones (and what superseded them) sit behind a
+  // disclosure, fetched only once someone opens it rather than padding every snapshot.
+  const [showArchived, setShowArchived] = useState(false);
+  const [archived, setArchived] = useState<Decision[] | null>(null);
+  const [archivedBusy, setArchivedBusy] = useState(false);
+  useEffect(() => {
+    if (!showArchived || archived !== null) return;
+    let live = true;
+    setArchivedBusy(true);
+    api.decisions(boardId, { archived: "1" })
+      .then((rows) => live && setArchived(rows))
+      .catch(() => {})
+      .finally(() => live && setArchivedBusy(false));
+    return () => {
+      live = false;
+    };
+  }, [showArchived, archived, boardId]);
+  const archive = (num: number) =>
+    api.archiveDecisions(boardId, { nums: [num] }).then(() => {
+      onChange();
+      // If the archived list is already loaded, it's stale now — drop it so the next look
+      // (it's still open) or the next open re-fetches rather than showing a gap.
+      if (showArchived) setArchived(null);
+    }).catch(() => {});
+  const restore = (num: number) =>
+    api.restoreDecisions(boardId, { nums: [num] }).then(() => {
+      onChange();
+      setArchived((prev) => (prev ? prev.filter((d) => d.num !== num) : prev));
+    }).catch(() => {});
   return (
     <div className="pane" ref={paneRef}>
       <div className="pane-scroll" ref={combinedScrollRef} onScroll={scrollCollapse.onScroll}>
         {snap.decisions.length === 0 && <div className="muted pad">{EMPTY_TEXT}</div>}
         {snap.decisions.map((d) => (
           <div key={d.id} className={`decision${enterClass(entrants.has(d.id))}`} style={enterDelay(orders.get(d.id))}>
-            <div>{d.cardNum && <a href={`#/b/${snap.board.slug}/c/${d.cardNum}`}>#{d.cardNum}</a>} <MessageBody text={d.gist} /></div>
+            <div className="decision-row">
+              <DecisionGist d={d} boardSlug={snap.board.slug} />
+              <button type="button" className="icon-btn decision-action" aria-label={`Archive d${d.num}`} title="Archive" onClick={() => archive(d.num)}>
+                {Icons.trash(16)}
+              </button>
+            </div>
             <div className="muted tiny">{d.author}, {agoText(d.createdAt)}</div>
           </div>
         ))}
+        {snap.archivedDecisionCount > 0 && (
+          <button type="button" className="disclosure decision-archived-toggle" onClick={() => setShowArchived((v) => !v)} aria-expanded={showArchived}>
+            {showArchived ? "Hide archived" : `Show archived (${snap.archivedDecisionCount})`}
+            <span className={`disclosure-chev${showArchived ? " open" : ""}`}>{Icons.chevron(14)}</span>
+          </button>
+        )}
+        {showArchived && snap.archivedDecisionCount > 0 && (
+          <div className="decision-archived-list">
+            {archivedBusy && <div className="muted pad">Loading…</div>}
+            {archived?.length === 0 && <div className="muted pad">No archived decisions.</div>}
+            {archived?.map((d) => (
+              <div key={d.id} className="decision decision-archived">
+                <div className="decision-row">
+                  <DecisionGist d={d} boardSlug={snap.board.slug} />
+                  <button type="button" className="icon-btn decision-action" aria-label={`Restore d${d.num}`} title="Restore" onClick={() => restore(d.num)}>
+                    {Icons.undo(16)}
+                  </button>
+                </div>
+                <div className="muted tiny">{d.author}, {agoText(d.createdAt)}{archivedNote(d)}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       <LineComposer
         className="card-composer"

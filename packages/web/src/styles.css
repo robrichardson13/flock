@@ -1828,6 +1828,18 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 /* The gist is `MessageBody` (message mode: newlines intact in the DOM), so like
    `.msg-body` and `.needs-q` this needs `pre-wrap` or those newlines don't show. */
 .decision { padding: var(--s2) var(--s3); border-left: 3px solid var(--status-done); background: var(--bg-2); border-radius: 0 var(--r-sm) var(--r-sm) 0; display: flex; flex-direction: column; gap: 3px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* #4: the gist takes the row and the one action (Archive/Restore) sits flush to the trailing
+   edge — same idea as `.card-tile-meta`'s icons, just without a hover-only reveal, since this
+   action has to be reachable on touch too. */
+.decision-row { display: flex; align-items: flex-start; gap: var(--s2); }
+.decision-gist { flex: 1; min-width: 0; }
+.decision-action { flex: none; color: var(--muted); }
+/* An archived decision reads like a closed card (`.card-tile.status-done .card-title`, above):
+   an ink step down, not a translucency the contrast gate can't see through. No status edge
+   left either, since it no longer stands. */
+.decision-archived { border-left-color: var(--line); color: var(--muted); }
+.decision-archived-toggle { width: 100%; justify-content: space-between; }
+.decision-archived-list { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s2); }
 
 /* ---------- brief / markdown ---------- */
 .brief { background: var(--bg-2); border-radius: var(--radius); padding: var(--s3) var(--s4); box-shadow: var(--elev-1); }

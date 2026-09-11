@@ -19,6 +19,7 @@ import {
   runHook,
   type Actor,
   type CardStatus,
+  type DecisionSelector,
   type HookRef,
 } from "@flock/core";
 
@@ -135,6 +136,16 @@ function requestProject(raw: unknown): string | undefined {
     // Not there yet; keep what the caller asked for rather than inventing a directory.
   }
   return project;
+}
+
+/** The selector shared by the archive and restore routes. A body naming no field is rejected: core
+ *  treats an empty selector as `invalid` too, but rejecting here keeps the 400 message specific. */
+function decisionSelector(body: Record<string, unknown>): DecisionSelector {
+  const { nums, card, author, before } = body as DecisionSelector;
+  if (nums === undefined && card === undefined && author === undefined && before === undefined) {
+    throw new FlockError("a selector is required");
+  }
+  return { nums, card, author, before };
 }
 
 /** A hook's stderr is only interesting to the operator on success; on failure it goes to the client. */
@@ -382,11 +393,37 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath 
     if (!body.body?.trim() && !body.attachments?.length) throw new FlockError("body or attachments is required");
     return c.json(flock.say(actorOf(c), c.req.param("b"), body.body ?? "", { attachments: body.attachments }), 201);
   });
-  app.get("/api/boards/:b/decisions", (c) => c.json(flock.decisions(c.req.param("b"))));
+  app.get("/api/boards/:b/decisions", (c) => {
+    const archivedQ = c.req.query("archived");
+    const archived: boolean | "all" | undefined = archivedQ === "all" ? "all" : archivedQ === "1" ? true : undefined;
+    const cardQ = c.req.query("card");
+    return c.json(
+      flock.decisions(c.req.param("b"), {
+        archived,
+        card: cardQ !== undefined ? Number(cardQ) : undefined,
+        author: c.req.query("author"),
+      }),
+    );
+  });
   app.post("/api/boards/:b/decisions", async (c) => {
     const body = await c.req.json();
     if (!body.gist?.trim()) throw new FlockError("gist is required");
-    return c.json(flock.decide(actorOf(c), c.req.param("b"), body.gist, body.card ?? null), 201);
+    return c.json(
+      flock.decide(actorOf(c), c.req.param("b"), body.gist, body.card ?? null, {
+        supersedes: body.supersedes !== undefined ? Number(body.supersedes) : undefined,
+      }),
+      201,
+    );
+  });
+  app.post("/api/boards/:b/decisions/archive", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const changed = flock.archiveDecisions(actorOf(c), c.req.param("b"), decisionSelector(body), { reason: body.reason });
+    return c.json({ archived: changed });
+  });
+  app.post("/api/boards/:b/decisions/restore", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const changed = flock.restoreDecisions(actorOf(c), c.req.param("b"), decisionSelector(body));
+    return c.json({ restored: changed });
   });
 
   // ----- events -----

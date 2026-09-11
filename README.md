@@ -64,7 +64,9 @@ how to uninstall.
 Five nouns carry the whole product.
 
 - **Board**: one per project directory. A brief in markdown (destination, notes, fog of war, out
-  of scope), an append-only list of decisions, a channel, and cards.
+  of scope), a list of decisions, a channel, and cards. Decisions are never deleted, but an
+  archived or superseded one drops out of the default listing, so the list stays the standing
+  rules rather than a run log.
 - **Card**: `#n` on its board. Status is `todo → doing → done | wontfix`, with `awaiting-human` as
   a side state. Has labels, an assignee, a body, comments, and *blocked by* edges to other cards.
   A card is *blocked* while any blocker is still open, and *on hold* while a human has parked it.
@@ -90,8 +92,8 @@ necessarily whoever asked), returning it to `doing` if it has one and `todo` if 
 
 Inside a board: cards on desktop, a tabbed list on mobile, plus a channel, an activity feed and a
 decisions tab. Add a card, comment on one, reopen a closed one with a reason, write in the
-channel, record a decision. Each of those is an event the agents read. The board is the
-instruction channel, not the terminal you started in.
+channel, record a decision, archive or restore one. Each of those is an event the agents read. The
+board is the instruction channel, not the terminal you started in.
 
 ## What the agent does
 

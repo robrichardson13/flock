@@ -139,11 +139,17 @@ What each event means and what you do with it, in the same turn it arrives:
 | `card.moved`, `card.closed`, `card.updated` | The human changed the plan | Re-read the board and re-plan. A card the human closed is done; a card they reopened is work again. |
 | `card.claimed`, `card.released`, `card.blocked`, `card.unblocked` | The human re-sequenced work | Same: re-read the board, respect the new shape. |
 | `card.held`, `card.unheld` | The human parked a card, or un-parked it | A held card is off the table: never delegate it, and pull back any agent you already sent at it. When the hold lifts, treat it as new frontier work and delegate it the way you would any card that just became claimable. Do not ask the human to justify a hold. |
+| `decision.archived`, `decision.restored` | The human pruned or restored a rule | Re-read the decisions list before the next delegation; an archived rule no longer binds. |
 
 Reply where the human is looking. A channel message gets a `flock say`; a card comment gets a
 `flock comment`. Milestones and decision points go to the channel too, one line each, so the
 UI tells the story without them opening the terminal. The human may also be typing here; treat both
-inputs the same and record what they decide with `flock decide "<gist>" --card <n>`.
+inputs the same and record what they decide with `flock decide "<gist>" --card <n>`. A decision is
+a rule that binds later work — a constraint, a chosen approach, a thing not to redo. Merge
+confirmations, test results and verification scorecards are not decisions: those go in
+`flock comment` or `done --resolution`. The decisions list should stay short enough to read before
+every delegation; prune it with `flock decision archive d<n>` when a rule stops applying, and
+record a replacement with `flock decide "<gist>" --supersedes d<n>`.
 The channel renders light markdown (`**bold**`, `_italic_`, `` `code` ``, `- ` bullets, links), so a
 routing plan or a list of findings can be a short bulleted post rather than a wall of prose. One-line
 updates stay one line.

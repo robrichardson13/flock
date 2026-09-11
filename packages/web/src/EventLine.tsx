@@ -67,6 +67,10 @@ export function eventPhrase(e: Event, cardTitle?: string): { verb: string; showC
       return { verb: "posted to the channel", showCard: false, cardSuffix: "", payload: d.body || (d.attachments ? imageWord(d.attachments) : "") };
     case "decision.recorded":
       return { verb: e.cardNum ? "decided on" : "decided", showCard: !!e.cardNum, cardSuffix: "", payload: String(d.gist ?? "") };
+    case "decision.archived":
+      return { verb: "archived decision", showCard: !!e.cardNum, cardSuffix: "", payload: String(d.gist ?? "") };
+    case "decision.restored":
+      return { verb: "restored decision", showCard: !!e.cardNum, cardSuffix: "", payload: String(d.gist ?? "") };
     default:
       return { verb: e.type, showCard: !!e.cardNum, cardSuffix: "", payload: "" };
   }

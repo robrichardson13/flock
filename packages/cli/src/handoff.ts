@@ -69,9 +69,14 @@ When the human answers, the card returns to \`doing\` with you as assignee and t
 ## Coordinate
 
     flock say ${b} "<message>"                     # board channel; talk to other agents here
-    flock decide ${b} "<gist>" --card <n>          # record a decision for everyone
+    flock decide ${b} "<gist>" --card <n>          # record a rule that binds later work
+    flock decisions ${b}                           # the rules in force right now
     flock card new ${b} "<title>" --body "..." --label <l> --blocked-by <n>,<m>
     flock block ${b} <n> --by <m>                  # add a blocking edge later
+
+A decision is a standing rule, not a progress note — confirmations, test results and scorecards
+belong in \`flock comment\` or your \`done --resolution\`. If a rule stops applying,
+\`flock decide "<new rule>" --supersedes d<n>\` replaces it.
 
 Messages, comments and resolutions render light markdown in the web UI: \`**bold**\`, \`_italic_\`,
 \`code\`, \`- \` bullets, \`> \` blockquotes, and links. Plain text is still plain text; format only

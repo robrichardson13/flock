@@ -23,6 +23,7 @@ import {
   type BoardInput,
   type Card,
   type CardStatus,
+  type Decision,
   type Event,
   type HookDescribe,
 } from "@flock/core";
@@ -114,8 +115,11 @@ TEAM
   attachment get [BOARD] ID [--out PATH]   Fetch an attachment's bytes (stdout if --out omitted);
                                       --json prints its metadata only, never bytes
   chat [BOARD] [--limit 50]             Read the channel
-  decide [BOARD] GIST [--card N]        Record a decision
-  decisions [BOARD]
+  decide [BOARD] GIST [--card N] [--supersedes D]   Record a decision; --supersedes archives D
+  decisions [BOARD] [--archived | --all] [--card N] [--by ACTOR]   Standing decisions by default
+  decision archive [BOARD] [D...] [--card N] [--by ACTOR] [--before YYYY-MM-DD] [--reason TEXT]
+                    [--dry-run] [--yes]           A selector matching >10 needs --yes
+  decision restore [BOARD] [D...] [--card N] [--by ACTOR] [--before YYYY-MM-DD] [--dry-run] [--yes]
   help formatting                     The markdown subset the web UI renders
   log [BOARD] [--all] [--since SEQ] [--wait | --follow] [--for NAME] [--timeout MS]
                                       --wait: block until a matching event, then exit. --all: every board
@@ -244,9 +248,18 @@ function fmtEvent(e: Event): string {
     e.type === "message.posted" ? `: ${d.body || (d.attachments ? `sent ${d.attachments} image${d.attachments === 1 ? "" : "s"}` : "")}` :
     e.type === "comment.posted" ? `: ${String(d.body ?? "").split("\n")[0] || (d.attachments ? `sent ${d.attachments} image${d.attachments === 1 ? "" : "s"}` : "")}` :
     e.type === "decision.recorded" ? `: ${d.gist}` :
+    e.type === "decision.archived" ? `: archived d${d.num}` :
+    e.type === "decision.restored" ? `: restored d${d.num}` :
     e.type === "card.blocked" || e.type === "card.unblocked" ? ` by #${d.by}` :
     e.type === "card.held" ? `${d.reason ? `: ${d.reason}` : ""}` : "";
   return `${String(e.seq).padStart(5)}  ${e.createdAt.slice(11, 19)}  ${who.padEnd(14)} ${e.type}${card}${detail}`;
+}
+
+/** Decision numbers parse as `7` or `d7`, mirroring `Flock.parseCardRef`'s `#7`/`7`. */
+function parseDecisionNum(ref: string): number {
+  const n = Number.parseInt(ref.replace(/^[dD]/, ""), 10);
+  if (!Number.isInteger(n) || n <= 0) throw new FlockError(`"${ref}" is not a decision number`, "invalid");
+  return n;
 }
 
 function mentions(e: Event, name: string): boolean {
@@ -615,7 +628,7 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
           if (s.board.body.trim()) console.log(`${s.board.body.trim()}\n`);
           if (s.decisions.length) {
             console.log("## Decisions so far");
-            for (const d of s.decisions) console.log(`- ${d.cardNum ? `#${d.cardNum}: ` : ""}${d.gist}  (${d.author})`);
+            for (const d of s.decisions) console.log(`- d${d.num}  ${d.cardNum ? `#${d.cardNum}: ` : ""}${d.gist}  (${d.author})`);
             console.log();
           }
           for (const status of CARD_STATUSES) {
@@ -863,14 +876,87 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
     }
     case "decide": {
       const { board, rest } = pickBoard(); a = rest;
-      const d = flock.decide(actor, board, need(0, "gist"), str(flags.card) ?? null);
-      return out(ctx, d, () => console.log(`Recorded: ${d.gist}`));
+      const supersedes = str(flags.supersedes) !== undefined ? parseDecisionNum(str(flags.supersedes)!) : undefined;
+      const d = flock.decide(actor, board, need(0, "gist"), str(flags.card) ?? null, { supersedes });
+      return out(ctx, d, () => console.log(`Recorded d${d.num}${supersedes !== undefined ? ` (supersedes d${supersedes})` : ""}: ${d.gist}`));
     }
     case "decisions": {
-      const ds = flock.decisions(pickBoard().board);
+      const { board } = pickBoard();
+      const archived: boolean | "all" | undefined = bool(flags.all) ? "all" : bool(flags.archived) ? true : undefined;
+      const card = str(flags.card) !== undefined ? Number(str(flags.card)) : undefined;
+      const by = str(flags.by);
+      const ds = flock.decisions(board, { archived, card, author: by });
       return out(ctx, ds, () => {
-        if (!ds.length) return console.log("No decisions yet.");
-        for (const d of ds) console.log(`- ${d.cardNum ? `#${d.cardNum}: ` : ""}${d.gist}  (${d.author}, ${d.createdAt.slice(0, 10)})`);
+        for (const d of ds) {
+          let status = "";
+          if (d.supersededBy) status = ` [superseded by d${d.supersededBy}]`;
+          else if (d.archivedAt) status = " [archived]";
+          console.log(`- d${d.num}  ${d.cardNum ? `#${d.cardNum}: ` : ""}${d.gist}  (${d.author}, ${d.createdAt.slice(0, 10)})${status}`);
+        }
+        if (!ds.length) console.log(archived === true ? "No archived decisions." : "No decisions yet.");
+        // The hint runs the same filters as the listing, and prints on an empty listing too:
+        // a board whose decisions are *all* archived is exactly the case that must not read
+        // as "No decisions yet." with nothing else said.
+        if (archived === undefined) {
+          const hidden = flock.decisions(board, { archived: true, card, author: by }).length;
+          if (hidden > 0) console.log(`(${hidden} archived — flock decisions --archived)`);
+        }
+      });
+    }
+    case "decision": {
+      const sub = need(0, "subcommand (archive|restore)");
+      if (sub !== "archive" && sub !== "restore") throw new FlockError(`Unknown decision subcommand "${sub}". Run \`flock help\`.`, "invalid");
+      a = a.slice(1);
+      const { board, rest } = pickBoard(); a = rest;
+      const nums = a.flatMap((x) => x.split(",")).map((x) => x.trim()).filter(Boolean).map(parseDecisionNum);
+      const card = str(flags.card) !== undefined ? Number(str(flags.card)) : undefined;
+      const by = str(flags.by);
+      const before = str(flags.before);
+      if (nums.length === 0 && card === undefined && by === undefined && before === undefined) {
+        throw new FlockError("Nothing to select. Pass decision numbers, or --card/--by/--before.", "invalid");
+      }
+      const usingFilter = nums.length === 0;
+      const sel = usingFilter ? { card, author: by, before } : { nums };
+      const past = sub === "archive" ? "archived" : "restored";
+      const Past = sub === "archive" ? "Archived" : "Restored";
+      // Resolve the same way core's selector would, for the --yes gate and --dry-run preview.
+      // Explicit nums: not_found on the first missing one, matching resolveDecisionSelector.
+      // Rows already in the target state are dropped, because core skips them silently: a
+      // preview that promises to archive ten rows the write will not touch is worse than none,
+      // and the gate should count the blast radius, not the match.
+      const wouldChange = (d: Decision) => (sub === "archive" ? !d.archivedAt : !!d.archivedAt);
+      const resolveMatched = (): Decision[] => {
+        if (usingFilter) {
+          return flock.decisions(board, { archived: "all", card, author: by })
+            .filter((d) => (before === undefined || d.createdAt < before) && wouldChange(d));
+        }
+        const byNum = new Map(flock.decisions(board, { archived: "all" }).map((d) => [d.num, d]));
+        return nums.map((n) => {
+          const d = byNum.get(n);
+          if (!d) throw new FlockError(`No decision d${n} on board "${flock.board(board).slug}"`, "not_found");
+          return d;
+        }).filter(wouldChange);
+      };
+      const dryRun = bool(flags["dry-run"]);
+      if (usingFilter && !dryRun && !bool(flags.yes)) {
+        const matched = resolveMatched();
+        if (matched.length > 10) {
+          throw new FlockError(`${matched.length} decisions match. Re-run with --yes, or --dry-run to list them.`, "invalid");
+        }
+      }
+      if (dryRun) {
+        const matched = resolveMatched();
+        return out(ctx, { dryRun: true, matched }, () => {
+          if (!matched.length) return console.log(`Nothing to ${sub}.`);
+          console.log(`Would ${sub} ${matched.length} decision${matched.length === 1 ? "" : "s"}: ${matched.map((d) => `d${d.num}`).join(", ")}`);
+        });
+      }
+      const changed = sub === "archive"
+        ? flock.archiveDecisions(actor, board, sel, { reason: str(flags.reason) })
+        : flock.restoreDecisions(actor, board, sel);
+      return out(ctx, { [past]: changed }, () => {
+        if (!changed.length) return console.log(`Nothing to ${sub}.`);
+        console.log(`${Past} ${changed.length} decision${changed.length === 1 ? "" : "s"}: ${changed.map((d) => `d${d.num}`).join(", ")}`);
       });
     }
     case "hook": {

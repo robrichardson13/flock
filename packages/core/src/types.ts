@@ -172,10 +172,29 @@ export interface Message {
 export interface Decision {
   id: string;
   boardId: string;
+  /** Per-board sequential number, the human-facing id (`d7`). */
+  num: number;
   cardNum: number | null;
   gist: string;
   author: string;
   createdAt: string;
+  /** When this decision was archived, ISO. Null while it is standing. */
+  archivedAt: string | null;
+  /** Who archived it. Null while it is standing. */
+  archivedBy: string | null;
+  /** Why, free text. Null while standing, or an archive with no reason given. */
+  archiveReason: string | null;
+  /** The `num` of the decision that replaced this one, when archived via `--supersedes`. */
+  supersededBy: number | null;
+}
+
+/** Which decisions an archive/restore call applies to. Explicit `nums`, or a filter — never both meaningfully combined. */
+export interface DecisionSelector {
+  nums?: number[];
+  card?: number;
+  author?: string;
+  /** `created_at < before`. Accepts `YYYY-MM-DD` or a full ISO timestamp. */
+  before?: string;
 }
 
 export type EventType =
@@ -195,7 +214,9 @@ export type EventType =
   | "card.answered"
   | "comment.posted"
   | "message.posted"
-  | "decision.recorded";
+  | "decision.recorded"
+  | "decision.archived"
+  | "decision.restored";
 
 export interface Event extends Runtime {
   seq: number;
