@@ -153,7 +153,6 @@ format; SQLite is the store (`docs/adr/0001-sqlite-is-the-store.md`).
 
 - `docs/install.md` — platforms, env overrides, updates, uninstall
 - `docs/config.md` — `~/.flock/config.json`
-- `docs/hooks/board-create.md` — the hook the web app's "+" runs to create a directory for a new board
 - `docs/agents/issue-tracker.md` — using flock as a project's issue tracker
 - `docs/adr/` — every decision and why
 - `VISION.md` — where this is going

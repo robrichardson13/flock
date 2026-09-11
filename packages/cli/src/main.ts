@@ -7,28 +7,19 @@ import {
   DB_FILENAME,
   Flock,
   FlockError,
-  HookError,
   exportBoard,
-  findHook,
   commentRef,
-  hooksDir,
   importBoard,
-  mergeBoardInput,
   messageRef,
-  normalizeFields,
   parseCommentRef,
-  parseHookOutput,
   resolveDbPath,
-  runHook,
   sniffImageMime,
   taskItems,
   type Actor,
-  type BoardInput,
   type Card,
   type CardStatus,
   type Decision,
   type Event,
-  type HookDescribe,
   type Message,
 } from "@flock/core";
 import { bool, list, parseArgs, str } from "./args.ts";
@@ -113,10 +104,6 @@ BOARDS
   board delete [BOARD] [--yes]        Delete a board and everything on it. Asks first unless --yes
   board export [BOARD] [--out FILE]   Board as markdown
   board import FILE [--project DIR] [--slug S]   New board from markdown
-  hook describe                       Locate the board-create hook and show its declared fields
-  hook run [--title T] [--input k=v]... [--dry-run]
-                                      Run the board-create hook and create the board it returns.
-                                      --dry-run runs the hook but does not create a board.
 
 HUMAN IN THE LOOP
   ask [BOARD] N QUESTION                Park the card as awaiting-human
@@ -326,144 +313,6 @@ const EXT_MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", 
 function extensionMime(path: string): string | null {
   const ext = path.split(".").pop()?.toLowerCase();
   return (ext && EXT_MIME[ext]) ?? null;
-}
-
-const HOOK_EVENT = "board-create";
-
-/** `--input k=v`, repeatable; unlike `list()` this does not comma-split, so values may contain commas. */
-function inputPairs(flags: Ctx["flags"]): Record<string, string> {
-  const raw = flags.input;
-  const items = raw === undefined || typeof raw === "boolean" ? [] : Array.isArray(raw) ? raw : [raw];
-  const inputs: Record<string, string> = {};
-  for (const item of items) {
-    const eq = item.indexOf("=");
-    if (eq < 0) throw new FlockError(`--input "${item}" is not "key=value"`, "invalid");
-    inputs[item.slice(0, eq)] = item.slice(eq + 1);
-  }
-  return inputs;
-}
-
-/** Locate the board-create hook, distinguishing "not installed" from "installed but unsafe". */
-function locateHook(): { path: string; installed: boolean; unsafe: boolean; message?: string } {
-  const path = join(hooksDir(), HOOK_EVENT);
-  try {
-    const ref = findHook(HOOK_EVENT);
-    return { path, installed: ref !== null, unsafe: false };
-  } catch (e) {
-    if (e instanceof HookError && e.code === "hook_unsafe") return { path, installed: true, unsafe: true, message: e.message };
-    throw e;
-  }
-}
-
-function fmtField(f: HookDescribe["fields"][number]): string {
-  const bits = [`${f.name.padEnd(14)} (${f.type}${f.required ? ", required" : ""})`];
-  if (f.options?.length) bits.push(`options: ${f.options.map((o) => o.value).join(", ")}`);
-  if (f.default !== undefined) bits.push(`default: ${f.default}`);
-  return bits.join("  ");
-}
-
-async function hookDescribe(ctx: Ctx) {
-  const loc = locateHook();
-  if (!loc.installed) {
-    const data = { path: loc.path, installed: false, unsafe: false, fields: [] as HookDescribe["fields"] };
-    out(ctx, data, () => console.log(`No hook installed at ${loc.path}`));
-    process.exit(2);
-  }
-  if (loc.unsafe) {
-    const data = { path: loc.path, installed: true, unsafe: true, message: loc.message, fields: [] as HookDescribe["fields"] };
-    out(ctx, data, () => console.log(`Hook at ${loc.path} is unsafe: ${loc.message}`));
-    process.exit(1);
-  }
-
-  const result = await runHook(loc.path, "describe", { event: HOOK_EVENT, actor: ctx.actor, dbPath: ctx.dbPath });
-  // A describe that fails or prints garbage is not fatal — the dialog degrades to a plain title
-  // field, and this verb reports what happened rather than dying with a stack trace (which would
-  // also print nothing parseable under --json). The non-zero exit is the only signal it is broken.
-  let warning: string | undefined;
-  if (result.timedOut) warning = "describe timed out";
-  else if (!result.ok) warning = `describe exited ${result.exitCode}`;
-  let described: HookDescribe = normalizeFields({});
-  if (result.ok) {
-    try {
-      described = normalizeFields(parseHookOutput(result.stdout));
-    } catch (e) {
-      warning = e instanceof Error ? e.message : "invalid describe output";
-    }
-  }
-  const data = { path: loc.path, installed: true, unsafe: false, ok: result.ok && warning === undefined, exitCode: result.exitCode, stderr: result.stderr, warning, ...described };
-  out(ctx, data, () => {
-    console.log(`Hook: ${HOOK_EVENT}`);
-    console.log(`  path: ${loc.path}`);
-    console.log(`  status: enabled${warning === undefined ? "" : ` (${warning}; degraded to plain title field)`}`);
-    if (described.title) console.log(`\nTitle: ${described.title}`);
-    if (described.submit) console.log(`Submit: ${described.submit}`);
-    if (described.fields.length) {
-      console.log("Fields:");
-      for (const f of described.fields) console.log(`  ${fmtField(f)}`);
-    } else {
-      console.log("Fields: (none — plain title field)");
-    }
-    if (result.stderr.trim()) console.log(`\nstderr:\n${result.stderr.replace(/^/gm, "  ")}`);
-  });
-  if (warning !== undefined) process.exit(1);
-}
-
-async function hookRun(ctx: Ctx, flags: Ctx["flags"]) {
-  const dryRun = bool(flags["dry-run"]);
-  const title = str(flags.title);
-  const inputs = inputPairs(flags);
-
-  const loc = locateHook();
-  if (!loc.installed) {
-    out(ctx, { path: loc.path, installed: false }, () => console.log(`No hook installed at ${loc.path}`));
-    process.exit(2);
-  }
-  if (loc.unsafe) {
-    out(ctx, { path: loc.path, installed: true, unsafe: true, message: loc.message }, () => console.log(`Hook at ${loc.path} is unsafe: ${loc.message}`));
-    process.exit(1);
-  }
-
-  const result = await runHook(loc.path, "create", { event: HOOK_EVENT, actor: ctx.actor, title, inputs, dbPath: ctx.dbPath });
-  let hookOutput: Record<string, unknown> = {};
-  let outputError: string | undefined;
-  if (result.ok) {
-    try {
-      hookOutput = parseHookOutput(result.stdout);
-    } catch (e) {
-      outputError = e instanceof Error ? e.message : String(e);
-    }
-  }
-  const form: BoardInput = title !== undefined ? { title } : {};
-  const merged = mergeBoardInput(form, hookOutput);
-
-  if (!result.ok || outputError) {
-    const data = { dryRun, ok: false, exitCode: result.exitCode, timedOut: result.timedOut, stderr: result.stderr, error: outputError };
-    out(ctx, data, () => {
-      console.log(`Hook failed: exit ${result.exitCode}${result.timedOut ? " (timed out)" : ""}${outputError ? `\n${outputError}` : ""}`);
-      if (result.stderr.trim()) console.log(`stderr:\n${result.stderr.replace(/^/gm, "  ")}`);
-    });
-    process.exit(1);
-  }
-
-  if (dryRun) {
-    out(ctx, { dryRun: true, ok: true, exitCode: result.exitCode, stderr: result.stderr, output: hookOutput, merged }, () => {
-      console.log(`Hook ok (exit ${result.exitCode}). Would create board with:`);
-      console.log(`  title:   ${merged.title ?? "(none)"}`);
-      if (merged.slug) console.log(`  slug:    ${merged.slug}`);
-      if (merged.project) console.log(`  project: ${merged.project}`);
-      if (merged.body) console.log(`  body:    ${merged.body}`);
-      if (result.stderr.trim()) console.log(`\nstderr:\n${result.stderr.replace(/^/gm, "  ")}`);
-      console.log("\n(dry run — no board created)");
-    });
-    return;
-  }
-
-  if (!merged.title) throw new FlockError("Missing --title (and the hook did not return one)", "invalid");
-  const b = ctx.flock.createBoard(ctx.actor, { title: merged.title, slug: merged.slug, body: merged.body, project: merged.project ?? null });
-  out(ctx, { dryRun: false, ok: true, exitCode: result.exitCode, stderr: result.stderr, output: hookOutput, board: b }, () => {
-    console.log(`Created board "${b.title}" (${b.slug})${b.project ? ` for ${b.project}` : ""}`);
-    if (result.stderr.trim()) console.log(`stderr:\n${result.stderr.replace(/^/gm, "  ")}`);
-  });
 }
 
 /** Read a `--attach PATH` off disk and upload it, returning the id to bind. Shared by `say` and `comment`. */
@@ -1067,12 +916,6 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
         if (!changed.length) return console.log(`Nothing to ${sub}.`);
         console.log(`${Past} ${changed.length} decision${changed.length === 1 ? "" : "s"}: ${changed.map((d) => `d${d.num}`).join(", ")}`);
       });
-    }
-    case "hook": {
-      const sub = need(0, "subcommand (describe|run)");
-      if (sub === "describe") return await hookDescribe(ctx);
-      if (sub === "run") return await hookRun(ctx, flags);
-      throw new FlockError(`Unknown hook subcommand "${sub}". Run \`flock help\`.`, "invalid");
     }
 
     case "log":

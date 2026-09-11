@@ -7,26 +7,17 @@ import { homedir, userInfo } from "node:os";
 import {
   Flock,
   FlockError,
-  HookError,
   MAX_ATTACHMENT_BYTES,
   exportBoard,
-  findHook,
   importBoard,
-  mergeBoardInput,
-  normalizeFields,
   normalizeRuntime,
-  parseHookOutput,
-  runHook,
   DB_DIRNAME,
   Presence,
   type Actor,
   type CardStatus,
   type DecisionSelector,
-  type HookRef,
 } from "@flock/core";
 import { defaultSend, loadOrCreateVapidKeys, startPushPump, type PushPump, type PushSend } from "./push.ts";
-
-const BOARD_CREATE_HOOK = "board-create";
 
 export interface ServerOptions {
   flock: Flock;
@@ -132,8 +123,8 @@ function contentDispositionFor(name: string): string {
  * The `project` of a board-creating request. It must be absolute: core resolves a relative path
  * against `process.cwd()`, which over HTTP is the *server's* working directory, so `"../etc"` would
  * quietly scope the board to a directory the caller never named. An existing path is canonicalized
- * (symlinks, `..`, trailing slashes) exactly as core does for a hook's `project`, so the board key
- * matches the `process.cwd()` the CLI sees from inside that directory. A path that does not exist
+ * (symlinks, `..`, trailing slashes) so the board key matches the `process.cwd()` the CLI sees from
+ * inside that directory. A path that does not exist
  * yet is left as given: `flock board new --project` allows one, and this route is not stricter.
  */
 function requestProject(raw: unknown): string | undefined {
@@ -159,11 +150,6 @@ function decisionSelector(body: Record<string, unknown>): DecisionSelector {
     throw new FlockError("a selector is required");
   }
   return { nums, card, author, before };
-}
-
-/** A hook's stderr is only interesting to the operator on success; on failure it goes to the client. */
-function logHookStderr(mode: string, stderr: string): void {
-  if (stderr.trim()) console.error(`[${BOARD_CREATE_HOOK} ${mode}] ${stderr}`);
 }
 
 export function createApp({
@@ -221,84 +207,6 @@ export function createApp({
     const body = await c.req.json<{ title: string; slug?: string; body?: string; project?: string }>();
     if (!body.title?.trim()) throw new FlockError("title is required");
     return c.json(flock.createBoard(actorOf(c), { ...body, project: requestProject(body.project) ?? null }), 201);
-  });
-
-  // ----- board-creation hook -----
-  app.get("/api/hooks/board-create", async (c) => {
-    let ref: HookRef | null;
-    try {
-      ref = findHook(BOARD_CREATE_HOOK);
-    } catch (err) {
-      if (err instanceof HookError) return c.json({ enabled: false, warning: err.message });
-      throw err;
-    }
-    if (!ref) return c.json({ enabled: false });
-
-    // No explicit timeout: core's per-mode default is 5s for `describe`, and leaving it unset is
-    // what lets FLOCK_HOOK_TIMEOUT_MS override it, as docs/hooks/board-create.md promises.
-    const result = await runHook(ref.path, "describe", { event: BOARD_CREATE_HOOK, actor: actorOf(c), dbPath });
-    logHookStderr("describe", result.stderr);
-    if (!result.ok) {
-      return c.json({
-        enabled: true,
-        fields: [],
-        warning: result.timedOut ? "describe timed out" : `describe exited ${result.exitCode}`,
-      });
-    }
-
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = parseHookOutput(result.stdout);
-    } catch (err) {
-      return c.json({ enabled: true, fields: [], warning: err instanceof Error ? err.message : "invalid describe output" });
-    }
-    return c.json({ enabled: true, ...normalizeFields(parsed) });
-  });
-
-  app.post("/api/boards/hook", async (c) => {
-    if (c.req.header("x-flock-hook") !== "1") {
-      return c.json({ error: "x-flock-hook header required", code: "hook_header_required" }, 403);
-    }
-    const body = await c.req.json<{ title?: string; inputs?: Record<string, string | boolean | number> }>();
-    if (!body.title?.trim()) throw new FlockError("title is required");
-
-    let ref: HookRef | null;
-    try {
-      ref = findHook(BOARD_CREATE_HOOK);
-    } catch (err) {
-      if (err instanceof HookError) return c.json({ error: err.message, code: err.code }, 502);
-      throw err;
-    }
-    if (!ref) return c.json({ error: `no "${BOARD_CREATE_HOOK}" hook is installed`, code: "no_hook" }, 404);
-
-    const actor = actorOf(c);
-    const result = await runHook(ref.path, "create", { event: BOARD_CREATE_HOOK, actor, title: body.title, inputs: body.inputs ?? {}, dbPath });
-    if (!result.ok) {
-      return c.json(
-        {
-          error: result.timedOut ? "board-create hook timed out" : `board-create hook exited ${result.exitCode}`,
-          code: result.timedOut ? "hook_timeout" : "hook_failed",
-          exitCode: result.exitCode,
-          stderr: result.stderr,
-        },
-        502,
-      );
-    }
-
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = parseHookOutput(result.stdout);
-    } catch (err) {
-      if (err instanceof HookError) {
-        return c.json({ error: err.message, code: err.code, exitCode: result.exitCode, stderr: result.stderr }, 502);
-      }
-      throw err;
-    }
-
-    logHookStderr("create", result.stderr);
-    const merged = mergeBoardInput({ title: body.title }, parsed);
-    if (!merged.title?.trim()) throw new FlockError("hook output cleared the required title");
-    return c.json(flock.createBoard(actor, { ...merged, title: merged.title }), 201);
   });
 
   app.post("/api/boards/import", async (c) => {

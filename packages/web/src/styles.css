@@ -664,41 +664,7 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 .textarea { resize: none; line-height: var(--lh-body); }
 .input:focus, .textarea:focus { outline: none; border-color: var(--ink-focus); }
 .input::placeholder, .textarea::placeholder { color: var(--muted); }
-/* A native <select> styled as an app control (#27): the OS gradient, arrow and radius are the
-   least finished surface a hook-driven sheet has, so this is the one answer to "pick one option
-   from a fixed list" that isn't a menu (see `Menu` in ui.tsx for "pick one action"). Height
-   matches `.input` exactly (`--tap`, which the desktop media query below swaps to `--tap-desk`,
-   so it is a pointer's target on desktop and a finger's on the phone); radius is the smaller
-   `--r-sm` because a `select` sits inline with labels and chips more often than it sits alone
-   the way a `.input`'s text field does. The chevron is a CSS mask, not an <img> or an emoji, so
-   its colour is `--muted` like every other secondary glyph in the app rather than a baked hex. */
-.select-wrap { position: relative; display: block; width: 100%; }
-.select {
-  appearance: none; -webkit-appearance: none; -moz-appearance: none;
-  width: 100%; min-height: var(--tap); padding: 0 calc(var(--s3) + 20px) 0 var(--s3);
-  background: var(--bg); color: var(--text);
-  border: 1px solid var(--line); border-radius: var(--r-sm);
-  font: inherit; font-size: var(--t-body); cursor: pointer;
-}
-.select:focus { outline: none; border-color: var(--ink-focus); }
-/* The blank "no value yet" entry of an optional field: dimmed the way `.input::placeholder` is,
-   so an unfilled select reads as unfilled rather than as a real, chosen option. */
-.select.select-placeholder { color: var(--muted); }
-.select-wrap::after {
-  content: ""; position: absolute; right: var(--s3); top: 50%; transform: translateY(-50%);
-  width: 14px; height: 14px; background: var(--muted); pointer-events: none;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 9l7 7 7-7'/%3E%3C/svg%3E") center / contain no-repeat;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 9l7 7 7-7'/%3E%3C/svg%3E") center / contain no-repeat;
-}
 .field-row { display: flex; flex-direction: column; gap: var(--s3); }
-.hook-field { display: flex; flex-direction: column; gap: var(--s1); }
-.hook-stderr {
-  margin: var(--s2) 0 0; padding: var(--s2) var(--s3); max-height: 160px; overflow: auto;
-  background: var(--bg-3); border-radius: var(--r-sm); font-family: var(--mono); font-size: var(--t-cap); white-space: pre-wrap;
-  color: var(--text);
-}
-/* The hook's own output, not error prose: no second background or padding from the global `code`. */
-.hook-stderr code { background: none; padding: 0; font-size: inherit; }
 /* #4, corrected in #7/7: the radius is set here so it is a resting fact rather than a hover
    one — the surface is transparent at rest, so the rounding is invisible until the fill from
    the hover and press rules further down draws inside it — and it is --hover-radius, not the
