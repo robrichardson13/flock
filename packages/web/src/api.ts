@@ -90,11 +90,11 @@ export class ApiError extends Error {
   }
 }
 
-async function req<T>(method: string, path: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<T> {
+async function req<T>(method: string, path: string, body?: unknown, extraHeaders?: Record<string, string>, opts?: { keepalive?: boolean }): Promise<T> {
   const headers: Record<string, string> = { "content-type": "application/json", "x-flock-actor-kind": "human", ...extraHeaders };
   const name = getActorName();
   if (name) headers["x-flock-actor"] = name;
-  const res = await fetch(`/api${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  const res = await fetch(`/api${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), keepalive: opts?.keepalive });
   if (!res.ok) {
     let msg = res.statusText;
     let code: string | undefined;
@@ -191,6 +191,10 @@ export const api = {
     req<PushSubscriptionSummary>("POST", "/push/subscriptions", input),
   pushUnsubscribe: (endpoint: string) => req<void>("DELETE", "/push/subscriptions", { endpoint }),
   pushTest: () => req<{ sent: number; pruned: number }>("POST", "/push/test"),
+  /** `POST /api/presence`, §3.3: fire from `usePresence`. `keepalive` lets the final
+   * `looking: false` beat survive the page going away (blur/hide never needs it; pagehide does). */
+  presence: (body: { client: string; board: string | null; looking: boolean }, opts?: { keepalive?: boolean }) =>
+    req<void>("POST", "/presence", body, undefined, opts),
 };
 
 export function attachmentUrl(board: string, id: string): string {

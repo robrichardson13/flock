@@ -215,3 +215,37 @@ board-referencing rows and belong in the database.
 part of board history, which it is not, and every board's activity feed would fill with plumbing.
 The pump's cursor is in memory and starts at `lastSeq()`; a missed notification during a restart is
 an acceptable loss for something whose whole value is timeliness.
+
+## Amendment, 2026-09-11
+
+The single-row UI this ADR shipped with — a bare toggle at the foot of Home — worked but read as
+bolted on next to the rest of the app's polish. After Rob's design pass, it became a real
+`Notifications` section on Home whose row opens a `Sheet` panel, reachable a second way from the
+identity control (desktop `Menu`, phone `ActionSheet`); see
+[docs/notifications-contract.md §3.4](../notifications-contract.md#34-where-it-lives-in-the-ui) for
+the shipped shape. Nothing here changes: the protocol, the server routes, the schema and the
+trigger rules are exactly what this ADR decided.
+
+The design pass also added a seventh `PushState` kind, `server-off`, because the original UI's
+`unsupported` state was covering for it dishonestly. A server with no VAPID key used to make the
+row tell the user their *browser* couldn't do notifications — the row had no way to distinguish "the
+browser can't" from "the server never configured a key", so it picked the wrong lie. `server-off`
+says the true thing, and — because the VAPID key is now prefetched at App mount instead of fetched
+after `Notification.requestPermission()` (§3.3) — a key-less server can be detected before the OS
+prompt would have fired at all, not merely explained after the fact.
+
+## Amendment, 2026-09-11
+
+"Nothing else filters. No per-event-type preferences, no quiet hours, no 'is this human on this
+board'" above now has one exception: a channel message (`message.posted` only, never an ask) is
+suppressed for a recipient who is actively looking at that board on any device, and the pump folds
+a burst of channel messages into one leading-edge alert plus one trailing merged update rather than
+sending every one. Both are decided in full, including every rejected alternative, in
+[ADR 0021](0021-batching-and-presence-on-the-push-pump.md); see
+[docs/notifications-contract.md](../notifications-contract.md) §1.3, §1.4, §2.3, §2.4, §3.1 and §3.7
+for the shipped shapes. `renotify`, noted above as unused, is now set as an enhancement
+(`true` on a leading edge and every ask, `false` on a trailing flush) so Chrome/Edge alert correctly
+on a same-tag replacement — this does not contradict "nothing depends on `renotify`", since Safari,
+iOS Safari and Firefox still ignore it and the batching cadence caps the alert rate regardless.
+Nothing else here changes: the protocol, the trigger rules' author filter, and the schema are
+exactly what this ADR decided.

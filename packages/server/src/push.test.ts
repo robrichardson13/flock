@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Flock, type Actor } from "@flock/core";
+import { Flock, Presence, type Actor } from "@flock/core";
 import { loadOrCreateVapidKeys, startPushPump, type PushSend } from "./push.ts";
 import { createApp } from "./index.ts";
 
@@ -423,5 +423,320 @@ describe("push routes", () => {
     } finally {
       delete process.env.FLOCK_NO_PUSH;
     }
+  });
+});
+
+// ---------- batching and presence (spec 9, card C) ----------
+
+describe("PushPump batching", () => {
+  test("a burst of messages within the window yields one send, then one merged send after flush() at +60s", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    let t = 1_000_000;
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000, now: () => t });
+    try {
+      flock.say(ada, board.id, "one");
+      await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
+      expect(calls.length).toBe(1); // leading edge, dispatched at once
+
+      t += 1_000;
+      flock.say(ada, board.id, "two");
+      await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
+
+      t += 1_000;
+      flock.say(ada, board.id, "three");
+      await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
+
+      // "two" and "three" fold inside the window: still exactly one send.
+      expect(calls.length).toBe(1);
+
+      t += 60_000;
+      const result = await pump.flush();
+      expect(result.sent).toBe(1);
+      expect(calls.length).toBe(2);
+      const merged = JSON.parse(calls[1]!.payload);
+      expect(merged.title).toBe(`3 new in ${board.title}`);
+      expect(merged.body).toBe("ada: three");
+      expect(merged.renotify).toBe(false);
+
+      // Nothing pending; a second flush at the same or later time is a no-op.
+      const again = await pump.flush();
+      expect(again).toEqual({ sent: 0, pruned: 0 });
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("stop() drops a pending batch: no send after stop", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    let t = 1_000_000;
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000, now: () => t });
+
+    flock.say(ada, board.id, "one");
+    await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
+    t += 1_000;
+    flock.say(ada, board.id, "two");
+    await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
+    expect(calls.length).toBe(1);
+
+    pump.stop();
+    t += 60_000;
+    const result = await pump.flush();
+    expect(result).toEqual({ sent: 0, pruned: 0 });
+    expect(calls.length).toBe(1);
+  });
+});
+
+describe("PushPump presence", () => {
+  test("presence suppresses channel messages to the looking actor only, and never suppresses an ask", async () => {
+    const { flock, board } = fixture();
+    const designer: Actor = { name: "designer", kind: "agent" };
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+    flock.subscribePush(designer, { endpoint: "https://push.example/designer", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    const presence = new Presence();
+    let t = 1_000_000;
+    presence.report({ client: "c1", actor: "ada", boardId: board.id, looking: true }, t);
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000, now: () => t, presence });
+    try {
+      flock.say(scout, board.id, "hi everyone");
+      const message = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
+      await pump.deliver(message);
+      // ada is looking at this board: suppressed, never asked. designer is not: still notified.
+      expect(calls.map((c) => c.endpoint)).toEqual(["https://push.example/designer"]);
+
+      const card = flock.createCard(scout, board.id, { title: "Fix the thing" });
+      flock.askHuman(scout, board.id, card.num, "Which way?");
+      const ask = flock.events({ boardId: board.id }).find((e) => e.type === "card.asked")!;
+      const before = calls.length;
+      await pump.deliver(ask);
+      // The ask reaches ada too, even though she is looking at the board.
+      const newEndpoints = calls.slice(before).map((c) => c.endpoint).sort();
+      expect(newEndpoints).toEqual(["https://push.example/ada", "https://push.example/designer"].sort());
+    } finally {
+      pump.stop();
+    }
+  });
+});
+
+describe("PushPump tick", () => {
+  test("the interval tick flushes a due batch on its own, with no new event to trigger it", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    let t = 1_000_000;
+    // A real, fast interval: the tick itself (not a manual pump.flush()) must notice the window
+    // has closed and flush without any further event arriving.
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 20, now: () => t });
+    try {
+      flock.say(ada, board.id, "one");
+      await Bun.sleep(60);
+      expect(calls.length).toBe(1); // leading edge, picked up by the tick itself
+
+      flock.say(ada, board.id, "two");
+      await Bun.sleep(60);
+      expect(calls.length).toBe(1); // folded, window still open
+
+      t += 60_000; // window closes; nothing new is written
+      await Bun.sleep(60); // the next tick's own flush() call should notice and send
+      expect(calls.length).toBe(2);
+      const merged = JSON.parse(calls[1]!.payload);
+      expect(merged.title).toBe(`2 new in ${board.title}`);
+      expect(merged.renotify).toBe(false);
+    } finally {
+      pump.stop();
+    }
+  });
+});
+
+describe("PushPump send isolation (S1)", () => {
+  test("a throwing send for one actor's dispatch does not stop another actor's ask in the same batch", async () => {
+    const { flock, board } = fixture();
+    const card = flock.createCard(ada, board.id, { title: "Fix the thing" });
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    const calls: string[] = [];
+    const send: PushSend = async (sub) => {
+      calls.push(sub.endpoint);
+      if (sub.endpoint === "https://push.example/ada") throw new Error("network error, no statusCode");
+      return { statusCode: 201 };
+    };
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
+    try {
+      // Both ada and scout should be notified of this ask; ada's endpoint always throws.
+      flock.askHuman({ name: "builder", kind: "agent" }, board.id, card.num, "Which way?");
+      const event = flock.events({ boardId: board.id }).find((e) => e.type === "card.asked")!;
+      const result = await pump.deliver(event);
+      expect(calls.sort()).toEqual(["https://push.example/ada", "https://push.example/scout"]);
+      expect(result.sent).toBe(1); // scout's send succeeded despite ada's throwing first
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("dispatches to two recipients are sent in parallel, not one after another", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    let adaResolve!: () => void;
+    const adaGate = new Promise<void>((resolve) => {
+      adaResolve = resolve;
+    });
+    let scoutStarted = false;
+    const send: PushSend = async (sub) => {
+      if (sub.endpoint === "https://push.example/ada") {
+        await adaGate; // held open until the test releases it
+        return { statusCode: 201 };
+      }
+      scoutStarted = true;
+      return { statusCode: 201 };
+    };
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
+    try {
+      const card = flock.createCard(ada, board.id, { title: "Fix the thing" });
+      flock.askHuman({ name: "builder", kind: "agent" }, board.id, card.num, "Which way?");
+      const event = flock.events({ boardId: board.id }).find((e) => e.type === "card.asked")!;
+      const deliverPromise = pump.deliver(event);
+      // Give scout's send a turn on the microtask queue while ada's is still gated: if the fan-out
+      // were sequential (the old for-await loop), scout's send would never even be called yet.
+      await Bun.sleep(10);
+      expect(scoutStarted).toBe(true);
+      adaResolve();
+      await deliverPromise;
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("a DB write that throws for one endpoint does not stop touch/prune bookkeeping for another", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    const { send } = fakeSend();
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
+    const original = flock.touchPushSubscription.bind(flock);
+    flock.touchPushSubscription = ((endpoint: string) => {
+      if (endpoint === "https://push.example/ada") throw new Error("SQLITE_BUSY");
+      return original(endpoint);
+    }) as typeof flock.touchPushSubscription;
+    try {
+      const card = flock.createCard(ada, board.id, { title: "Fix the thing" });
+      flock.askHuman({ name: "builder", kind: "agent" }, board.id, card.num, "Which way?");
+      const event = flock.events({ boardId: board.id }).find((e) => e.type === "card.asked")!;
+      const result = await pump.deliver(event);
+      // Both sends succeeded at the network layer; ada's touch() throws but must not prevent
+      // scout's from being counted.
+      expect(result.sent).toBe(1);
+      const scoutSub = flock.pushSubscriptions({ actor: "scout" })[0]!;
+      expect(scoutSub.lastUsedAt).not.toBeNull();
+    } finally {
+      pump.stop();
+    }
+  });
+});
+
+describe("POST /api/presence end to end through the pump", () => {
+  let home: string;
+  beforeEach(() => {
+    home = tempHome();
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("presence reported over HTTP suppresses that actor's channel message through the real pump", async () => {
+    const flock = new Flock(":memory:");
+    const board = flock.createBoard(ada, { title: "Flock v1" });
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    let t = 1_000_000;
+    const app = createApp({
+      flock,
+      dbPath: ":memory:",
+      flockHome: home,
+      pushSend: send,
+      now: () => t,
+      pushIntervalMs: 20,
+    });
+
+    // ada reports looking at this board over the real route, which shares the app's one Presence
+    // with the pump — not a Presence the test builds itself.
+    const presRes = await app.request("/api/presence", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "ada", "x-flock-actor-kind": "human" },
+      body: JSON.stringify({ client: "c1", board: board.slug, looking: true }),
+    });
+    expect(presRes.status).toBe(204);
+
+    flock.say(scout, board.id, "hi ada");
+    await Bun.sleep(60); // let the pump's own tick pick it up
+    expect(calls.length).toBe(0); // suppressed: ada is looking
+
+    // ada stops looking; the next message should reach her.
+    const stopRes = await app.request("/api/presence", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "ada", "x-flock-actor-kind": "human" },
+      body: JSON.stringify({ client: "c1", board: board.slug, looking: false }),
+    });
+    expect(stopRes.status).toBe(204);
+
+    flock.say(scout, board.id, "still there?");
+    await Bun.sleep(60);
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.endpoint).toBe("https://push.example/ada");
+  });
+});
+
+describe("POST /api/presence", () => {
+  let home: string;
+  beforeEach(() => {
+    home = tempHome();
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("a valid report returns 204, even with push disabled", async () => {
+    const flock = new Flock(":memory:");
+    const app = createApp({ flock, dbPath: ":memory:", push: false });
+    const res = await app.request("/api/presence", {
+      method: "POST",
+      headers: scoutHeaders,
+      body: JSON.stringify({ client: "c1", board: null, looking: true }),
+    });
+    expect(res.status).toBe(204);
+  });
+
+  test("a missing client is 400", async () => {
+    const { app } = appWithPush({ flockHome: home });
+    const res = await app.request("/api/presence", {
+      method: "POST",
+      headers: scoutHeaders,
+      body: JSON.stringify({ board: null, looking: true }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("a non-boolean looking is 400", async () => {
+    const { app } = appWithPush({ flockHome: home });
+    const res = await app.request("/api/presence", {
+      method: "POST",
+      headers: scoutHeaders,
+      body: JSON.stringify({ client: "c1", board: null, looking: "yes" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("an unknown board slug is still 204, not 404", async () => {
+    const { app } = appWithPush({ flockHome: home });
+    const res = await app.request("/api/presence", {
+      method: "POST",
+      headers: scoutHeaders,
+      body: JSON.stringify({ client: "c1", board: "no-such-board", looking: true }),
+    });
+    expect(res.status).toBe(204);
   });
 });

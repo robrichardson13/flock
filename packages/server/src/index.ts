@@ -18,6 +18,7 @@ import {
   parseHookOutput,
   runHook,
   DB_DIRNAME,
+  Presence,
   type Actor,
   type CardStatus,
   type DecisionSelector,
@@ -51,6 +52,10 @@ export interface ServerOptions {
   push?: boolean;
   /** Test seam: replaces the pump's real web-push sender. Ignored when push is disabled. */
   pushSend?: PushSend;
+  /** Test seam: clock shared by the presence route and the push pump's batch windows. Default Date.now. */
+  now?: () => number;
+  /** Test seam: the pump's poll interval. Default 500ms; ignored when push is disabled. */
+  pushIntervalMs?: number;
 }
 
 function defaultHuman(): string {
@@ -161,17 +166,32 @@ function logHookStderr(mode: string, stderr: string): void {
   if (stderr.trim()) console.error(`[${BOARD_CREATE_HOOK} ${mode}] ${stderr}`);
 }
 
-export function createApp({ flock, dbPath, staticDir, assets, installScriptPath, flockHome, push, pushSend }: ServerOptions) {
+export function createApp({
+  flock,
+  dbPath,
+  staticDir,
+  assets,
+  installScriptPath,
+  flockHome,
+  push,
+  pushSend,
+  now,
+  pushIntervalMs,
+}: ServerOptions) {
   const app = new Hono();
   app.use("/api/*", cors());
 
+  const clock = now ?? Date.now;
   const pushEnabled = (push ?? true) && process.env.FLOCK_NO_PUSH !== "1";
   const resolvedHome = flockHome ?? (process.env.FLOCK_HOME ? resolve(process.env.FLOCK_HOME) : join(homedir(), DB_DIRNAME));
   const vapid = pushEnabled ? loadOrCreateVapidKeys(resolvedHome) : null;
   const send: PushSend | null = vapid ? (pushSend ?? defaultSend(vapid)) : null;
+  // One Presence per app, mounted whether or not push is on: a device that is not itself
+  // subscribed (the Mac) still needs to suppress a device that is (the phone) — §3.3.
+  const presence = new Presence();
   let pump: PushPump | null = null;
   if (vapid && send) {
-    pump = startPushPump({ flock, keys: vapid, send });
+    pump = startPushPump({ flock, keys: vapid, send, presence, now: clock, intervalMs: pushIntervalMs });
   }
 
   const actorOf = (c: { req: { header(n: string): string | undefined } }): Actor => {
@@ -502,6 +522,34 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath,
     });
   app.get("/api/boards/:b/stream", (c) => sse(flock.board(c.req.param("b")).id)(c));
   app.get("/api/stream", (c) => sse(undefined)(c));
+
+  // ----- presence -----
+  // Mounted whether or not push is enabled (§3.3): tiny, in memory, and needed even by a device
+  // that never subscribes to push, so it can still suppress one that does.
+  app.post("/api/presence", async (c) => {
+    const body = await c.req.json<{ client?: unknown; board?: unknown; looking?: unknown }>().catch(() => ({}) as Record<string, unknown>);
+    if (typeof body.client !== "string" || body.client.length === 0 || body.client.length > 64) {
+      throw new FlockError("client is required", "invalid");
+    }
+    if (typeof body.looking !== "boolean") {
+      throw new FlockError("looking must be a boolean", "invalid");
+    }
+    if (body.board !== null && body.board !== undefined && typeof body.board !== "string") {
+      throw new FlockError("board must be a string or null", "invalid");
+    }
+    // An unknown slug resolves to null rather than 404ing: presence is best-effort, and a 404
+    // would spam the console over a board that was deleted out from under an open tab.
+    let boardId: string | null = null;
+    if (typeof body.board === "string" && body.board.length > 0) {
+      try {
+        boardId = flock.board(body.board).id;
+      } catch {
+        boardId = null;
+      }
+    }
+    presence.report({ client: body.client, actor: actorOf(c).name, boardId, looking: body.looking }, clock());
+    return c.body(null, 204);
+  });
 
   // ----- push -----
   app.get("/api/push/key", (c) => {

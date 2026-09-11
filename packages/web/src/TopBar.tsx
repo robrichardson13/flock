@@ -12,6 +12,7 @@ import {
 import type { Route } from "./App.tsx";
 import type { Card, TeamMember } from "./api.ts";
 import { Brand, Mark } from "./Mark.tsx";
+import type { PushState } from "./push.ts";
 import { Avatar, Icons, TeamStack } from "./ui.tsx";
 
 /**
@@ -192,16 +193,29 @@ export function topBarShape(hasBoard: boolean, hasCard: boolean, cardSlotHeld: b
  * or the title from the cached boards list — so a board opened cold names itself before the
  * snapshot lands, exactly as the skeleton's own bar used to.
  */
-export function TopBar({ route, actor, boardLabel, onNewBoard, onRename }: {
+export function TopBar({ route, actor, boardLabel, onNewBoard, onRename, onOpenNotifications, pushKind }: {
   route: Route;
   actor: string;
   boardLabel?: string;
   onNewBoard: () => void;
   onRename: () => void;
+  /** Opens the push notifications panel: a quiet bell beside the avatar (#8). */
+  onOpenNotifications: () => void;
+  /** This device's push state, so the bell can swap to `bellOff` and carry its warn dot when `blocked`. */
+  pushKind?: PushState["kind"];
 }) {
   const { titles, boardTeam, slots } = useContext(ViewCtx);
   const shape = topBarShape(!!route.board, route.card !== undefined, titles.card !== undefined);
   const ref = useTopBarHeight();
+
+  // The quiet entrance (#8): the same icon-only bell beside the avatar on Home and on a board,
+  // opening the panel directly rather than through a menu/action sheet.
+  const notifyBtn = (
+    <button className="icon-btn notify-btn" onClick={onOpenNotifications} aria-label="Notifications" title="Notifications">
+      {pushKind === "blocked" ? Icons.bellOff(20) : Icons.bell(20)}
+      {pushKind === "blocked" && <span className="notify-dot" />}
+    </button>
+  );
 
   let content: ReactNode;
   if (shape === "home") {
@@ -209,6 +223,7 @@ export function TopBar({ route, actor, boardLabel, onNewBoard, onRename }: {
       <>
         <span className="topbar-title brand-name"><Brand size={22} /></span>
         <button className="icon-btn" onClick={onNewBoard} aria-label="New board">{Icons.plus()}</button>
+        {notifyBtn}
         <button className="icon-btn" onClick={onRename} aria-label={`Signed in as ${actor}. Change name`}>
           <Avatar name={actor || "?"} kind="human" size={28} />
         </button>
@@ -269,6 +284,7 @@ export function TopBar({ route, actor, boardLabel, onNewBoard, onRename }: {
         ) : (
           <span className="grow" />
         )}
+        {notifyBtn}
       </>
     );
   }

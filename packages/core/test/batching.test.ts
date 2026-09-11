@@ -1,0 +1,276 @@
+import { describe, expect, test } from "bun:test";
+import { BATCH_WINDOW_MS, NotificationBatcher, type IsLooking } from "../src/index.ts";
+import { notificationFor } from "../src/index.ts";
+import type { Event } from "../src/index.ts";
+
+const BOARD = "b1";
+const CTX = { boardSlug: "flock", boardTitle: "flock" };
+
+function ev(partial: Partial<Event>): Event {
+  return {
+    seq: 1,
+    boardId: BOARD,
+    actor: "ada",
+    actorKind: "human",
+    type: "message.posted",
+    cardNum: null,
+    data: {},
+    createdAt: "2026-09-11T00:00:00.000Z",
+    ...partial,
+  };
+}
+
+function message(seq: number, body: string, actor = "ada") {
+  const e = ev({ type: "message.posted", actor, data: { body }, seq });
+  const payload = notificationFor(e, CTX)!;
+  return { event: e, payload };
+}
+
+/** A stub `isLooking` driven by a Set of "actor board" strings. */
+function stubLooking(initiallyLooking: string[] = []): { isLooking: IsLooking; set: Set<string>; key: (a: string, b: string) => string } {
+  const key = (a: string, b: string) => `${a}|${b}`;
+  const set = new Set(initiallyLooking);
+  const isLooking: IsLooking = (actor, boardId) => set.has(key(actor, boardId));
+  return { isLooking, set, key };
+}
+
+describe("NotificationBatcher", () => {
+  test("lone message dispatches at once, plain, renotify: true", () => {
+    const { isLooking } = stubLooking();
+    const batcher = new NotificationBatcher({ isLooking });
+    const { event, payload } = message(1, "hello");
+
+    const out = batcher.onEvent(event, payload, ["scout"], 1000);
+    expect(out).toEqual([{ actor: "scout", boardId: BOARD, payload }]);
+    expect(out[0].payload.renotify).toBe(true);
+  });
+
+  test("second and third inside the window fold; flush at t0 + W yields '<n> new in <board>'", () => {
+    const { isLooking } = stubLooking();
+    const batcher = new NotificationBatcher({ isLooking });
+    const t0 = 1000;
+
+    const m1 = message(1, "one");
+    const out1 = batcher.onEvent(m1.event, m1.payload, ["scout"], t0);
+    expect(out1.length).toBe(1);
+
+    const m2 = message(2, "two");
+    const out2 = batcher.onEvent(m2.event, m2.payload, ["scout"], t0 + 5_000);
+    expect(out2).toEqual([]);
+
+    const m3 = message(3, "three (latest)");
+    const out3 = batcher.onEvent(m3.event, m3.payload, ["scout"], t0 + 10_000);
+    expect(out3).toEqual([]);
+
+    expect(batcher.nextDueAt()).toBe(t0 + BATCH_WINDOW_MS);
+    expect(batcher.due(t0 + BATCH_WINDOW_MS - 1)).toEqual([]);
+
+    const flushed = batcher.due(t0 + BATCH_WINDOW_MS);
+    expect(flushed.length).toBe(1);
+    expect(flushed[0].actor).toBe("scout");
+    expect(flushed[0].boardId).toBe(BOARD);
+    expect(flushed[0].payload.title).toBe("3 new in flock");
+    expect(flushed[0].payload.body).toBe("ada: three (latest)");
+    expect(flushed[0].payload.renotify).toBe(false);
+  });
+
+  test("a flush opens a new window: a message 1s after folds; after a fully quiet window the next message leads with the accumulated count", () => {
+    const { isLooking } = stubLooking();
+    const batcher = new NotificationBatcher({ isLooking });
+    const t0 = 1000;
+
+    // Burst of 2, flush at t0 + W.
+    batcher.onEvent(message(1, "one").event, message(1, "one").payload, ["scout"], t0);
+    batcher.onEvent(message(2, "two").event, message(2, "two").payload, ["scout"], t0 + 1_000);
+    const flush1 = batcher.due(t0 + BATCH_WINDOW_MS);
+    expect(flush1.length).toBe(1);
+    expect(flush1[0].payload.title).toBe("2 new in flock");
+
+    // A message 1s after the flush folds into the new window it opened (no dispatch): the count
+    // (since last seen, per D4/D9) keeps accumulating rather than resetting on a flush.
+    const m3 = message(3, "three");
+    const out = batcher.onEvent(m3.event, m3.payload, ["scout"], t0 + BATCH_WINDOW_MS + 1_000);
+    expect(out).toEqual([]);
+    expect(batcher.nextDueAt()).toBe(t0 + 2 * BATCH_WINDOW_MS);
+
+    // A fully quiet window later (no message arrives before it closes): quiet, nothing to flush.
+    const flush2 = batcher.due(t0 + 2 * BATCH_WINDOW_MS);
+    expect(flush2.length).toBe(1); // m3 was still pending as latest, so this IS the flush of m3
+    expect(flush2[0].payload.title).toBe("3 new in flock");
+
+    // Now truly quiet (window closed with nothing pending): the next message is a leading edge
+    // with the accumulated count since last seen (never reset by a flush, only by D9).
+    const laterMessage = message(4, "much later");
+    const out2 = batcher.onEvent(
+      laterMessage.event,
+      laterMessage.payload,
+      ["scout"],
+      t0 + 2 * BATCH_WINDOW_MS + 10 * BATCH_WINDOW_MS,
+    );
+    expect(out2.length).toBe(1);
+    expect(out2[0].payload.title).toBe("4 new in flock");
+    expect(out2[0].payload.renotify).toBe(true);
+  });
+
+  test("card.asked and card.moved->awaiting-human bypass batching and presence, and do not disturb a message key", () => {
+    const { isLooking } = stubLooking();
+    const batcher = new NotificationBatcher({ isLooking });
+    const t0 = 1000;
+
+    // Start a pending message batch for scout.
+    batcher.onEvent(message(1, "one").event, message(1, "one").payload, ["scout"], t0);
+    batcher.onEvent(message(2, "two").event, message(2, "two").payload, ["scout"], t0 + 1_000);
+
+    // An ask mid-window, immediate dispatch, renotify: true.
+    const askEvent = ev({ type: "card.asked", actor: "builder", cardNum: 5, data: { question: "why?" }, seq: 10 });
+    const askPayload = notificationFor(askEvent, CTX)!;
+    const askOut = batcher.onEvent(askEvent, askPayload, ["scout"], t0 + 2_000);
+    expect(askOut).toEqual([{ actor: "scout", boardId: BOARD, payload: askPayload }]);
+    expect(askOut[0].payload.renotify).toBe(true);
+
+    // An awaiting-human move, same thing.
+    const movedEvent = ev({ type: "card.moved", actor: "builder", cardNum: 6, data: { to: "awaiting-human" }, seq: 11 });
+    const movedPayload = notificationFor(movedEvent, CTX)!;
+    const movedOut = batcher.onEvent(movedEvent, movedPayload, ["scout"], t0 + 3_000);
+    expect(movedOut).toEqual([{ actor: "scout", boardId: BOARD, payload: movedPayload }]);
+
+    // The message key's count/pending are untouched: it still flushes as "2 new in flock".
+    const flushed = batcher.due(t0 + BATCH_WINDOW_MS);
+    expect(flushed.length).toBe(1);
+    expect(flushed[0].payload.title).toBe("2 new in flock");
+  });
+
+  test("card.asked reaches a recipient who is marked looking (asks ignore presence)", () => {
+    const { isLooking, set, key } = stubLooking();
+    const batcher = new NotificationBatcher({ isLooking });
+    const t0 = 1000;
+
+    // scout is actively looking at the board.
+    set.add(key("scout", BOARD));
+
+    const askEvent = ev({ type: "card.asked", actor: "builder", cardNum: 5, data: { question: "why?" }, seq: 10 });
+    const askPayload = notificationFor(askEvent, CTX)!;
+    const out = batcher.onEvent(askEvent, askPayload, ["scout"], t0);
+    expect(out).toEqual([{ actor: "scout", boardId: BOARD, payload: askPayload }]);
+  });
+
+  test("a message landing exactly at windowEndsAt while a fold is pending merges into one leading edge, nothing left to flush", () => {
+    const { isLooking } = stubLooking();
+    const batcher = new NotificationBatcher({ isLooking });
+    const t0 = 1000;
+
+    const m1 = message(1, "one");
+    const out1 = batcher.onEvent(m1.event, m1.payload, ["scout"], t0);
+    expect(out1.length).toBe(1); // leading edge, windowEndsAt = t0 + W
+
+    const m2 = message(2, "two");
+    const out2 = batcher.onEvent(m2.event, m2.payload, ["scout"], t0 + 1_000);
+    expect(out2).toEqual([]); // folds, pending
+
+    // Third message lands exactly at the window edge: treated as due, so it is itself a leading
+    // edge carrying the merged count, and it folds the pending state rather than losing it.
+    const m3 = message(3, "three");
+    const out3 = batcher.onEvent(m3.event, m3.payload, ["scout"], t0 + BATCH_WINDOW_MS);
+    expect(out3.length).toBe(1);
+    expect(out3[0].payload.title).toBe("3 new in flock");
+    expect(out3[0].payload.renotify).toBe(true);
+
+    // Nothing pending afterwards: no double-send and nothing lost.
+    expect(batcher.due(t0 + BATCH_WINDOW_MS)).toEqual([]);
+  });
+
+  test("looking at offer drops and resets; next message is plain count == 1", () => {
+    const { isLooking, set, key } = stubLooking();
+    const batcher = new NotificationBatcher({ isLooking });
+    const t0 = 1000;
+
+    batcher.onEvent(message(1, "one").event, message(1, "one").payload, ["scout"], t0);
+    batcher.onEvent(message(2, "two").event, message(2, "two").payload, ["scout"], t0 + 1_000);
+
+    set.add(key("scout", BOARD));
+    const out = batcher.onEvent(message(3, "three").event, message(3, "three").payload, ["scout"], t0 + 2_000);
+    expect(out).toEqual([]); // looking: no dispatch, pending dropped
+
+    set.delete(key("scout", BOARD));
+    const m4 = message(4, "four");
+    const out2 = batcher.onEvent(m4.event, m4.payload, ["scout"], t0 + 3_000);
+    expect(out2.length).toBe(1);
+    expect(out2[0].payload).toEqual(m4.payload); // plain, count == 1
+  });
+
+  test("looking at due drops pending, nothing sent", () => {
+    const { isLooking, set, key } = stubLooking();
+    const batcher = new NotificationBatcher({ isLooking });
+    const t0 = 1000;
+
+    batcher.onEvent(message(1, "one").event, message(1, "one").payload, ["scout"], t0);
+    batcher.onEvent(message(2, "two").event, message(2, "two").payload, ["scout"], t0 + 1_000);
+
+    set.add(key("scout", BOARD));
+    const out = batcher.due(t0 + BATCH_WINDOW_MS);
+    expect(out).toEqual([]);
+
+    set.delete(key("scout", BOARD));
+    const m3 = message(3, "three");
+    const out2 = batcher.onEvent(m3.event, m3.payload, ["scout"], t0 + BATCH_WINDOW_MS + 1_000);
+    expect(out2.length).toBe(1);
+    expect(out2[0].payload).toEqual(m3.payload);
+  });
+
+  test("an event authored by the recipient on that board resets their key", () => {
+    const { isLooking } = stubLooking();
+    const batcher = new NotificationBatcher({ isLooking });
+    const t0 = 1000;
+
+    batcher.onEvent(message(1, "one").event, message(1, "one").payload, ["scout"], t0);
+    batcher.onEvent(message(2, "two").event, message(2, "two").payload, ["scout"], t0 + 1_000);
+
+    // scout writes (any type, e.g. card.moved) on the same board: resets scout's key.
+    const scoutEvent = ev({ type: "card.moved", actor: "scout", cardNum: 7, data: { to: "doing" }, seq: 20, boardId: BOARD });
+    const out = batcher.onEvent(scoutEvent, null, [], t0 + 2_000);
+    expect(out).toEqual([]);
+    expect(batcher.nextDueAt()).toBeNull(); // pending fold was dropped
+
+    const m3 = message(3, "three");
+    const out2 = batcher.onEvent(m3.event, m3.payload, ["scout"], t0 + 3_000);
+    expect(out2.length).toBe(1);
+    expect(out2[0].payload).toEqual(m3.payload); // plain, count reset to 1
+  });
+
+  test("a write by the recipient on a different board does not touch this board's key", () => {
+    const { isLooking } = stubLooking();
+    const batcher = new NotificationBatcher({ isLooking });
+    const t0 = 1000;
+
+    batcher.onEvent(message(1, "one").event, message(1, "one").payload, ["scout"], t0);
+    batcher.onEvent(message(2, "two").event, message(2, "two").payload, ["scout"], t0 + 1_000);
+
+    const otherBoardEvent = ev({ type: "card.moved", actor: "scout", cardNum: 8, data: { to: "doing" }, seq: 21, boardId: "other-board" });
+    const out = batcher.onEvent(otherBoardEvent, null, [], t0 + 2_000);
+    expect(out).toEqual([]);
+
+    const flushed = batcher.due(t0 + BATCH_WINDOW_MS);
+    expect(flushed.length).toBe(1);
+    expect(flushed[0].payload.title).toBe("2 new in flock"); // untouched by the other-board write
+  });
+
+  test("keys are independent across actors and boards; the author never appears as a recipient", () => {
+    const { isLooking } = stubLooking();
+    const batcher = new NotificationBatcher({ isLooking });
+    const t0 = 1000;
+
+    const m = message(1, "hi", "ada");
+    const out = batcher.onEvent(m.event, m.payload, ["scout", "builder"], t0);
+    expect(out.map((d) => d.actor).sort()).toEqual(["builder", "scout"]);
+    expect(out.every((d) => d.actor !== "ada")).toBe(true);
+
+    // scout is looking, builder is not: only builder gets a dispatch on the next message.
+    const { isLooking: isLooking2, set, key } = stubLooking();
+    const batcher2 = new NotificationBatcher({ isLooking: isLooking2 });
+    batcher2.onEvent(m.event, m.payload, ["scout", "builder"], t0);
+    set.add(key("scout", BOARD));
+    const m2 = message(2, "hi again", "ada");
+    const out2 = batcher2.onEvent(m2.event, m2.payload, ["scout", "builder"], t0 + 1_000);
+    expect(out2).toEqual([]); // still inside builder's window too (fold)
+  });
+});

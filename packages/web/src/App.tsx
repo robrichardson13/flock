@@ -16,7 +16,9 @@ import { TopBar, TopBarProvider } from "./TopBar.tsx";
 import { keyboardShrunk, readoutRequested, shellHeight } from "./vv.ts";
 import { VVReadout } from "./VVReadout.tsx";
 import { ActorLinks, Avatar, Icons, OverlayProvider, PromptProvider, PushStack, useEdgeSwipePeek, useIsMobile, usePrompt } from "./ui.tsx";
-import { currentSubscription, disablePush, enablePush, pushState, readPushEnv, type PushState } from "./push.ts";
+import { PushPanel } from "./Notifications.tsx";
+import { currentSubscription, disablePush, enablePush, primePushKey, pushKeyNow, pushState, readPushEnv, withServerKey, type PushState } from "./push.ts";
+import { usePresence } from "./presence.ts";
 
 /**
  * Reads the hash and remembers which board was last resolved from it, so that only
@@ -392,6 +394,8 @@ function Shell() {
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
+  usePresence(actor, hash);
+
   const load = useCallback(async () => {
     try {
       const [b, n] = await Promise.all([api.boards(), api.needsMe()]);
@@ -435,6 +439,10 @@ function Shell() {
   useEffect(() => {
     if (!window.isSecureContext || !("serviceWorker" in navigator) || typeof PushManager === "undefined") return;
     navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+    // Prefetch the VAPID key here too, not only when the panel opens: on the phone the key is
+    // then in hand long before anyone reaches the row, so the toggle's click handler never has
+    // to await a network call before `Notification.requestPermission()`.
+    primePushKey().catch(() => {});
   }, []);
 
   // A tap on a notification asks the page to navigate rather than navigating itself (see
@@ -469,6 +477,61 @@ function Shell() {
     }
   };
 
+  // The panel's open state, and this device's push state, live here rather than in Home
+  // (#5, card C) so a board screen's avatar menu/action sheet can reach the same panel Home's
+  // row opens — one panel, two entrances, reachable from either route. Read on arrival, never
+  // inside a click handler, so the enable button's onClick can call enablePush()/disablePush()
+  // as the very first thing it does, with nothing awaited before
+  // `Notification.requestPermission()` breaks the iOS gesture chain.
+  const [pushKind, setPushKind] = useState<PushState["kind"]>("off");
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState<string | null>(null);
+  const [pushPanelOpen, setPushPanelOpen] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    currentSubscription().then((sub) => {
+      if (!cancelled) setPushKind(withServerKey(pushState(readPushEnv(!!sub)), pushKeyNow()).kind);
+    }).catch(() => {
+      if (!cancelled) setPushKind(withServerKey(pushState(readPushEnv(false)), pushKeyNow()).kind);
+    });
+    return () => { cancelled = true; };
+  }, []);
+  const onEnablePush = useCallback(() => {
+    setPushBusy(true);
+    setPushError(null);
+    // Gesture-safe: when the key is already primed this awaits nothing before enablePush.
+    // The cold path (key not yet resolved) falls back to awaiting the fetch here, which is
+    // no worse than today's unconditional fetch — the prefetch just makes it rare.
+    (async (): Promise<PushState> => {
+      const key = pushKeyNow() ?? (await primePushKey());
+      if (!key.enabled || !key.publicKey) return { kind: "server-off" };
+      return enablePush(key.publicKey);
+    })()
+      .then((s) => setPushKind(s.kind))
+      .catch((e) => setPushError((e as Error).message))
+      .finally(() => setPushBusy(false));
+  }, []);
+  const onDisablePush = useCallback(() => {
+    setPushBusy(true);
+    setPushError(null);
+    disablePush()
+      .then((s) => setPushKind(s.kind))
+      .catch((e) => setPushError((e as Error).message))
+      .finally(() => setPushBusy(false));
+  }, []);
+  const onOpenNotifications = useCallback(() => setPushPanelOpen(true), []);
+  const pushPanel = (
+    <PushPanel
+      open={pushPanelOpen}
+      onClose={() => setPushPanelOpen(false)}
+      state={{ kind: pushKind } as PushState}
+      busy={pushBusy}
+      error={pushError}
+      onEnable={onEnablePush}
+      onDisable={onDisablePush}
+    />
+  );
+
   const errorBanner = error && (
     <div className="banner banner-error">Can't reach the API. Start it with <code>flock serve</code> or <code>flock up</code>.</div>
   );
@@ -490,13 +553,13 @@ function Shell() {
         {/* The one top bar, above the push stack and above the banners: it is the same DOM
             node on Home, on a board and on a card, so navigating swaps its contents in place
             instead of sliding a second bar past the first, and its y origin never moves. */}
-        <TopBar route={route} actor={actor} boardLabel={boardLabel} onNewBoard={onNewBoard} onRename={onRename} />
+        <TopBar route={route} actor={actor} boardLabel={boardLabel} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} pushKind={pushKind} />
         {streamHint}
         {errorBanner}
         <PushStack
           routeKey={route.board ?? "#home"}
           depth={route.board ? 1 : 0}
-          under={route.board && peek ? <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} /> : null}
+          under={route.board && peek ? <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} onOpenNotifications={onOpenNotifications} /> : null}
         >
           {route.board ? (
             // Inside a board, every avatar drawn below opens that actor's view (#49).
@@ -504,10 +567,11 @@ function Shell() {
               <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} />
             </ActorLinks>
           ) : (
-            <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} />
+            <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} onOpenNotifications={onOpenNotifications} />
           )}
         </PushStack>
         {newBoardDialog}
+        {pushPanel}
       </div>
     );
   }
@@ -521,9 +585,10 @@ function Shell() {
         {streamHint}
         <main className="main">
           {errorBanner}
-          <Home boards={boards} needs={needs} actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} />
+          <Home boards={boards} needs={needs} actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} onOpenNotifications={onOpenNotifications} />
         </main>
         {newBoardDialog}
+        {pushPanel}
       </div>
     );
   }
@@ -535,10 +600,11 @@ function Shell() {
         {errorBanner}
         {/* `route.board` is set: the index returned its own shell above. */}
         <ActorLinks boardRef={route.board}>
-          <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} />
+          <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} pushKind={pushKind} />
         </ActorLinks>
       </main>
       {newBoardDialog}
+      {pushPanel}
     </div>
   );
 }
@@ -546,7 +612,13 @@ function Shell() {
 /** What Home caches between visits: exactly the two payloads its own fetch produces. */
 interface HomeSnapshot { boards: BoardSummary[]; needs: NeedsHuman[] }
 
-function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswered, loaded, seeded }: { boards: BoardSummary[]; needs: NeedsHuman[]; actor: string; dbPath?: string; onNewBoard: () => void; onRename: () => void; onAnswered: () => void; loaded: boolean; seeded: boolean }) {
+function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswered, loaded, seeded, pushKind, onOpenNotifications }: {
+  boards: BoardSummary[]; needs: NeedsHuman[]; actor: string; dbPath?: string; onNewBoard: () => void; onRename: () => void; onAnswered: () => void; loaded: boolean; seeded: boolean;
+  /** This device's push state and the panel-opening callback for the desktop `AppTopBar`'s
+   *  bell — owned by `Shell` (#8) so the same panel is reachable from a board screen too. */
+  pushKind: PushState["kind"];
+  onOpenNotifications: () => void;
+}) {
   const mobile = useIsMobile();
   // Ages, live dots and the active/idle split decay with time, not only with events: a tick
   // keeps them honest on a board nobody has touched for a while.
@@ -572,30 +644,10 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
   const boardOrders = enterOrders(boards.map((b) => b.id), entrants);
   const { active: activeBoards, idle: idleBoards } = groupBoardsByActivity(boards, now);
 
-  // Read this device's own state on arrival — never inside a click handler, so the enable
-  // button's onClick can call enablePush()/disablePush() as the very first thing it does, with
-  // nothing awaited before Notification.requestPermission() breaks the iOS gesture chain.
-  const [pushKind, setPushKind] = useState<PushState["kind"]>("off");
-  const [pushBusy, setPushBusy] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    currentSubscription().then((sub) => {
-      if (!cancelled) setPushKind(pushState(readPushEnv(!!sub)).kind);
-    }).catch(() => {
-      if (!cancelled) setPushKind(pushState(readPushEnv(false)).kind);
-    });
-    return () => { cancelled = true; };
-  }, []);
-  const onTogglePush = useCallback(() => {
-    setPushBusy(true);
-    const next = pushKind === "on" ? disablePush() : enablePush();
-    next.then((s) => setPushKind(s.kind)).finally(() => setPushBusy(false));
-  }, [pushKind]);
-
   return (
     <div className="screen screen-home">
       {!mobile && (
-        <AppTopBar actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename}
+        <AppTopBar actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} pushKind={pushKind}
           action={<button className="btn btn-primary" onClick={onNewBoard}>{Icons.plus(16)} New board</button>} />
       )}
       {/* On a phone the bar is the shell's, mounted once above the push stack: see TopBar.tsx. */}
@@ -669,46 +721,9 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
             })}
           </>
         )}
-
-        <section className="settings">
-          <PushSettingsRow kind={pushKind} busy={pushBusy} onToggle={onTogglePush} />
-        </section>
       </div>
     </div>
   );
-}
-
-/**
- * One row at the foot of Home. It says what is actually wrong rather than "unsupported",
- * which is the failure mode that would make this feature look broken to the person it is for.
- * `blocked`/`needs-install`/`insecure`/`unsupported` have no button: `requestPermission`
- * cannot recover from `denied`, and none of the other three is a permission problem to retry.
- */
-function PushSettingsRow({ kind, busy, onToggle }: { kind: PushState["kind"]; busy: boolean; onToggle: () => void }) {
-  switch (kind) {
-    case "on":
-      return (
-        <>
-          <p>Notifications are on for this device.</p>
-          <button className="btn" onClick={onToggle} disabled={busy}>Turn off</button>
-        </>
-      );
-    case "off":
-      return (
-        <>
-          <button className="btn btn-primary" onClick={onToggle} disabled={busy}>Turn on notifications</button>
-          <p className="muted">Get a notification when someone posts in a channel, or when a card needs you.</p>
-        </>
-      );
-    case "blocked":
-      return <p className="muted">Notifications are blocked. Turn them back on in your browser or device settings.</p>;
-    case "needs-install":
-      return <p className="muted">Add flock to your Home Screen — Share → Add to Home Screen — then turn notifications on from there.</p>;
-    case "insecure":
-      return <p className="muted">Notifications need a secure connection. Open flock over HTTPS, or on localhost.</p>;
-    case "unsupported":
-      return <p className="muted">This browser doesn't support notifications.</p>;
-  }
 }
 
 /** A bare clock: re-renders on an interval so `timeAgo` and `isActive` keep up with time. */
