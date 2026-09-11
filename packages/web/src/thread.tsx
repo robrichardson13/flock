@@ -271,6 +271,39 @@ const REACTION_PALETTE = ["👍", "👎", "❤️", "🎉", "👀", "✅", "🤔
 function ReactionPicker({ isMine, onPick }: { isMine: (emoji: string) => boolean; onPick: (emoji: string) => void }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  // The popover always opens anchored `left: 0` in CSS (see styles.css), which is correct
+  // for a left-aligned bubble but, on an own (right-aligned) message, can put its box mostly
+  // or entirely past the right edge of a phone-width viewport — the verifier's #4 repro at
+  // 400px, where the wrap sits far enough right that `left: 0` alone pushed 🤔 clean off
+  // screen. Rather than a CSS anchor keyed to "mine" (the wrap's own position within its
+  // bubble isn't reliably at either edge — a short reaction row can sit anywhere the bubble's
+  // content happens to end), measure the rendered box each time it opens and nudge it back
+  // inside the viewport with a `translateX`, whichever direction it overflowed.
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    if (!open) {
+      setShift(0);
+      return;
+    }
+    const el = popRef.current;
+    if (!el) return;
+    const margin = 16;
+    // `getBoundingClientRect` reports the box's actual on-screen position, transform and
+    // all, so comparing it to the viewport needs no separate tracking of the shift already
+    // applied — this recomputes correctly on resize too, not just on open.
+    const measure = () => {
+      const rect = el.getBoundingClientRect();
+      const overRight = rect.right - (window.innerWidth - margin);
+      const overLeft = margin - rect.left;
+      if (overRight > 0) setShift((s) => s - overRight);
+      else if (overLeft > 0) setShift((s) => s + overLeft);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -300,7 +333,12 @@ function ReactionPicker({ isMine, onPick }: { isMine: (emoji: string) => boolean
         {Icons.plus(10)}
       </button>
       {open && (
-        <div className="reaction-picker" role="menu">
+        <div
+          ref={popRef}
+          className="reaction-picker"
+          role="menu"
+          style={shift ? { transform: `translateX(${shift}px)` } : undefined}
+        >
           {REACTION_PALETTE.map((emoji) => (
             <button
               key={emoji}
@@ -340,6 +378,7 @@ export function MessageReactions({ reactions, viewer, onToggle }: { reactions: r
             type="button"
             className={`reaction-chip${mine ? " mine" : ""}`}
             title={r.actors.join(", ")}
+            aria-label={`${r.emoji} ${r.count}: ${r.actors.join(", ")}`}
             onClick={() => onToggle(r.emoji, mine)}
           >
             <span aria-hidden>{r.emoji}</span>
