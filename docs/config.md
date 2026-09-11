@@ -45,7 +45,7 @@ than a setting.
 
 | Env var | Default | What it does |
 | --- | --- | --- |
-| `FLOCK_VAPID_PUBLIC_KEY` + `FLOCK_VAPID_PRIVATE_KEY` | none | Set both to skip `vapid.json` entirely and use these keys instead. For a deploy with no durable disk (e.g. Railway), where a generated file would be lost — and every subscription silently invalidated — on each redeploy. |
+| `FLOCK_VAPID_PUBLIC_KEY` + `FLOCK_VAPID_PRIVATE_KEY` | none | Set both to skip `vapid.json` entirely and use these keys instead. For a deploy with no durable disk, where a generated file would be lost — and every subscription silently invalidated — on each redeploy. |
 | `FLOCK_VAPID_SUBJECT` | `https://github.com/robrichardson13/flock` | The VAPID JWT's contact subject. Must be an `https:` URL or a `mailto:` URI that resolves for real — APNs rejects a placeholder like `mailto:flock@localhost` with 403 `BadJwtToken`. |
 | `FLOCK_NO_PUSH` | unset | `1` turns off the push pump and VAPID key generation entirely; `GET /api/push/key` then reports `{ enabled: false }`. |
 

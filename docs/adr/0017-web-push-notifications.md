@@ -77,8 +77,8 @@ They are a property of the server deployment, not of the board data. The databas
 worktrees and can be swapped for an isolated one (`--isolated`, `FLOCK_DB`); the keys must not move
 when it does, or every subscribed device silently dies. `~/.flock` is already where `run/`,
 `logs/`, `update.json`, `skill.json` and `config.json` live, and it already follows `FLOCK_HOME`.
-The env override exists for a deployment with no durable disk — Railway being the concrete case —
-where a generated file is lost on every redeploy.
+The env override exists for a deployment with no durable disk, where a generated file is lost on
+every redeploy.
 
 The subject defaults to `https://github.com/robrichardson13/flock`, not a `mailto:`. It has to be a
 real, externally resolvable `https:` URL or `mailto:` URI: APNs rejects a placeholder such as
@@ -163,10 +163,11 @@ the truth is "add it to your Home Screen and it will work", so the install check
 
 - **iOS users must Add to Home Screen.** There is no prompt for it and no way around it. The UI
   explains it; nothing else can.
-- **Notifications need HTTPS or `localhost`.** Rob's Railway deployment qualifies; the LAN and
-  Tailscale `http://` URLs that `flock up` prints (ADR 0015) do not, and a service worker will not
-  register there at all. Someone who lives on the Tailscale URL gets no notifications, and the row
-  tells them why. Making those URLs HTTPS is a separate problem and not one this ADR opens.
+- **Notifications need a secure context: `localhost` or any HTTPS origin.** The LAN and
+  Tailscale `http://` URLs that `flock up` prints (ADR 0015) do not qualify, and a service worker
+  will not register there at all. Someone who lives on the Tailscale URL gets no notifications,
+  and the row tells them why. Making those URLs HTTPS is a separate problem and not one this ADR
+  opens.
 - **Regenerating or losing the VAPID keys invalidates every subscription.** Devices then fail with
   403 and are pruned on the next send; each has to be re-enabled by hand. On an ephemeral
   filesystem, set `FLOCK_VAPID_PUBLIC_KEY`/`FLOCK_VAPID_PRIVATE_KEY` or this happens on every
@@ -194,8 +195,9 @@ the truth is "add it to your Home Screen and it will work", so the install check
 object is handled by Safari with no service worker at all, and degrades cleanly on older browsers,
 so it looked close to free. It is not usable here: its `navigate` member requires an absolute URL,
 and the push sender has no reliable idea what flock's public origin is. By ADR 0015 one server
-answers on loopback, on every LAN address, on a Tailscale name and on Railway simultaneously, and
-the push pump runs outside any HTTP request that could tell it which one the subscriber used. A
+answers on loopback, on every LAN address, on a Tailscale name and on a configured https URL
+simultaneously, and the push pump runs outside any HTTP request that could tell it which one the
+subscriber used. A
 hash fragment resolved by the service worker against its own origin is the only form of route that
 is correct for every subscriber. Revisit if an explicit public-origin setting ever exists.
 

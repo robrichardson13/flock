@@ -14,7 +14,7 @@ const DEFAULT_SUBJECT = "https://github.com/robrichardson13/flock";
 /**
  * The server's VAPID identity. Resolution order:
  *   1. FLOCK_VAPID_PUBLIC_KEY + FLOCK_VAPID_PRIVATE_KEY (both, or neither) — for a deploy with
- *      no durable disk, e.g. Railway, where a generated file would be lost on every redeploy and
+ *      no durable disk, where a generated file would be lost on every redeploy and
  *      silently invalidate every subscription.
  *   2. `<home>/vapid.json`, if it parses and has both keys.
  *   3. Generated with webpush.generateVAPIDKeys() and written to `<home>/vapid.json` with mode

@@ -222,7 +222,7 @@ export interface VapidKeys { publicKey: string; privateKey: string; subject: str
 /**
  * The server's VAPID identity. Resolution order:
  *   1. FLOCK_VAPID_PUBLIC_KEY + FLOCK_VAPID_PRIVATE_KEY (both, or neither) — for a deploy with
- *      no durable disk, e.g. Railway, where a generated file would be lost on every redeploy and
+ *      no durable disk, where a generated file would be lost on every redeploy and
  *      silently invalidate every subscription.
  *   2. `<home>/vapid.json`, if it parses and has both keys.
  *   3. Generated with webpush.generateVAPIDKeys() and written to `<home>/vapid.json` with mode
@@ -651,9 +651,9 @@ testable and are not faked. They are card #5's manual iOS checklist.
 
 ### 4.4 Card #5's manual checklist
 
-1. Serve over HTTPS (Railway) or `localhost`. A Tailscale/LAN `http://` URL will not register a
-   worker — confirm the row says "insecure" there. Note that the phone cannot use the Mac's
-   `localhost`: the iPhone steps below need the HTTPS deployment, not a dev server.
+1. Serve over a secure context: `localhost` or any HTTPS origin. A Tailscale/LAN `http://` URL
+   will not register a worker — confirm the row says "insecure" there. Note that the phone cannot
+   use the Mac's `localhost`: the iPhone steps below need an HTTPS origin, not a dev server.
 2. iPhone Safari, plain tab: the row says *Add to Home Screen*.
 3. Add to Home Screen, open the installed app, tap "Turn on notifications", accept the iOS prompt.
 4. `POST /api/push/test` (or the UI's own test affordance) → a banner arrives.
