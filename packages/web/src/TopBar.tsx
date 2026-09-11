@@ -12,7 +12,7 @@ import {
 import type { Route } from "./App.tsx";
 import type { Card, TeamMember } from "./api.ts";
 import { Brand, Mark } from "./Mark.tsx";
-import { Avatar, Icons, TeamStack } from "./ui.tsx";
+import { ActionSheet, Avatar, Icons, TeamStack } from "./ui.tsx";
 
 /**
  * The phone's top bar, mounted once above the push stack.
@@ -192,16 +192,21 @@ export function topBarShape(hasBoard: boolean, hasCard: boolean, cardSlotHeld: b
  * or the title from the cached boards list — so a board opened cold names itself before the
  * snapshot lands, exactly as the skeleton's own bar used to.
  */
-export function TopBar({ route, actor, boardLabel, onNewBoard, onRename }: {
+export function TopBar({ route, actor, boardLabel, onNewBoard, onRename, onOpenNotifications }: {
   route: Route;
   actor: string;
   boardLabel?: string;
   onNewBoard: () => void;
   onRename: () => void;
+  /** Identity action sheet's second entry: opens the push notifications panel (#5, card C). */
+  onOpenNotifications: () => void;
 }) {
   const { titles, boardTeam, slots } = useContext(ViewCtx);
   const shape = topBarShape(!!route.board, route.card !== undefined, titles.card !== undefined);
   const ref = useTopBarHeight();
+  // The phone avatar used to fire `onRename` directly; it is now the second door to
+  // notifications (§1.3), so it opens an action sheet with both entries instead.
+  const [identityOpen, setIdentityOpen] = useState(false);
 
   let content: ReactNode;
   if (shape === "home") {
@@ -209,9 +214,18 @@ export function TopBar({ route, actor, boardLabel, onNewBoard, onRename }: {
       <>
         <span className="topbar-title brand-name"><Brand size={22} /></span>
         <button className="icon-btn" onClick={onNewBoard} aria-label="New board">{Icons.plus()}</button>
-        <button className="icon-btn" onClick={onRename} aria-label={`Signed in as ${actor}. Change name`}>
+        <button className="icon-btn" onClick={() => setIdentityOpen(true)} aria-label={`Signed in as ${actor}. Account menu`}>
           <Avatar name={actor || "?"} kind="human" size={28} />
         </button>
+        <ActionSheet
+          open={identityOpen}
+          onClose={() => setIdentityOpen(false)}
+          title={actor || "Account"}
+          actions={[
+            { label: "Change your name", icon: Icons.person(20), onSelect: onRename },
+            { label: "Notifications", icon: Icons.bell(20), onSelect: onOpenNotifications },
+          ]}
+        />
       </>
     );
   } else if (shape === "card") {

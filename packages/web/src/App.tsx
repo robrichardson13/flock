@@ -474,112 +474,12 @@ function Shell() {
     }
   };
 
-  const errorBanner = error && (
-    <div className="banner banner-error">Can't reach the API. Start it with <code>flock serve</code> or <code>flock up</code>.</div>
-  );
-  // A dropped stream is not worth a banner: a hairline at the top edge, nothing more.
-  const streamHint = down && <div className="stream-hint" role="status" aria-label="Reconnecting" />;
-
-  // What the shared bar calls this board before the snapshot lands: the cached boards list
-  // if it has it, otherwise the slug from the route — the same fallback the board skeleton's
-  // own bar used, so a cold load still paints a named bar on the first frame (#40/#43).
-  const boardLabel = route.board
-    ? boards.find((b) => b.slug === route.board || b.id === route.board)?.title ?? route.board
-    : undefined;
-
-  if (mobile) {
-    // Home and a board are two levels of one stack: the push layer keeps whichever you are
-    // leaving on screen, sliding, while the one you asked for comes in over it.
-    return (
-      <div className="app app-mobile">
-        {/* The one top bar, above the push stack and above the banners: it is the same DOM
-            node on Home, on a board and on a card, so navigating swaps its contents in place
-            instead of sliding a second bar past the first, and its y origin never moves. */}
-        <TopBar route={route} actor={actor} boardLabel={boardLabel} onNewBoard={onNewBoard} onRename={onRename} />
-        {streamHint}
-        {errorBanner}
-        <PushStack
-          routeKey={route.board ?? "#home"}
-          depth={route.board ? 1 : 0}
-          under={route.board && peek ? <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} /> : null}
-        >
-          {route.board ? (
-            // Inside a board, every avatar drawn below opens that actor's view (#49).
-            <ActorLinks boardRef={route.board}>
-              <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} />
-            </ActorLinks>
-          ) : (
-            <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} />
-          )}
-        </PushStack>
-        {newBoardDialog}
-      </div>
-    );
-  }
-
-  // One desktop shell for both routes (P1.3): no sidebar on either, one top bar, one
-  // content box. The index needs no board nav because the table below *is* the boards list;
-  // a board reaches its neighbours through the bar's Boards switcher.
-  if (!route.board) {
-    return (
-      <div className="app app-desktop">
-        {streamHint}
-        <main className="main">
-          {errorBanner}
-          <Home boards={boards} needs={needs} actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} />
-        </main>
-        {newBoardDialog}
-      </div>
-    );
-  }
-
-  return (
-    <div className="app app-desktop">
-      {streamHint}
-      <main className="main">
-        {errorBanner}
-        {/* `route.board` is set: the index returned its own shell above. */}
-        <ActorLinks boardRef={route.board}>
-          <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} />
-        </ActorLinks>
-      </main>
-      {newBoardDialog}
-    </div>
-  );
-}
-
-/** What Home caches between visits: exactly the two payloads its own fetch produces. */
-interface HomeSnapshot { boards: BoardSummary[]; needs: NeedsHuman[] }
-
-function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswered, loaded, seeded }: { boards: BoardSummary[]; needs: NeedsHuman[]; actor: string; dbPath?: string; onNewBoard: () => void; onRename: () => void; onAnswered: () => void; loaded: boolean; seeded: boolean }) {
-  const mobile = useIsMobile();
-  // Ages, live dots and the active/idle split decay with time, not only with events: a tick
-  // keeps them honest on a board nobody has touched for a while.
-  const now = useNow(30_000);
-  // Seeded rows are as good a baseline as fetched ones: with the cache on screen from the
-  // first frame, what should animate when the fetch lands is the delta since you last
-  // looked, not the whole list.
-  const ready = loaded || seeded;
-  const newIds = useNewIds([...needs.map((n) => `q:${n.id}`), ...boards.map((b) => b.id)], ready);
-  // #5: Home remounts fresh every time the reader lands here — leaving a board and coming
-  // back, not just the very first visit — so its rows get the same one-time stagger a
-  // genuine arrival gets, keyed on `ready` so it fires the instant the list actually has
-  // something to show (cached rows on the first frame, or the fetch that follows a cold one).
-  const entranceIds = useEntranceIds([...needs.map((n) => `q:${n.id}`), ...boards.map((b) => b.id)], ready);
-  const entrants = new Set([...newIds, ...entranceIds]);
-  // A question arriving above the board list must not push what the reader is on.
-  const anchorRef = useAnchorScroll([...needs.map((n) => n.id), ...boards.map((b) => b.id)].join(" "));
-  // Each list takes its own turn: a burst of boards arrives one row after another, at
-  // `STAGGER_SLOW_MS` rather than the default — the human's read of the first pass was "a
-  // little quick but nice", so the landing (and only the landing) runs 1.3x slower, the
-  // duration half of that being the `.screen-body.home .enter` rule in styles.css.
-  const needOrders = enterOrders(needs.map((n) => `q:${n.id}`), entrants);
-  const boardOrders = enterOrders(boards.map((b) => b.id), entrants);
-  const { active: activeBoards, idle: idleBoards } = groupBoardsByActivity(boards, now);
-
-  // Read this device's own state on arrival — never inside a click handler, so the enable
-  // button's onClick can call enablePush()/disablePush() as the very first thing it does, with
-  // nothing awaited before Notification.requestPermission() breaks the iOS gesture chain.
+  // The panel's open state, and this device's push state, live here rather than in Home
+  // (#5, card C) so a board screen's avatar menu/action sheet can reach the same panel Home's
+  // row opens — one panel, two entrances, reachable from either route. Read on arrival, never
+  // inside a click handler, so the enable button's onClick can call enablePush()/disablePush()
+  // as the very first thing it does, with nothing awaited before
+  // `Notification.requestPermission()` breaks the iOS gesture chain.
   const [pushKind, setPushKind] = useState<PushState["kind"]>("off");
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
@@ -616,11 +516,138 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
       .catch((e) => setPushError((e as Error).message))
       .finally(() => setPushBusy(false));
   }, []);
+  const onOpenNotifications = useCallback(() => setPushPanelOpen(true), []);
+  const pushPanel = (
+    <PushPanel
+      open={pushPanelOpen}
+      onClose={() => setPushPanelOpen(false)}
+      state={{ kind: pushKind } as PushState}
+      busy={pushBusy}
+      error={pushError}
+      onEnable={onEnablePush}
+      onDisable={onDisablePush}
+    />
+  );
+
+  const errorBanner = error && (
+    <div className="banner banner-error">Can't reach the API. Start it with <code>flock serve</code> or <code>flock up</code>.</div>
+  );
+  // A dropped stream is not worth a banner: a hairline at the top edge, nothing more.
+  const streamHint = down && <div className="stream-hint" role="status" aria-label="Reconnecting" />;
+
+  // What the shared bar calls this board before the snapshot lands: the cached boards list
+  // if it has it, otherwise the slug from the route — the same fallback the board skeleton's
+  // own bar used, so a cold load still paints a named bar on the first frame (#40/#43).
+  const boardLabel = route.board
+    ? boards.find((b) => b.slug === route.board || b.id === route.board)?.title ?? route.board
+    : undefined;
+
+  if (mobile) {
+    // Home and a board are two levels of one stack: the push layer keeps whichever you are
+    // leaving on screen, sliding, while the one you asked for comes in over it.
+    return (
+      <div className="app app-mobile">
+        {/* The one top bar, above the push stack and above the banners: it is the same DOM
+            node on Home, on a board and on a card, so navigating swaps its contents in place
+            instead of sliding a second bar past the first, and its y origin never moves. */}
+        <TopBar route={route} actor={actor} boardLabel={boardLabel} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} />
+        {streamHint}
+        {errorBanner}
+        <PushStack
+          routeKey={route.board ?? "#home"}
+          depth={route.board ? 1 : 0}
+          under={route.board && peek ? <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} pushBusy={pushBusy} pushError={pushError} onEnablePush={onEnablePush} onOpenNotifications={onOpenNotifications} /> : null}
+        >
+          {route.board ? (
+            // Inside a board, every avatar drawn below opens that actor's view (#49).
+            <ActorLinks boardRef={route.board}>
+              <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} />
+            </ActorLinks>
+          ) : (
+            <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} pushBusy={pushBusy} pushError={pushError} onEnablePush={onEnablePush} onOpenNotifications={onOpenNotifications} />
+          )}
+        </PushStack>
+        {newBoardDialog}
+        {pushPanel}
+      </div>
+    );
+  }
+
+  // One desktop shell for both routes (P1.3): no sidebar on either, one top bar, one
+  // content box. The index needs no board nav because the table below *is* the boards list;
+  // a board reaches its neighbours through the bar's Boards switcher.
+  if (!route.board) {
+    return (
+      <div className="app app-desktop">
+        {streamHint}
+        <main className="main">
+          {errorBanner}
+          <Home boards={boards} needs={needs} actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} pushBusy={pushBusy} pushError={pushError} onEnablePush={onEnablePush} onOpenNotifications={onOpenNotifications} />
+        </main>
+        {newBoardDialog}
+        {pushPanel}
+      </div>
+    );
+  }
+
+  return (
+    <div className="app app-desktop">
+      {streamHint}
+      <main className="main">
+        {errorBanner}
+        {/* `route.board` is set: the index returned its own shell above. */}
+        <ActorLinks boardRef={route.board}>
+          <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} />
+        </ActorLinks>
+      </main>
+      {newBoardDialog}
+      {pushPanel}
+    </div>
+  );
+}
+
+/** What Home caches between visits: exactly the two payloads its own fetch produces. */
+interface HomeSnapshot { boards: BoardSummary[]; needs: NeedsHuman[] }
+
+function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswered, loaded, seeded, pushKind, pushBusy, pushError, onEnablePush, onOpenNotifications }: {
+  boards: BoardSummary[]; needs: NeedsHuman[]; actor: string; dbPath?: string; onNewBoard: () => void; onRename: () => void; onAnswered: () => void; loaded: boolean; seeded: boolean;
+  /** This device's push state and the row's `Turn on`/panel-opening callbacks — owned by
+   *  `Shell` (#5, card C) so the same panel is reachable from a board screen too. */
+  pushKind: PushState["kind"];
+  pushBusy: boolean;
+  pushError: string | null;
+  onEnablePush: () => void;
+  onOpenNotifications: () => void;
+}) {
+  const mobile = useIsMobile();
+  // Ages, live dots and the active/idle split decay with time, not only with events: a tick
+  // keeps them honest on a board nobody has touched for a while.
+  const now = useNow(30_000);
+  // Seeded rows are as good a baseline as fetched ones: with the cache on screen from the
+  // first frame, what should animate when the fetch lands is the delta since you last
+  // looked, not the whole list.
+  const ready = loaded || seeded;
+  const newIds = useNewIds([...needs.map((n) => `q:${n.id}`), ...boards.map((b) => b.id)], ready);
+  // #5: Home remounts fresh every time the reader lands here — leaving a board and coming
+  // back, not just the very first visit — so its rows get the same one-time stagger a
+  // genuine arrival gets, keyed on `ready` so it fires the instant the list actually has
+  // something to show (cached rows on the first frame, or the fetch that follows a cold one).
+  const entranceIds = useEntranceIds([...needs.map((n) => `q:${n.id}`), ...boards.map((b) => b.id)], ready);
+  const entrants = new Set([...newIds, ...entranceIds]);
+  // A question arriving above the board list must not push what the reader is on.
+  const anchorRef = useAnchorScroll([...needs.map((n) => n.id), ...boards.map((b) => b.id)].join(" "));
+  // Each list takes its own turn: a burst of boards arrives one row after another, at
+  // `STAGGER_SLOW_MS` rather than the default — the human's read of the first pass was "a
+  // little quick but nice", so the landing (and only the landing) runs 1.3x slower, the
+  // duration half of that being the `.screen-body.home .enter` rule in styles.css.
+  const needOrders = enterOrders(needs.map((n) => `q:${n.id}`), entrants);
+  const boardOrders = enterOrders(boards.map((b) => b.id), entrants);
+  const { active: activeBoards, idle: idleBoards } = groupBoardsByActivity(boards, now);
 
   return (
     <div className="screen screen-home">
       {!mobile && (
-        <AppTopBar actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename}
+        <AppTopBar actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications}
           action={<button className="btn btn-primary" onClick={onNewBoard}>{Icons.plus(16)} New board</button>} />
       )}
       {/* On a phone the bar is the shell's, mounted once above the push stack: see TopBar.tsx. */}
@@ -695,25 +722,19 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
           </>
         )}
 
-        {/* Card C moves this under Home's own section-head layout and wires the panel from the
-            avatar menu too; here it is rendered directly so the row is reviewable on its own. */}
+        {/* Its own `Notifications` section head, in the same gutter as Boards/Active/Idle
+            (§1.1, §8) — the foot of the boards list, not a settings surface. The panel itself
+            is `Shell`'s: this device's own state belongs to the app, not to Home, so the same
+            row/menu/action-sheet trio all open one panel regardless of which screen they're on
+            (§1.3, card C). */}
         <PushRow
           state={{ kind: pushKind } as PushState}
           busy={pushBusy}
           error={pushError}
           onEnable={onEnablePush}
-          onOpen={() => setPushPanelOpen(true)}
+          onOpen={onOpenNotifications}
         />
       </div>
-      <PushPanel
-        open={pushPanelOpen}
-        onClose={() => setPushPanelOpen(false)}
-        state={{ kind: pushKind } as PushState}
-        busy={pushBusy}
-        error={pushError}
-        onEnable={onEnablePush}
-        onDisable={onDisablePush}
-      />
     </div>
   );
 }

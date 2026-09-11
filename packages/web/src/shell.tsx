@@ -14,7 +14,7 @@ import { Avatar, Icons, Menu, useIsMobile } from "./ui.tsx";
  * inside the same `--shell-max` box as the page below, so Home and a board share a left
  * edge (F10).
  */
-export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoard, onRename, action, trailing }: {
+export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoard, onRename, onOpenNotifications, action, trailing }: {
   /** Present on a board: the switcher that reaches another board without going Home. */
   boards?: BoardSummary[];
   activeBoard?: string;
@@ -23,6 +23,8 @@ export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoar
   dbPath?: string;
   onNewBoard: () => void;
   onRename: () => void;
+  /** Identity menu's second entry: opens the push notifications panel (#5, card C). */
+  onOpenNotifications: () => void;
   /** The route's primary action: New board, or New card. */
   action?: ReactNode;
   /** Anything that belongs after it — on a board, the "⋯" menu. */
@@ -70,10 +72,33 @@ export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoar
         )}
         <span className="grow" />
         {action}
-        <button className="me-btn me-btn-inline" onClick={onRename} title="Change your name">
-          <Avatar name={actor || "?"} kind="human" size={22} quiet={!mobile} />
-          <span className="ellipsis">{actor || "…"}</span>
-        </button>
+        {/* The identity button used to be a single-purpose rename trigger; it is now the
+            second door to notifications (§1.3), so it opens a menu instead of firing
+            `onRename` directly. Rename stays its first, unchanged entry. */}
+        <Menu
+          label={`Signed in as ${actor || "?"}`}
+          align="right"
+          triggerClass="me-btn me-btn-inline"
+          trigger={(
+            <>
+              <Avatar name={actor || "?"} kind="human" size={22} quiet={!mobile} />
+              <span className="ellipsis">{actor || "…"}</span>
+            </>
+          )}
+        >
+          {(close) => (
+            <>
+              <button role="menuitem" className="menu-item" onClick={() => { close(); onRename(); }}>
+                {Icons.person(16)}
+                <span>Change your name</span>
+              </button>
+              <button role="menuitem" className="menu-item" onClick={() => { close(); onOpenNotifications(); }}>
+                {Icons.bell(16)}
+                <span>Notifications</span>
+              </button>
+            </>
+          )}
+        </Menu>
         {dbPath && <span className="muted tiny ellipsis home-db" title={dbPath}>{dbPath.replace(/^.*\/(?=[^/]+\/[^/]+$)/, "…/")}</span>}
         {trailing}
       </div>
