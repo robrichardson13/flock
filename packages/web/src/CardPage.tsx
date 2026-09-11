@@ -506,6 +506,8 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
           const tempId = nextTempId();
           const optimistic: Comment = {
             id: tempId, cardId: card.id, author: me, authorKind: "human", kind: "comment",
+            // `num` is 0 until the server allocates one: an unsent comment has no ref to react to.
+            num: 0, cardNum: card.num, reactions: [],
             body: t, createdAt: new Date().toISOString(), attachments,
           };
           setPendingComments((prev) => [...prev, { tempId, entry: optimistic, sending: true, draftText: t, draftAttachmentIds: attachmentIds }]);

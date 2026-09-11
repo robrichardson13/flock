@@ -29,6 +29,7 @@ import {
   type Event,
   type EventType,
   type Message,
+  type CommentReactionResult,
   type Reaction,
   type ReactionResult,
   type TeamMember,
@@ -63,6 +64,27 @@ export function messageRef(num: number): string {
   return `m${num}`;
 }
 
+/**
+ * How a card comment is spelled everywhere a human or an agent sees it: `4.2`, the second
+ * comment on card #4. A comment is numbered within its card, not the board. See ADR 0019.
+ */
+export function commentRef(cardNum: number, num: number): string {
+  return `${cardNum}.${num}`;
+}
+
+/**
+ * The inverse of `commentRef`, for a CLI or a route that takes one token: `"4.2"` (or `"#4.2"`)
+ * becomes `{ cardNum: 4, num: 2 }`. Null when the token is not a comment ref, so a caller can
+ * fall through to whatever else it accepts.
+ */
+export function parseCommentRef(ref: string): { cardNum: number; num: number } | null {
+  const m = /^#?(\d+)\.(\d+)$/.exec((ref ?? "").trim());
+  if (!m) return null;
+  const cardNum = Number(m[1]);
+  const num = Number(m[2]);
+  return cardNum > 0 && num > 0 ? { cardNum, num } : null;
+}
+
 /** Longest emoji accepted, in code points: enough for a flag or a ZWJ family, short of a sentence. */
 export const MAX_EMOJI_LENGTH = 12;
 
@@ -87,9 +109,18 @@ const GIST_LENGTH = 120;
  * standing in for the body when the message is nothing but images.
  */
 export function messageGist(message: Pick<Message, "body" | "attachments">): string {
-  const body = message.body.replace(/\s+/g, " ").trim();
+  return gistOf(message);
+}
+
+/** The same precis for a card comment, which carries a body and images the same way. */
+export function commentGist(comment: Pick<Comment, "body" | "attachments">): string {
+  return gistOf(comment);
+}
+
+function gistOf(it: { body: string; attachments: unknown[] }): string {
+  const body = it.body.replace(/\s+/g, " ").trim();
   if (body) return body.length > GIST_LENGTH ? `${body.slice(0, GIST_LENGTH - 1)}\u2026` : body;
-  const n = message.attachments.length;
+  const n = it.attachments.length;
   return n === 0 ? "" : n === 1 ? "(image)" : `(${n} images)`;
 }
 
@@ -107,6 +138,24 @@ function reactionEventData(emoji: string, message: Message): Record<string, unkn
     messageAuthorKind: message.authorKind,
     gist: messageGist(message),
     count: message.reactions.find((r) => r.emoji === emoji)?.count ?? 0,
+  };
+}
+
+/**
+ * The `data` of `comment.reacted` / `comment.unreacted`, the comment twin of the message shape
+ * above: the card the comment is on, the comment's ref, who wrote it, and a gist of what it
+ * said. The event itself already carries the card number, like every comment event.
+ */
+function commentReactionEventData(emoji: string, comment: Comment): Record<string, unknown> {
+  return {
+    emoji,
+    card: comment.cardNum,
+    num: comment.num,
+    ref: commentRef(comment.cardNum, comment.num),
+    commentAuthor: comment.author,
+    commentAuthorKind: comment.authorKind,
+    gist: commentGist(comment),
+    count: comment.reactions.find((r) => r.emoji === emoji)?.count ?? 0,
   };
 }
 
@@ -134,7 +183,7 @@ type CardRow = {
   created_at: string; updated_at: string; closed_at: string | null;
   held_at: string | null; held_by: string | null; hold_reason: string | null;
 };
-type CommentRow = { id: string; card_id: string; author: string; author_kind: string; kind: string; body: string; created_at: string };
+type CommentRow = { id: string; card_id: string; num: number; author: string; author_kind: string; kind: string; body: string; created_at: string };
 type MessageRow = { id: string; board_id: string; num: number; author: string; author_kind: string; body: string; created_at: string };
 type AttachmentRow = {
   id: string; board_id: string; message_id: string | null; comment_id: string | null; author: string; author_kind: string;
@@ -570,6 +619,8 @@ export class Flock {
     this.touchActor(actor);
     const cards = (this.db.query("SELECT COUNT(*) AS n FROM cards WHERE board_id = ?").get(b.id) as { n: number }).n;
     this.db.transaction(() => {
+      this.db.query("DELETE FROM comment_reactions WHERE board_id = ?").run(b.id);
+      this.db.query("DELETE FROM reactions WHERE board_id = ?").run(b.id);
       this.db.query("DELETE FROM comments WHERE card_id IN (SELECT id FROM cards WHERE board_id = ?)").run(b.id);
       this.db.query("DELETE FROM card_blockers WHERE card_id IN (SELECT id FROM cards WHERE board_id = ?)").run(b.id);
       this.db.query("DELETE FROM card_blockers WHERE blocker_id IN (SELECT id FROM cards WHERE board_id = ?)").run(b.id);
@@ -794,6 +845,7 @@ export class Flock {
     const closed = CLOSED_STATUSES.includes(status);
     const ts = now();
     let commentId: string | null = null;
+    let commentNum: number | null = null;
     this.db.transaction(() => {
       this.db
         .query(
@@ -808,9 +860,10 @@ export class Flock {
         .run(status, closed ? ts : null, status, status, closed ? 1 : 0, closed ? 1 : 0, closed ? 1 : 0, ts, c.id);
       if (reason) {
         commentId = shortId();
+        commentNum = this.nextCommentNum(c.id);
         this.db
-          .query("INSERT INTO comments(id, card_id, author, author_kind, kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-          .run(commentId, c.id, actor.name, actor.kind, "comment", reason, ts);
+          .query("INSERT INTO comments(id, card_id, num, author, author_kind, kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(commentId, c.id, commentNum, actor.name, actor.kind, "comment", reason, ts);
         this.bindAttachments(c.boardId, "comment_id", commentId, attachmentIds);
       }
       // Closing a card also lifts any hold on it: a closed card is not on the frontier, so a
@@ -825,6 +878,8 @@ export class Flock {
         const attachments = commentId ? (this.attachmentsForOwners("comment_id", [commentId]).get(commentId) ?? []) : [];
         this.emit(actor, c.boardId, "comment.posted", c.num, {
           kind: "comment",
+          num: commentNum,
+          ref: commentNum === null ? null : commentRef(c.num, commentNum),
           body: reason,
           attachments: attachmentIds.length,
           attachmentList: attachments.map((a) => ({ id: a.id, mime: a.mime, name: a.name, size: a.size })),
@@ -955,15 +1010,29 @@ export class Flock {
 
   // ---------- comments ----------
 
-  private rowToComment(r: CommentRow, attachments: Attachment[] = []): Comment {
-    return { id: r.id, cardId: r.card_id, author: r.author, authorKind: r.author_kind as Actor["kind"], kind: r.kind as CommentKind, body: r.body, createdAt: r.created_at, attachments };
+  private rowToComment(r: CommentRow, cardNum: number, attachments: Attachment[] = [], reactions: Reaction[] = []): Comment {
+    return {
+      id: r.id,
+      cardId: r.card_id,
+      num: r.num,
+      cardNum,
+      author: r.author,
+      authorKind: r.author_kind as Actor["kind"],
+      kind: r.kind as CommentKind,
+      body: r.body,
+      createdAt: r.created_at,
+      attachments,
+      reactions,
+    };
   }
 
   comments(boardRef: string, ref: string | number): Comment[] {
     const c = this.card(boardRef, ref);
     const rows = this.db.query("SELECT * FROM comments WHERE card_id = ? ORDER BY created_at, rowid").all(c.id) as CommentRow[];
-    const byComment = this.attachmentsForOwners("comment_id", rows.map((r) => r.id));
-    return rows.map((r) => this.rowToComment(r, byComment.get(r.id) ?? []));
+    const ids = rows.map((r) => r.id);
+    const byComment = this.attachmentsForOwners("comment_id", ids);
+    const reactionsByComment = this.reactionsForComments(ids);
+    return rows.map((r) => this.rowToComment(r, c.num, byComment.get(r.id) ?? [], reactionsByComment.get(r.id) ?? []));
   }
 
   /**
@@ -980,11 +1049,13 @@ export class Flock {
     this.touchActor(actor);
     const id = shortId();
     const ts = now();
-    this.db.transaction(() => {
+    const num = this.db.transaction(() => {
+      const n = this.nextCommentNum(c.id);
       this.db
-        .query("INSERT INTO comments(id, card_id, author, author_kind, kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(id, c.id, actor.name, actor.kind, kind, body, ts);
+        .query("INSERT INTO comments(id, card_id, num, author, author_kind, kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, c.id, n, actor.name, actor.kind, kind, body, ts);
       this.bindAttachments(c.boardId, "comment_id", id, ids);
+      return n;
     })();
     this.db.query("UPDATE cards SET updated_at = ? WHERE id = ?").run(ts, c.id);
     this.touchBoard(c.boardId);
@@ -992,12 +1063,14 @@ export class Flock {
     if (kind === "comment" || kind === "resolution") {
       this.emit(actor, c.boardId, "comment.posted", c.num, {
         kind,
+        num,
+        ref: commentRef(c.num, num),
         body,
         attachments: ids.length,
         attachmentList: attachments.map((a) => ({ id: a.id, mime: a.mime, name: a.name, size: a.size })),
       });
     }
-    return this.rowToComment(this.db.query("SELECT * FROM comments WHERE id = ?").get(id) as CommentRow, attachments);
+    return this.rowToComment(this.db.query("SELECT * FROM comments WHERE id = ?").get(id) as CommentRow, c.num, attachments);
   }
 
   // ---------- attachments ----------
@@ -1270,6 +1343,101 @@ export class Flock {
     const message = this.readMessage(row);
     this.emit(actor, b.id, "message.unreacted", null, reactionEventData(e, message));
     return { message, changed: true };
+  }
+
+  // ---------- comment reactions ----------
+
+  /** The next per-card comment number. Called inside the insert transaction, like card nums. */
+  private nextCommentNum(cardId: string): number {
+    return (this.db.query("SELECT COALESCE(MAX(num), 0) + 1 AS n FROM comments WHERE card_id = ?").get(cardId) as { n: number }).n;
+  }
+
+  /**
+   * One comment by its per-card `num` — the only public way to address a comment (ADR 0019).
+   * Not found is `not_found`, so the CLI exits 2 the same way a missing card or message does.
+   */
+  private commentRow(cardId: string, cardNum: number, boardSlug: string, num: number): CommentRow {
+    const n = Math.trunc(Number(num));
+    const row = Number.isFinite(n)
+      ? (this.db.query("SELECT * FROM comments WHERE card_id = ? AND num = ?").get(cardId, n) as CommentRow | null)
+      : null;
+    if (!row) throw new FlockError(`No comment ${commentRef(cardNum, num)} on board "${boardSlug}"`, "not_found");
+    return row;
+  }
+
+  /** Aggregated reactions per comment id, most-used emoji first, ties broken by first use. */
+  private reactionsForComments(commentIds: string[]): Map<string, Reaction[]> {
+    const out = new Map<string, Reaction[]>();
+    if (!commentIds.length) return out;
+    const placeholders = commentIds.map(() => "?").join(",");
+    const rows = this.db
+      .query(`SELECT comment_id, emoji, actor, created_at FROM comment_reactions WHERE comment_id IN (${placeholders}) ORDER BY created_at, rowid`)
+      .all(...commentIds) as { comment_id: string; emoji: string; actor: string; created_at: string }[];
+    for (const r of rows) {
+      const list = out.get(r.comment_id) ?? [];
+      if (!out.has(r.comment_id)) out.set(r.comment_id, list);
+      const existing = list.find((x) => x.emoji === r.emoji);
+      if (existing) {
+        existing.actors.push(r.actor);
+        existing.count = existing.actors.length;
+      } else {
+        list.push({ emoji: r.emoji, count: 1, actors: [r.actor] });
+      }
+    }
+    // Stable: rows already arrive oldest-first, so equal counts keep first-use order.
+    for (const list of out.values()) list.sort((a, b) => b.count - a.count);
+    return out;
+  }
+
+  private readComment(row: CommentRow, cardNum: number): Comment {
+    return this.rowToComment(
+      row,
+      cardNum,
+      this.attachmentsForOwners("comment_id", [row.id]).get(row.id) ?? [],
+      this.reactionsForComments([row.id]).get(row.id) ?? [],
+    );
+  }
+
+  /**
+   * Add `emoji` to comment `num` on card `ref` as `actor`. The message twin of `react`, with the
+   * card in front because a comment is addressed through its card. Idempotent: reacting twice
+   * with the same emoji is a no-op that emits nothing and returns `changed: false`, never an
+   * error. One row per (comment, actor, emoji), so an actor may hold several emoji on one comment.
+   */
+  reactToComment(actor: Actor, boardRef: string, ref: string | number, num: number, emoji: string): CommentReactionResult {
+    const b = this.board(boardRef);
+    const e = normalizeEmoji(emoji);
+    const c = this.card(b.id, ref);
+    const row = this.commentRow(c.id, c.num, b.slug, num);
+    this.touchActor(actor);
+    const already = this.db
+      .query("SELECT 1 AS x FROM comment_reactions WHERE comment_id = ? AND actor = ? AND emoji = ?")
+      .get(row.id, actor.name, e) as { x: number } | null;
+    if (already) return { comment: this.readComment(row, c.num), changed: false };
+    this.db
+      .query("INSERT INTO comment_reactions(board_id, comment_id, actor, actor_kind, emoji, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(b.id, row.id, actor.name, actor.kind, e, now());
+    this.touchBoard(b.id);
+    const comment = this.readComment(row, c.num);
+    this.emit(actor, b.id, "comment.reacted", c.num, commentReactionEventData(e, comment));
+    return { comment, changed: true };
+  }
+
+  /** Remove `actor`'s `emoji` from comment `num` on card `ref`. Idempotent the same way `reactToComment` is. */
+  unreactFromComment(actor: Actor, boardRef: string, ref: string | number, num: number, emoji: string): CommentReactionResult {
+    const b = this.board(boardRef);
+    const e = normalizeEmoji(emoji);
+    const c = this.card(b.id, ref);
+    const row = this.commentRow(c.id, c.num, b.slug, num);
+    this.touchActor(actor);
+    const { changes } = this.db
+      .query("DELETE FROM comment_reactions WHERE comment_id = ? AND actor = ? AND emoji = ?")
+      .run(row.id, actor.name, e);
+    if (!changes) return { comment: this.readComment(row, c.num), changed: false };
+    this.touchBoard(b.id);
+    const comment = this.readComment(row, c.num);
+    this.emit(actor, b.id, "comment.unreacted", c.num, commentReactionEventData(e, comment));
+    return { comment, changed: true };
   }
 
   // ---------- decisions ----------

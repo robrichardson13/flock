@@ -132,6 +132,10 @@ export type CommentKind = "comment" | "question" | "answer" | "resolution";
 export interface Comment {
   id: string;
   cardId: string;
+  /** Per-card sequential number; with `cardNum` it spells the ref `4.2`. See ADR 0019. */
+  num: number;
+  /** The number of the card this comment is on — the first half of its ref. */
+  cardNum: number;
   author: string;
   authorKind: ActorKind;
   kind: CommentKind;
@@ -139,6 +143,8 @@ export interface Comment {
   createdAt: string;
   /** Images posted with the comment, in order. Metadata only, never bytes. */
   attachments: Attachment[];
+  /** Most-used emoji first, ties broken by first use. Empty when nobody has reacted. */
+  reactions: Reaction[];
 }
 
 /** Metadata only — never the image bytes. */
@@ -160,7 +166,7 @@ export interface Attachment {
 }
 
 /**
- * One emoji on one message, already aggregated for display: the web renders a row of these
+ * One emoji on one message or comment, already aggregated for display: the web renders a row of these
  * without further grouping. `actors` is every actor who used this emoji, oldest reaction first;
  * a client decides "did I react" by looking for its own name in it.
  */
@@ -188,6 +194,13 @@ export interface Message {
 /** What `react`/`unreact` return: the message as it now stands, plus whether anything changed. */
 export interface ReactionResult {
   message: Message;
+  /** False when the reaction was already there (react) or already absent (unreact); no event was emitted. */
+  changed: boolean;
+}
+
+/** What `reactToComment`/`unreactFromComment` return; the comment twin of `ReactionResult`. */
+export interface CommentReactionResult {
+  comment: Comment;
   /** False when the reaction was already there (react) or already absent (unreact); no event was emitted. */
   changed: boolean;
 }
@@ -239,6 +252,8 @@ export type EventType =
   | "message.posted"
   | "message.reacted"
   | "message.unreacted"
+  | "comment.reacted"
+  | "comment.unreacted"
   | "decision.recorded"
   | "decision.archived"
   | "decision.restored";
