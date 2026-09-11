@@ -5,6 +5,7 @@ import { DB_DIRNAME, DB_FILENAME, FlockError, globalDbPath, resolveDbPath } from
 import { CANONICAL_API_PORT, CANONICAL_WEB_PORT, DEFAULT_HOST, REPO_ROOT, advertisedUrls, baseUrl, devUrl, portOffset, resolveCheckout, resolveHost, type Checkout } from "./dev.ts";
 import { flockHome } from "./paths.ts";
 import { isStandalone, version } from "./runtime.ts";
+import { browserPort, establishTailscale, findTailscaleReal, preflightTailscale, preserveRunningTailscale, releaseTailscale, resolveTailscale, spawnRunner, type Runner } from "./tailscale.ts";
 
 /**
  * `flock up|down|restart|status|logs|url`: the daemon, supervised by nothing but a runfile.
@@ -46,6 +47,14 @@ export interface RunInfo {
   startedAt: string;
   url: string;
   version?: string;
+  /** True when this daemon established a `tailscale serve` mount for its browser port (ADR 0019). */
+  tailscale?: boolean;
+  /** The `https://<magicdns>` origin that mount serves. */
+  tailscaleUrl?: string;
+  /** What the mount proxies to: exactly the string passed to `tailscale serve`. Compared against
+   *  on teardown, rather than recomputed, since the daemon may have fallen back onto offset ports
+   *  since the mount was established. */
+  tailscaleTarget?: string;
 }
 
 export interface DaemonOptions {
@@ -60,6 +69,8 @@ export interface DaemonOptions {
   all?: boolean;
   follow?: boolean;
   lines?: number;
+  /** --tailscale / --no-tailscale. Tri-state: undefined means "not specified on this invocation". */
+  tailscale?: boolean;
 }
 
 /** ~/.flock, or FLOCK_HOME. Everything the daemon writes lives under it. Defined in paths.ts so
@@ -121,6 +132,11 @@ export function parseRunInfo(text: string): RunInfo | undefined {
     startedAt: typeof o.startedAt === "string" ? o.startedAt : "",
     url: typeof o.url === "string" ? o.url : baseUrl(host, apiPort),
     version: typeof o.version === "string" ? o.version : undefined,
+    // Flat, tolerant fields (ADR 0019): a pre-0019 runfile has none of them and reads as
+    // tailscale-off, which is what those daemons are.
+    tailscale: o.tailscale === true ? true : undefined,
+    tailscaleUrl: typeof o.tailscaleUrl === "string" && o.tailscaleUrl ? o.tailscaleUrl : undefined,
+    tailscaleTarget: typeof o.tailscaleTarget === "string" && o.tailscaleTarget ? o.tailscaleTarget : undefined,
   };
 }
 
@@ -235,11 +251,15 @@ export interface DaemonPlan {
   children: ChildSpec[];
   /** Set when the canonical checkout fell back off :4747/:5173 because they were held elsewhere. */
   portFallbackNote?: string;
+  /** ADR 0019: set when this plan wants a `tailscale serve` mount established for its browser port. */
+  tailscale?: boolean;
+  tailscaleUrl?: string;
+  tailscaleTarget?: string;
 }
 
 /** The fields `up` compares against a running daemon to decide already-running vs restart. */
 export function settingsOf(p: DaemonPlan | RunInfo): Record<string, string> {
-  return { mode: p.mode, apiPort: String(p.apiPort), webPort: String(p.webPort ?? ""), host: p.host, db: p.db };
+  return { mode: p.mode, apiPort: String(p.apiPort), webPort: String(p.webPort ?? ""), host: p.host, db: p.db, tailscale: String(p.tailscale ?? false) };
 }
 
 export function settingsDiffer(running: RunInfo, planned: DaemonPlan): boolean {
@@ -262,10 +282,15 @@ export function planDaemon(args: {
   checkout?: Checkout;
   opts: Partial<DaemonOptions>;
   env: Record<string, string | undefined>;
+  /** Resolved by the caller (resolvePlan, pure over `resolveTailscale`); this function never calls
+   *  tailscale itself. Whether the mount is actually established happens in `up`, after the daemon
+   *  is listening; `plan.url`/`tailscaleUrl`/`tailscaleTarget` are filled in there once it is. */
+  tailscale?: boolean;
 }): DaemonPlan {
   const { mode, serveCmd, cwd, db, checkout, opts, env } = args;
   const bun = args.bun ?? "bun";
   const host = resolveHost(opts.host, env);
+  const tailscaleFields = args.tailscale ? { tailscale: true as const } : {};
   if (mode === "binary") {
     const apiPort = opts.port ?? (env.FLOCK_PORT ? Number(env.FLOCK_PORT) : 4747);
     const name = BINARY_RUNFILE_NAME;
@@ -287,6 +312,7 @@ export function planDaemon(args: {
           env: { FLOCK_PORT: String(apiPort), FLOCK_DB: db },
         },
       ],
+      ...tailscaleFields,
     };
   }
   const c = checkout;
@@ -315,6 +341,7 @@ export function planDaemon(args: {
       { key: "api", cmd: [bun, "--watch", join(c.root, "packages", "cli", "src", "main.ts"), "serve", "--port", String(c.apiPort), "--host", host], cwd: c.root, env: childEnv },
       { key: "web", cmd: [bun, "x", "vite", "--port", String(c.webPort), "--strictPort", "--host", host], cwd: join(c.root, "packages", "web"), env: childEnv },
     ],
+    ...tailscaleFields,
   };
 }
 
@@ -339,9 +366,14 @@ export function resolvePlan(opts: Partial<DaemonOptions> = {}): DaemonPlan {
     portFallbackNote = fallback.note;
   }
   const name = mode === "binary" ? BINARY_RUNFILE_NAME : checkoutRunfileName((effectiveCheckout as Checkout).name);
-  const effectiveOpts: Partial<DaemonOptions> = { ...opts, host: preserveRunningHost(opts, process.env, readRunfile(name)) };
+  const existingRunfile = readRunfile(name);
+  const effectiveOpts: Partial<DaemonOptions> = { ...opts, host: preserveRunningHost(opts, process.env, existingRunfile) };
   const db = mode === "checkout" && effectiveCheckout?.db ? effectiveCheckout.db : resolveDbPath(opts.db).path;
-  const plan = planDaemon({ mode, serveCmd: serveCmd(), bun: bunPath(), cwd, db, checkout: effectiveCheckout, opts: effectiveOpts, env: process.env });
+  // Pure: whether this plan wants a tailscale mount. No subprocess here — preflight and the mount
+  // itself happen in `up`, so `status`/`down`/`url`/`logs` (which also call resolvePlan) never probe
+  // tailscale and stay fast and offline-safe.
+  const tailscale = resolveTailscale(preserveRunningTailscale(opts.tailscale, process.env, existingRunfile), process.env);
+  const plan = planDaemon({ mode, serveCmd: serveCmd(), bun: bunPath(), cwd, db, checkout: effectiveCheckout, opts: effectiveOpts, env: process.env, tailscale });
   if (portFallbackNote) plan.portFallbackNote = portFallbackNote;
   return plan;
 }
@@ -518,17 +550,27 @@ function probeHosts(host: string): string[] {
   return host === "0.0.0.0" || host === "::" || host === "" ? [host || "0.0.0.0", "127.0.0.1"] : [host];
 }
 
-/** The daemon's addresses, host-aware: see `advertisedUrls` in dev.ts (ADR 0015). */
-function urls(d: { mode: Mode; apiPort: number; webPort?: number; host: string }): { urls: string[]; hint?: string } {
-  const port = d.mode === "checkout" ? (d.webPort ?? d.apiPort) : d.apiPort;
-  return advertisedUrls(d.host, port);
+/** The daemon's addresses, host-aware: see `advertisedUrls` in dev.ts (ADR 0015, ADR 0019). */
+function urls(d: { mode: Mode; apiPort: number; webPort?: number; host: string; tailscaleUrl?: string }): { urls: string[]; hint?: string } {
+  return advertisedUrls(d.host, browserPort(d), undefined, d.tailscaleUrl);
 }
 
 /**
  * Where, on what ports, against which database. Takes the live runfile when there is one, so
  * `status` describes what is actually running rather than what `up` would start.
  */
-function describe(d: { name: string; mode: Mode; canonical?: boolean; apiPort: number; webPort?: number; host: string; root: string; db: string }): string {
+function describe(d: {
+  name: string;
+  mode: Mode;
+  canonical?: boolean;
+  apiPort: number;
+  webPort?: number;
+  host: string;
+  root: string;
+  db: string;
+  tailscaleUrl?: string;
+  tailscaleTarget?: string;
+}): string {
   const where =
     d.mode === "binary"
       ? "installed daemon"
@@ -541,7 +583,12 @@ function describe(d: { name: string; mode: Mode; canonical?: boolean; apiPort: n
   const isolated = d.db !== globalDbPath();
   // The api line uses the same host-aware URL as `web` in binary mode, not a hardcoded "localhost":
   // a specific non-loopback --host means the API is only reachable at that host, not at loopback.
-  return `${where} at ${d.root}\n  web ${web}\n  api ${baseUrl(d.host, d.apiPort)}\n  db  ${d.db}${isolated ? " (isolated)" : " (shared)"}`;
+  // It never gets the tailscale URL: the mount fronts the browser-facing port only (ADR 0019 d2).
+  const api = `\n  api ${baseUrl(d.host, d.apiPort)}`;
+  // Names the mechanism and its target, so a reader who did not start the daemon knows where the
+  // certificate comes from and what to turn off (ADR 0019 §8).
+  const tls = d.tailscaleTarget ? `\n  tls tailscale serve :443 -> ${d.tailscaleTarget}` : "";
+  return `${where} at ${d.root}\n  web ${web}${api}\n  db  ${d.db}${isolated ? " (isolated)" : " (shared)"}${tls}`;
 }
 
 /**
@@ -563,6 +610,27 @@ function guardPorts(plan: DaemonPlan, held: number[]) {
   }
 }
 
+/**
+ * Establish (or re-assert) the plan's tailscale mount and fold the result into a `RunInfo` patch.
+ * Every `up --tailscale` calls this, whether the daemon was just started or was already running:
+ * the mount lives in tailscaled, not in the runfile, so a `tailscale down`, a reboot, or a manual
+ * `serve reset` can remove it behind flock's back, and `flock up` is the reconciler (ADR 0019 §5).
+ */
+function mountTailscale(plan: DaemonPlan): Pick<RunInfo, "tailscale" | "tailscaleUrl" | "tailscaleTarget" | "url"> {
+  const bin = findTailscaleReal();
+  const run: Runner = spawnRunner;
+  const mount = establishTailscale({ run, bin, host: plan.host, port: browserPort(plan) });
+  return { tailscale: true, tailscaleUrl: mount.url, tailscaleTarget: mount.target, url: mount.url };
+}
+
+/** Guarded teardown for `down` and `restart`'s stop half: a no-op unless the runfile says this
+ *  daemon established a mount. Prints (but does not throw on) whatever `releaseTailscale` reports. */
+function teardownTailscale(info: RunInfo) {
+  if (!info.tailscale || !info.tailscaleTarget) return;
+  const note = releaseTailscale({ run: spawnRunner, bin: findTailscaleReal(), target: info.tailscaleTarget });
+  if (note) console.error(note);
+}
+
 /** `flock up`: idempotent. Already running / started / restarted with new settings. */
 async function up(plan: DaemonPlan, opts: DaemonOptions, label?: "restarted", heldPorts?: number[]) {
   if (plan.mode === "checkout" && opts.isolated && plan.db) {
@@ -572,16 +640,30 @@ async function up(plan: DaemonPlan, opts: DaemonOptions, label?: "restarted", he
   }
   const existing = readRunfile(plan.name);
   guardPorts(plan, existing ? portsOf(existing) : (heldPorts ?? []));
+  // Preflight only (steps 1-5 of ADR 0019 §4): entirely read-only, so a refusal here costs nothing
+  // and starts nothing, whether this call goes on to do nothing (already running) or a fresh start.
+  if (plan.tailscale) preflightTailscale({ run: spawnRunner, bin: findTailscaleReal() });
   let action: "already running" | "started" | "restarted" | "restarted with new settings" = "started";
   const fallback = plan.portFallbackNote;
   if (existing && !settingsDiffer(existing, plan)) {
     action = "already running";
-    if (opts.json) console.log(JSON.stringify({ action, ...existing, ...(fallback ? { portFallback: fallback } : {}) }));
-    else console.log(`${fallback ? `${fallback}\n\n` : ""}${action}: pid ${existing.pid}\n\n${describe(existing)}\n\nLogs: flock logs`);
-    if (opts.open) openUrl(existing.url);
+    // Not ours to kill if the mount fails: this invocation did not start the daemon.
+    const info = plan.tailscale ? { ...existing, ...mountTailscale(plan) } : existing;
+    if (plan.tailscale) writeRunfile(runfilePath(plan.name), info);
+    if (opts.json) console.log(JSON.stringify({ action, ...info, ...(fallback ? { portFallback: fallback } : {}) }));
+    else console.log(`${fallback ? `${fallback}\n\n` : ""}${action}: pid ${existing.pid}\n\n${describe(info)}\n\nLogs: flock logs`);
+    // Deliberately not `info.url` (the tailscale https URL when a mount is active): `--open`
+    // opens a browser on this machine, so it stays on the loopback/bound address rather than
+    // round-tripping through the tailnet — see the doc comment on `AdvertisedUrls.urls`.
+    if (opts.open) openUrl(baseUrl(plan.host, browserPort(plan)));
     return;
   }
   if (existing) {
+    // Settings differ (e.g. `up --no-tailscale` on a mounted daemon): tear down whatever mount
+    // the old settings established before stopping it, same as the `restart` command does —
+    // otherwise a bare settings-changing `up` leaves tailscaled still proxying to the port that
+    // is about to be replaced (or torn down entirely), a stale mount nothing else will notice.
+    teardownTailscale(existing);
     await stop(existing);
     action = "restarted with new settings";
   }
@@ -590,13 +672,26 @@ async function up(plan: DaemonPlan, opts: DaemonOptions, label?: "restarted", he
   } catch {}
   if (label) action = label as typeof action;
   const pids = spawnChildren(plan);
-  const info = await waitForRunfile(plan);
-  if (pids.web !== undefined) writeRunfile(runfilePath(plan.name), { ...info, webPid: pids.web });
-  if (opts.json) return console.log(JSON.stringify({ action, ...info, webPid: pids.web, ...(fallback ? { portFallback: fallback } : {}) }));
+  let info = await waitForRunfile(plan);
+  if (pids.web !== undefined) info = { ...info, webPid: pids.web };
+  if (plan.tailscale) {
+    try {
+      info = { ...info, ...mountTailscale(plan) };
+    } catch (e) {
+      // "up --tailscale gives you HTTPS or it gives you nothing" (ADR 0019 §5): this invocation
+      // started the daemon, so a mount failure after readiness stops it again rather than leaving
+      // an HTTP-only daemon up that silently lacks the capability it was started for.
+      await stop(info);
+      throw e;
+    }
+  }
+  if (plan.tailscale || pids.web !== undefined) writeRunfile(runfilePath(plan.name), info);
+  if (opts.json) return console.log(JSON.stringify({ action, ...info, ...(fallback ? { portFallback: fallback } : {}) }));
   if (fallback) console.log(fallback);
   console.log(`${action}: pid ${info.pid}${pids.web !== undefined ? `, web pid ${pids.web}` : ""}`);
-  console.log(`\n${describe(plan)}\n\nLogs: flock logs`);
-  if (opts.open) openUrl(info.url);
+  console.log(`\n${describe(info)}\n\nLogs: flock logs`);
+  // Same reasoning as the "already running" branch above: stay on loopback, not the tailscale URL.
+  if (opts.open) openUrl(baseUrl(plan.host, browserPort(plan)));
 }
 
 function openUrl(url: string) {
@@ -631,7 +726,10 @@ export async function daemonCommand(cmd: string, opts: DaemonOptions) {
     case "down":
     case "stop": {
       const targets = opts.all ? listRunfiles() : [readRunfile(resolvePlan(opts).name)].filter((i): i is RunInfo => i !== undefined);
-      for (const i of targets) await stop(i);
+      for (const i of targets) {
+        teardownTailscale(i);
+        await stop(i);
+      }
       if (opts.json) return console.log(JSON.stringify({ stopped: targets.map((i) => i.name) }));
       if (!targets.length) return console.log("not running");
       console.log(`stopped ${targets.map((i) => i.name).join(", ")}`);
@@ -642,7 +740,10 @@ export async function daemonCommand(cmd: string, opts: DaemonOptions) {
       const existing = readRunfile(plan.name);
       // Guard before stopping, and hand `up` the ports we just released — they are ours to retake.
       if (existing) guardPorts(plan, portsOf(existing));
-      if (existing) await stop(existing);
+      if (existing) {
+        teardownTailscale(existing);
+        await stop(existing);
+      }
       await up(plan, opts, existing ? "restarted" : undefined, existing ? portsOf(existing) : []);
       return;
     }
