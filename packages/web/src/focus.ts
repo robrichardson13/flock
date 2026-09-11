@@ -58,6 +58,24 @@ export function focusNoScroll(el: HTMLElement | null | undefined): void {
 }
 
 /**
+ * Whether a successful send should blur the composer's field afterward.
+ *
+ * On a touch device the field's only job once the message is away is to hold the on-screen
+ * keyboard open — there is no Enter-to-send there (`shouldSendOnEnter` in compose.ts always
+ * treats Enter as a newline on a coarse pointer), so a tap on the send button is the one path
+ * that fires, and e958cbd's `preventDefault` on that button's `mousedown` means nothing blurs
+ * the field on its own any more. Blurring it explicitly after the send resolves is what lets
+ * the keyboard slide back down, matching every native chat app. A mouse/trackpad keeps focus
+ * after send exactly as it does today: `hasFinePointer` is `LineComposer`'s own
+ * `useHasFinePointer()` reading, the same "coarse pointer, no hover" signal its Enter-to-send
+ * decision already keys off, chosen over a width media query so a touch device at a wide
+ * breakpoint (an iPad in landscape) still gets its keyboard dismissed.
+ */
+export function shouldBlurOnSend(hasFinePointer: boolean): boolean {
+  return !hasFinePointer;
+}
+
+/**
  * #15: a sheet's autofocus, which on the phone is deliberately nothing at all.
  *
  * Every mobile engine refuses to raise the keyboard for a `focus()` that is not inside a
