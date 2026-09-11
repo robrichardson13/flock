@@ -1205,7 +1205,10 @@ export class Flock {
         this.emit(actor, b.id, "decision.archived", superseded.card_num, { num: superseded.num, gist: superseded.gist, supersededBy: n });
       }
       this.touchBoard(b.id);
-      return this.rowToDecision(this.decisionRow(b.id, n)!);
+      return {
+        id, boardId: b.id, num: n, cardNum, gist, author: actor.name, createdAt: ts,
+        archivedAt: null, archivedBy: null, archiveReason: null, supersededBy: null,
+      };
     })();
   }
 

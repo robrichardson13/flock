@@ -883,10 +883,14 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
     case "decisions": {
       const { board } = pickBoard();
       const archived: boolean | "all" | undefined = bool(flags.all) ? "all" : bool(flags.archived) ? true : undefined;
-      const ds = flock.decisions(board, { archived, card: str(flags.card) !== undefined ? Number(str(flags.card)) : undefined, author: str(flags.by) });
+      const card = str(flags.card) !== undefined ? Number(str(flags.card)) : undefined;
+      const by = str(flags.by);
+      const ds = flock.decisions(board, { archived, card, author: by });
       return out(ctx, ds, () => {
         for (const d of ds) {
-          const status = d.archivedAt ? (d.supersededBy ? ` [superseded by d${d.supersededBy}]` : " [archived]") : "";
+          let status = "";
+          if (d.supersededBy) status = ` [superseded by d${d.supersededBy}]`;
+          else if (d.archivedAt) status = " [archived]";
           console.log(`- d${d.num}  ${d.cardNum ? `#${d.cardNum}: ` : ""}${d.gist}  (${d.author}, ${d.createdAt.slice(0, 10)})${status}`);
         }
         if (!ds.length) console.log(archived === true ? "No archived decisions." : "No decisions yet.");
@@ -894,11 +898,7 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
         // a board whose decisions are *all* archived is exactly the case that must not read
         // as "No decisions yet." with nothing else said.
         if (archived === undefined) {
-          const hidden = flock.decisions(board, {
-            archived: true,
-            card: str(flags.card) !== undefined ? Number(str(flags.card)) : undefined,
-            author: str(flags.by),
-          }).length;
+          const hidden = flock.decisions(board, { archived: true, card, author: by }).length;
           if (hidden > 0) console.log(`(${hidden} archived — flock decisions --archived)`);
         }
       });
@@ -912,27 +912,30 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       const card = str(flags.card) !== undefined ? Number(str(flags.card)) : undefined;
       const by = str(flags.by);
       const before = str(flags.before);
-      const usingFilter = nums.length === 0 && (card !== undefined || by !== undefined || before !== undefined);
-      if (nums.length === 0 && !usingFilter) throw new FlockError("Nothing to select. Pass decision numbers, or --card/--by/--before.", "invalid");
-      const sel = nums.length > 0 ? { nums } : { card, author: by, before };
-      const verb = sub === "archive" ? "archive" : "restore";
+      if (nums.length === 0 && card === undefined && by === undefined && before === undefined) {
+        throw new FlockError("Nothing to select. Pass decision numbers, or --card/--by/--before.", "invalid");
+      }
+      const usingFilter = nums.length === 0;
+      const sel = usingFilter ? { card, author: by, before } : { nums };
+      const past = sub === "archive" ? "archived" : "restored";
+      const Past = sub === "archive" ? "Archived" : "Restored";
       // Resolve the same way core's selector would, for the --yes gate and --dry-run preview.
       // Explicit nums: not_found on the first missing one, matching resolveDecisionSelector.
       // Rows already in the target state are dropped, because core skips them silently: a
       // preview that promises to archive ten rows the write will not touch is worse than none,
       // and the gate should count the blast radius, not the match.
       const wouldChange = (d: Decision) => (sub === "archive" ? !d.archivedAt : !!d.archivedAt);
-      const resolveMatched = () => {
-        if (nums.length > 0) {
-          const all = flock.decisions(board, { archived: "all" });
-          return nums.map((n) => {
-            const d = all.find((x) => x.num === n);
-            if (!d) throw new FlockError(`No decision d${n} on board "${flock.board(board).slug}"`, "not_found");
-            return d;
-          }).filter(wouldChange);
+      const resolveMatched = (): Decision[] => {
+        if (usingFilter) {
+          return flock.decisions(board, { archived: "all", card, author: by })
+            .filter((d) => (before === undefined || d.createdAt < before) && wouldChange(d));
         }
-        return flock.decisions(board, { archived: "all", card, author: by })
-          .filter((d) => (before === undefined || d.createdAt < before) && wouldChange(d));
+        const byNum = new Map(flock.decisions(board, { archived: "all" }).map((d) => [d.num, d]));
+        return nums.map((n) => {
+          const d = byNum.get(n);
+          if (!d) throw new FlockError(`No decision d${n} on board "${flock.board(board).slug}"`, "not_found");
+          return d;
+        }).filter(wouldChange);
       };
       const dryRun = bool(flags["dry-run"]);
       if (usingFilter && !dryRun && !bool(flags.yes)) {
@@ -944,18 +947,16 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       if (dryRun) {
         const matched = resolveMatched();
         return out(ctx, { dryRun: true, matched }, () => {
-          if (!matched.length) return console.log(`Nothing to ${verb}.`);
-          console.log(`Would ${verb} ${matched.length} decision${matched.length === 1 ? "" : "s"}: ${matched.map((d) => `d${d.num}`).join(", ")}`);
+          if (!matched.length) return console.log(`Nothing to ${sub}.`);
+          console.log(`Would ${sub} ${matched.length} decision${matched.length === 1 ? "" : "s"}: ${matched.map((d) => `d${d.num}`).join(", ")}`);
         });
       }
       const changed = sub === "archive"
         ? flock.archiveDecisions(actor, board, sel, { reason: str(flags.reason) })
         : flock.restoreDecisions(actor, board, sel);
-      const key = sub === "archive" ? "archived" : "restored";
-      const Verb = sub === "archive" ? "Archived" : "Restored";
-      return out(ctx, { [key]: changed }, () => {
-        if (!changed.length) return console.log(`Nothing to ${verb}.`);
-        console.log(`${Verb} ${changed.length} decision${changed.length === 1 ? "" : "s"}: ${changed.map((d) => `d${d.num}`).join(", ")}`);
+      return out(ctx, { [past]: changed }, () => {
+        if (!changed.length) return console.log(`Nothing to ${sub}.`);
+        console.log(`${Past} ${changed.length} decision${changed.length === 1 ? "" : "s"}: ${changed.map((d) => `d${d.num}`).join(", ")}`);
       });
     }
     case "hook": {

@@ -19,6 +19,7 @@ import {
   runHook,
   type Actor,
   type CardStatus,
+  type DecisionSelector,
   type HookRef,
 } from "@flock/core";
 
@@ -135,6 +136,16 @@ function requestProject(raw: unknown): string | undefined {
     // Not there yet; keep what the caller asked for rather than inventing a directory.
   }
   return project;
+}
+
+/** The selector shared by the archive and restore routes. A body naming no field is rejected: core
+ *  treats an empty selector as `invalid` too, but rejecting here keeps the 400 message specific. */
+function decisionSelector(body: Record<string, unknown>): DecisionSelector {
+  const { nums, card, author, before } = body as DecisionSelector;
+  if (nums === undefined && card === undefined && author === undefined && before === undefined) {
+    throw new FlockError("a selector is required");
+  }
+  return { nums, card, author, before };
 }
 
 /** A hook's stderr is only interesting to the operator on success; on failure it goes to the client. */
@@ -406,28 +417,12 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath 
   });
   app.post("/api/boards/:b/decisions/archive", async (c) => {
     const body = await c.req.json().catch(() => ({}));
-    if (body.nums === undefined && body.card === undefined && body.author === undefined && body.before === undefined) {
-      throw new FlockError("a selector is required");
-    }
-    const changed = flock.archiveDecisions(
-      actorOf(c),
-      c.req.param("b"),
-      { nums: body.nums, card: body.card, author: body.author, before: body.before },
-      { reason: body.reason },
-    );
+    const changed = flock.archiveDecisions(actorOf(c), c.req.param("b"), decisionSelector(body), { reason: body.reason });
     return c.json({ archived: changed });
   });
   app.post("/api/boards/:b/decisions/restore", async (c) => {
     const body = await c.req.json().catch(() => ({}));
-    if (body.nums === undefined && body.card === undefined && body.author === undefined && body.before === undefined) {
-      throw new FlockError("a selector is required");
-    }
-    const changed = flock.restoreDecisions(actorOf(c), c.req.param("b"), {
-      nums: body.nums,
-      card: body.card,
-      author: body.author,
-      before: body.before,
-    });
+    const changed = flock.restoreDecisions(actorOf(c), c.req.param("b"), decisionSelector(body));
     return c.json({ restored: changed });
   });
 

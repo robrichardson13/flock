@@ -1762,6 +1762,22 @@ function boardState(counts: Snapshot["counts"]): { state: "warn" | "doing" | "id
   return { state, label };
 }
 
+/** `d7 #12 <gist>` — the shared head of a decision entry, standing or archived. */
+function DecisionGist({ d, boardSlug }: { d: Decision; boardSlug: string }) {
+  return (
+    <div className="decision-gist">
+      <span className="muted tiny">d{d.num}</span> {d.cardNum && <a href={`#/b/${boardSlug}/c/${d.cardNum}`}>#{d.cardNum}</a>} <MessageBody text={d.gist} />
+    </div>
+  );
+}
+
+/** Why an archived decision is archived, as a suffix on its meta line. */
+function archivedNote(d: Decision): string {
+  if (d.supersededBy) return ` · superseded by d${d.supersededBy}`;
+  if (d.archiveReason) return ` · ${d.archiveReason}`;
+  return " · archived";
+}
+
 function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap: Snapshot; onChange: () => void; newIds: ReadonlySet<string | number> }) {
   const mobile = useIsMobile();
   // #8: the same scroll-linked collapse the channel uses, on the same hook and the same CSS.
@@ -1802,7 +1818,6 @@ function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap:
       live = false;
     };
   }, [showArchived, archived, boardId]);
-  const toggleArchived = () => setShowArchived((v) => !v);
   const archive = (num: number) =>
     api.archiveDecisions(boardId, { nums: [num] }).then(() => {
       onChange();
@@ -1822,9 +1837,7 @@ function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap:
         {snap.decisions.map((d) => (
           <div key={d.id} className={`decision${enterClass(entrants.has(d.id))}`} style={enterDelay(orders.get(d.id))}>
             <div className="decision-row">
-              <div className="decision-gist">
-                <span className="muted tiny">d{d.num}</span> {d.cardNum && <a href={`#/b/${snap.board.slug}/c/${d.cardNum}`}>#{d.cardNum}</a>} <MessageBody text={d.gist} />
-              </div>
+              <DecisionGist d={d} boardSlug={snap.board.slug} />
               <button type="button" className="icon-btn decision-action" aria-label={`Archive d${d.num}`} title="Archive" onClick={() => archive(d.num)}>
                 {Icons.trash(16)}
               </button>
@@ -1833,7 +1846,7 @@ function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap:
           </div>
         ))}
         {snap.archivedDecisionCount > 0 && (
-          <button type="button" className="disclosure decision-archived-toggle" onClick={toggleArchived} aria-expanded={showArchived}>
+          <button type="button" className="disclosure decision-archived-toggle" onClick={() => setShowArchived((v) => !v)} aria-expanded={showArchived}>
             {showArchived ? "Hide archived" : `Show archived (${snap.archivedDecisionCount})`}
             <span className={`disclosure-chev${showArchived ? " open" : ""}`}>{Icons.chevron(14)}</span>
           </button>
@@ -1845,17 +1858,12 @@ function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap:
             {archived?.map((d) => (
               <div key={d.id} className="decision decision-archived">
                 <div className="decision-row">
-                  <div className="decision-gist">
-                    <span className="muted tiny">d{d.num}</span> {d.cardNum && <a href={`#/b/${snap.board.slug}/c/${d.cardNum}`}>#{d.cardNum}</a>} <MessageBody text={d.gist} />
-                  </div>
+                  <DecisionGist d={d} boardSlug={snap.board.slug} />
                   <button type="button" className="icon-btn decision-action" aria-label={`Restore d${d.num}`} title="Restore" onClick={() => restore(d.num)}>
                     {Icons.undo(16)}
                   </button>
                 </div>
-                <div className="muted tiny">
-                  {d.author}, {agoText(d.createdAt)}
-                  {d.supersededBy ? ` · superseded by d${d.supersededBy}` : d.archiveReason ? ` · ${d.archiveReason}` : " · archived"}
-                </div>
+                <div className="muted tiny">{d.author}, {agoText(d.createdAt)}{archivedNote(d)}</div>
               </div>
             ))}
           </div>

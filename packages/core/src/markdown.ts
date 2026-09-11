@@ -1,5 +1,5 @@
 import type { Flock } from "./flock.ts";
-import { CARD_STATUSES, CLOSED_STATUSES, type Actor, type CardStatus } from "./types.ts";
+import { CARD_STATUSES, CLOSED_STATUSES, type Actor, type CardStatus, type Decision } from "./types.ts";
 
 const HEADINGS: Record<CardStatus, string> = {
   todo: "Todo",
@@ -15,17 +15,15 @@ export function exportBoard(flock: Flock, boardRef: string): string {
   const snap = flock.snapshot(boardRef);
   const out: string[] = [`# ${snap.board.title}`, ""];
   if (snap.board.body.trim()) out.push(snap.board.body.trim(), "");
-  if (snap.decisions.length) {
-    out.push("## Decisions so far", "");
-    for (const d of snap.decisions) out.push(d.cardNum ? `- #${d.cardNum}: ${d.gist}` : `- ${d.gist}`);
+  function pushDecisions(heading: string, decisions: Decision[]): void {
+    if (!decisions.length) return;
+    out.push(`## ${heading}`, "");
+    for (const d of decisions) out.push(d.cardNum ? `- #${d.cardNum}: ${d.gist}` : `- ${d.gist}`);
     out.push("");
   }
-  if (snap.archivedDecisionCount > 0) {
-    const archived = flock.decisions(boardRef, { archived: true });
-    out.push("## Decisions (archived)", "");
-    for (const d of archived) out.push(d.cardNum ? `- #${d.cardNum}: ${d.gist}` : `- ${d.gist}`);
-    out.push("");
-  }
+  pushDecisions("Decisions so far", snap.decisions);
+  // Guarded on the count so an all-standing board never pays for the second query.
+  if (snap.archivedDecisionCount > 0) pushDecisions("Decisions (archived)", flock.decisions(boardRef, { archived: true }));
   for (const status of CARD_STATUSES) {
     const cards = snap.cards.filter((c) => c.status === status);
     if (!cards.length && status !== "todo") continue;
