@@ -117,7 +117,15 @@ and each one becomes a notification in your session:
 ```sh
 while true; do
   flock log --follow --json | jq --unbuffered -r \
-    'select(.actorKind=="human") | "\(.type) #\(.cardNum // "-") \(.actor): \(.data.body // .data.gist // .data.answer // .data.question // .data.title // (.data|tostring))" + (if (.data.attachmentList // [] | length) > 0 then " [attachments: \(.data.attachmentList | map("\(.id) \(.mime)") | join(", "))]" else "" end)'
+    'select(.actorKind=="human") |
+     "\(.type) #\(.cardNum // "-") \(.actor): " +
+     (if .type=="message.reacted" or .type=="message.unreacted"
+        then "\(.data.emoji) on \(.data.ref) (\(.data.messageAuthor): \"\(.data.gist)\")"
+        elif .type=="message.posted"
+        then "\(.data.body)" + (if .data.ref then " (\(.data.ref))" else "" end)
+        else (.data.body // .data.gist // .data.answer // .data.question // .data.title // (.data|tostring))
+        end) +
+     (if (.data.attachmentList // [] | length) > 0 then " [attachments: \(.data.attachmentList | map("\(.id) \(.mime)") | join(", "))]" else "" end)'
   sleep 1
 done
 ```
@@ -131,7 +139,9 @@ What each event means and what you do with it, in the same turn it arrives:
 
 | Event | It means | You |
 |---|---|---|
-| `message.posted` | The human spoke in the channel | Treat it exactly like a message typed here. Reply with `flock say`, then act. A line with `[attachments: ...]` means images: `flock attachment get <id> --out /tmp/flock-<id>.<ext>` for each (the line shows each id with its mime; pick the ext from it) and Read the file. Each image is part of the human's message; any delegation that depends on it needs a transcription, since subagents cannot see images. |
+| `message.posted` | The human spoke in the channel | Treat it exactly like a message typed here. The listener line ends with the message's ref (`m<n>`) — a pure acknowledgement ("sounds good", "ok", "go ahead", "👍") gets `flock react <ref> 👍 --as conductor` instead of a text reply; anything substantive still gets a `flock say`, then act. A line with `[attachments: ...]` means images: `flock attachment get <id> --out /tmp/flock-<id>.<ext>` for each (the line shows each id with its mime; pick the ext from it) and Read the file. Each image is part of the human's message; any delegation that depends on it needs a transcription, since subagents cannot see images. |
+| `message.reacted` | The human reacted to a message (yours or another agent's) | 👍 is an ack/approval: proceed with whatever the reacted message proposed. 👀 is "seen, no action needed" — treat it as acknowledged, not as a green light. 👎 is a rejection: stop, and either ask a clarifying question or re-plan rather than continuing as if nothing happened. Any other emoji: read it as tone, not a command. |
+| `message.unreacted` | The human retracted a reaction | Treat the prior signal as withdrawn — a retracted 👍 is not still an approval, a retracted 👎 is not still a rejection. Re-read the message it was on before assuming either way. |
 | `card.created` | The human added work | Read it (`flock card show <n> --json`), place it in the plan (blockers, ordering), delegate it when it reaches the frontier. Acknowledge in the channel. |
 | `decision.recorded` | The human set a constraint | It binds every delegation from now on. Tell in-flight background agents by SendMessage; put it in every later prompt. |
 | `card.answered` | The human answered an ask | The card goes back to `doing` if it still has an assignee, `todo` if it does not — a subagent that followed the contract released it, so expect `todo`. Delegate a fresh agent to it; the answer is a comment on the card. |
@@ -142,7 +152,8 @@ What each event means and what you do with it, in the same turn it arrives:
 | `decision.archived`, `decision.restored` | The human pruned or restored a rule | Re-read the decisions list before the next delegation; an archived rule no longer binds. |
 
 Reply where the human is looking. A channel message gets a `flock say`; a card comment gets a
-`flock comment`. Milestones and decision points go to the channel too, one line each, so the
+`flock comment`; a pure acknowledgement gets a `flock react` instead of either (see the table above).
+Milestones and decision points go to the channel too, one line each, so the
 UI tells the story without them opening the terminal. The human may also be typing here; treat both
 inputs the same and record what they decide with `flock decide "<gist>" --card <n>`. A decision is
 a rule that binds later work — a constraint, a chosen approach, a thing not to redo. Merge
