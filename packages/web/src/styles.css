@@ -1792,6 +1792,57 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
    ratio here, so the image sizes naturally once it loads — the stick-to-bottom ResizeObserver
    covers the resulting growth instead of letterboxing it into a guessed box. */
 .msg-attachments--single .msg-attachment img { width: auto; height: auto; max-width: 320px; max-height: 320px; object-fit: contain; }
+
+/* Reaction chips under a channel message (ADR 0017, card #4): emoji + count, a solid pill of
+   its own so it reads the same whether the bubble under it is --bubble-bg or the tinted
+   --bubble-me. Wraps at phone width like any other chip row. */
+.msg-reactions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1); margin-top: var(--s2); }
+.reaction-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 var(--s2);
+  border-radius: var(--r-full); background: var(--bg-2); border: 1px solid var(--line);
+  color: var(--text); font-size: var(--t-cap); font-variant-numeric: var(--num);
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .reaction-chip:hover { background: var(--surface-hover); }
+}
+.reaction-chip:active { background: var(--surface-press); }
+/* The viewer is among that emoji's actors: the same accent-on-accent-soft pair the phone tab
+   bar's active tab already wears, so this needs no colour of its own to clear 4.5:1. */
+.reaction-chip.mine { background: var(--ink-action-soft); border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--ink-action); }
+.reaction-picker-wrap { position: relative; display: inline-flex; }
+/* The "+ 🙂" affordance: dashed and muted at rest so a chip row it sits at the end of reads
+   as chips-plus-an-add-control, not four equal pills. On a fine pointer it stays out of the
+   way entirely until the bubble is hovered or focused (opacity 0/1 are exempt from the
+   contrast gate's dimmer check, see scripts/contrast.ts); a touch device has no hover to key
+   off, so it keeps this same quiet resting look permanently instead. */
+.reaction-add {
+  display: inline-flex; align-items: center; justify-content: center; gap: 1px;
+  height: 24px; padding: 0 6px;
+  border-radius: var(--r-full); background: transparent; border: 1px dashed var(--line);
+  color: var(--muted); font-size: var(--t-cap); line-height: 1; cursor: pointer;
+}
+@media (hover: hover) {
+  .reaction-add { opacity: 0; transition: opacity var(--d-fast) var(--ease-out); }
+  .msg:hover .reaction-add, .msg:focus-within .reaction-add, .reaction-add.is-open { opacity: 1; }
+}
+.reaction-picker {
+  position: absolute; bottom: calc(100% + var(--s1)); left: 0; z-index: 20;
+  display: flex; gap: 2px; padding: var(--s1);
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--r-full);
+  box-shadow: var(--shadow);
+}
+.reaction-picker-item {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 50%; background: none; border: none;
+  font-size: 18px; cursor: pointer;
+}
+@media (hover: hover) {
+  .reaction-picker-item:hover { background: var(--surface-hover); }
+}
+.reaction-picker-item:active { background: var(--surface-press); }
+.reaction-picker-item.mine { background: var(--ink-action-soft); }
 /* Activity's day separator: the same quiet-head grammar the Cards tab's section names use
    ("Doing 3") — no rule, no background, just a label one step above the runs it introduces. */
 .evt-day-label { font-size: var(--t-cap); font-weight: var(--w-head); color: var(--muted); padding: 0 0 var(--s1) 2px; }

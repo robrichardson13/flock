@@ -29,6 +29,8 @@ import {
   type Event,
   type EventType,
   type Message,
+  type Reaction,
+  type ReactionResult,
   type TeamMember,
 } from "./types.ts";
 
@@ -56,6 +58,58 @@ export function shortId(len = 8): string {
   return out;
 }
 
+/** How a channel message is spelled everywhere a human or an agent sees it: `m7`. See ADR 0018. */
+export function messageRef(num: number): string {
+  return `m${num}`;
+}
+
+/** Longest emoji accepted, in code points: enough for a flag or a ZWJ family, short of a sentence. */
+export const MAX_EMOJI_LENGTH = 12;
+
+/**
+ * A reaction is a short pictograph, not free text. Core does not police *which* emoji — new ones
+ * ship faster than any table of them — it only rejects what would turn the reaction row into a
+ * chat: empty strings, whitespace, and anything long.
+ */
+export function normalizeEmoji(raw: string): string {
+  const emoji = (raw ?? "").trim();
+  if (!emoji) throw new FlockError("a reaction needs an emoji");
+  if (/\s/.test(emoji)) throw new FlockError("a reaction emoji cannot contain whitespace");
+  if ([...emoji].length > MAX_EMOJI_LENGTH) throw new FlockError(`a reaction emoji is at most ${MAX_EMOJI_LENGTH} code points`);
+  return emoji;
+}
+
+/** Longest message gist carried on a reaction event, in characters. */
+const GIST_LENGTH = 120;
+
+/**
+ * A one-line precis of a message, for event consumers: whitespace collapsed, truncated, and
+ * standing in for the body when the message is nothing but images.
+ */
+export function messageGist(message: Pick<Message, "body" | "attachments">): string {
+  const body = message.body.replace(/\s+/g, " ").trim();
+  if (body) return body.length > GIST_LENGTH ? `${body.slice(0, GIST_LENGTH - 1)}\u2026` : body;
+  const n = message.attachments.length;
+  return n === 0 ? "" : n === 1 ? "(image)" : `(${n} images)`;
+}
+
+/**
+ * The `data` of `message.reacted` / `message.unreacted`. Everything a listener tailing
+ * `flock log --follow --json` needs to act — who was reacted to, with what, and roughly what
+ * they said — without a second lookup.
+ */
+function reactionEventData(emoji: string, message: Message): Record<string, unknown> {
+  return {
+    emoji,
+    num: message.num,
+    ref: messageRef(message.num),
+    messageAuthor: message.author,
+    messageAuthorKind: message.authorKind,
+    gist: messageGist(message),
+    count: message.reactions.find((r) => r.emoji === emoji)?.count ?? 0,
+  };
+}
+
 /** The one sentence a claim on a held card fails with, everywhere. */
 export function holdConflictMessage(c: Pick<Card, "num" | "heldBy" | "holdReason">): string {
   const who = c.heldBy ? ` by ${c.heldBy}` : "";
@@ -81,7 +135,7 @@ type CardRow = {
   held_at: string | null; held_by: string | null; hold_reason: string | null;
 };
 type CommentRow = { id: string; card_id: string; author: string; author_kind: string; kind: string; body: string; created_at: string };
-type MessageRow = { id: string; board_id: string; author: string; author_kind: string; body: string; created_at: string };
+type MessageRow = { id: string; board_id: string; num: number; author: string; author_kind: string; body: string; created_at: string };
 type AttachmentRow = {
   id: string; board_id: string; message_id: string | null; comment_id: string | null; author: string; author_kind: string;
   mime: string; name: string | null; size: number; sha256: string; width: number | null; height: number | null; created_at: string;
@@ -1083,16 +1137,24 @@ export class Flock {
     const rows = this.db
       .query("SELECT * FROM (SELECT rowid AS rid, * FROM messages WHERE board_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?) ORDER BY created_at, rid")
       .all(b.id, opts.limit ?? 200) as MessageRow[];
-    const attachmentsByMessage = this.attachmentsForOwners("message_id", rows.map((r) => r.id));
-    return rows.map((r) => ({
+    const ids = rows.map((r) => r.id);
+    const attachmentsByMessage = this.attachmentsForOwners("message_id", ids);
+    const reactionsByMessage = this.reactionsForMessages(ids);
+    return rows.map((r) => this.rowToMessage(r, attachmentsByMessage.get(r.id) ?? [], reactionsByMessage.get(r.id) ?? []));
+  }
+
+  private rowToMessage(r: MessageRow, attachments: Attachment[], reactions: Reaction[]): Message {
+    return {
       id: r.id,
       boardId: r.board_id,
+      num: r.num,
       author: r.author,
       authorKind: r.author_kind as Actor["kind"],
       body: r.body,
       createdAt: r.created_at,
-      attachments: attachmentsByMessage.get(r.id) ?? [],
-    }));
+      attachments,
+      reactions,
+    };
   }
 
   say(actor: Actor, boardRef: string, body: string, opts?: { attachments?: string[] }): Message {
@@ -1104,20 +1166,110 @@ export class Flock {
     this.touchActor(actor);
     const id = shortId();
     const ts = now();
-    this.db.transaction(() => {
+    const num = this.db.transaction(() => {
+      const { n } = this.db.query("SELECT COALESCE(MAX(num), 0) + 1 AS n FROM messages WHERE board_id = ?").get(b.id) as { n: number };
       this.db
-        .query("INSERT INTO messages(id, board_id, author, author_kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-        .run(id, b.id, actor.name, actor.kind, body, ts);
+        .query("INSERT INTO messages(id, board_id, num, author, author_kind, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(id, b.id, n, actor.name, actor.kind, body, ts);
       this.bindAttachments(b.id, "message_id", id, ids);
+      return n;
     })();
     this.touchBoard(b.id);
     const attachments = this.attachmentsForOwners("message_id", [id]).get(id) ?? [];
     this.emit(actor, b.id, "message.posted", null, {
+      num,
+      ref: messageRef(num),
       body,
       attachments: ids.length,
       attachmentList: attachments.map((a) => ({ id: a.id, mime: a.mime, name: a.name, size: a.size })),
     });
-    return { id, boardId: b.id, author: actor.name, authorKind: actor.kind, body, createdAt: ts, attachments };
+    return { id, boardId: b.id, num, author: actor.name, authorKind: actor.kind, body, createdAt: ts, attachments, reactions: [] };
+  }
+
+  // ---------- reactions ----------
+
+  /**
+   * One message by its per-board `num` — the only public way to address a message (ADR 0018).
+   * Not found is `not_found`, so the CLI exits 2 the same way a missing card does.
+   */
+  private messageRow(boardId: string, boardSlug: string, num: number): MessageRow {
+    const n = Math.trunc(Number(num));
+    const row = Number.isFinite(n)
+      ? (this.db.query("SELECT * FROM messages WHERE board_id = ? AND num = ?").get(boardId, n) as MessageRow | null)
+      : null;
+    if (!row) throw new FlockError(`No message ${messageRef(num)} on board "${boardSlug}"`, "not_found");
+    return row;
+  }
+
+  /** Aggregated reactions per message id, most-used emoji first, ties broken by first use. */
+  private reactionsForMessages(messageIds: string[]): Map<string, Reaction[]> {
+    const out = new Map<string, Reaction[]>();
+    if (!messageIds.length) return out;
+    const placeholders = messageIds.map(() => "?").join(",");
+    const rows = this.db
+      .query(`SELECT message_id, emoji, actor, created_at FROM reactions WHERE message_id IN (${placeholders}) ORDER BY created_at, rowid`)
+      .all(...messageIds) as { message_id: string; emoji: string; actor: string; created_at: string }[];
+    for (const r of rows) {
+      const list = out.get(r.message_id) ?? [];
+      if (!out.has(r.message_id)) out.set(r.message_id, list);
+      const existing = list.find((x) => x.emoji === r.emoji);
+      if (existing) {
+        existing.actors.push(r.actor);
+        existing.count = existing.actors.length;
+      } else {
+        list.push({ emoji: r.emoji, count: 1, actors: [r.actor] });
+      }
+    }
+    // Stable: rows already arrive oldest-first, so equal counts keep first-use order.
+    for (const list of out.values()) list.sort((a, b) => b.count - a.count);
+    return out;
+  }
+
+  private readMessage(row: MessageRow): Message {
+    return this.rowToMessage(
+      row,
+      this.attachmentsForOwners("message_id", [row.id]).get(row.id) ?? [],
+      this.reactionsForMessages([row.id]).get(row.id) ?? [],
+    );
+  }
+
+  /**
+   * Add `emoji` to message `num` as `actor`. Idempotent: reacting twice with the same emoji is a
+   * no-op that emits nothing and returns `changed: false`, never an error. One row per
+   * (message, actor, emoji), so an actor may hold several different emoji on one message.
+   */
+  react(actor: Actor, boardRef: string, num: number, emoji: string): ReactionResult {
+    const b = this.board(boardRef);
+    const e = normalizeEmoji(emoji);
+    const row = this.messageRow(b.id, b.slug, num);
+    this.touchActor(actor);
+    const already = this.db
+      .query("SELECT 1 AS x FROM reactions WHERE message_id = ? AND actor = ? AND emoji = ?")
+      .get(row.id, actor.name, e) as { x: number } | null;
+    if (already) return { message: this.readMessage(row), changed: false };
+    this.db
+      .query("INSERT INTO reactions(board_id, message_id, actor, actor_kind, emoji, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(b.id, row.id, actor.name, actor.kind, e, now());
+    this.touchBoard(b.id);
+    const message = this.readMessage(row);
+    this.emit(actor, b.id, "message.reacted", null, reactionEventData(e, message));
+    return { message, changed: true };
+  }
+
+  /** Remove `actor`'s `emoji` from message `num`. Idempotent the same way `react` is. */
+  unreact(actor: Actor, boardRef: string, num: number, emoji: string): ReactionResult {
+    const b = this.board(boardRef);
+    const e = normalizeEmoji(emoji);
+    const row = this.messageRow(b.id, b.slug, num);
+    this.touchActor(actor);
+    const { changes } = this.db
+      .query("DELETE FROM reactions WHERE message_id = ? AND actor = ? AND emoji = ?")
+      .run(row.id, actor.name, e);
+    if (!changes) return { message: this.readMessage(row), changed: false };
+    this.touchBoard(b.id);
+    const message = this.readMessage(row);
+    this.emit(actor, b.id, "message.unreacted", null, reactionEventData(e, message));
+    return { message, changed: true };
   }
 
   // ---------- decisions ----------
