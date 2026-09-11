@@ -10,11 +10,13 @@ import {
   HookError,
   exportBoard,
   findHook,
+  commentRef,
   hooksDir,
   importBoard,
   mergeBoardInput,
   messageRef,
   normalizeFields,
+  parseCommentRef,
   parseHookOutput,
   resolveDbPath,
   runHook,
@@ -116,7 +118,8 @@ TEAM
   say [BOARD] TEXT [--attach PATH]...   Post to the board channel; --attach is repeatable and
                                       uploads an image (message text is optional with one).
                                       Prints the new message's ref (m<n>) for later \`flock react\`
-  react [BOARD] REF EMOJI [--remove]    React to a channel message; REF is "m7" or a bare "7".
+  react [BOARD] REF EMOJI [--remove]    React to a channel message or a card comment; REF is
+                                      "m7"/a bare "7" (message) or "4.2" (comment #2 on card #4).
                                       --remove removes the actor's reaction instead of adding it
   attachment get [BOARD] ID [--out PATH]   Fetch an attachment's bytes (stdout if --out omitted);
                                       --json prints its metadata only, never bytes
@@ -260,7 +263,9 @@ function fmtEvent(e: Event): string {
     e.type === "card.blocked" || e.type === "card.unblocked" ? ` by #${d.by}` :
     e.type === "card.held" ? `${d.reason ? `: ${d.reason}` : ""}` :
     e.type === "message.reacted" ? ` ${d.emoji} ${d.ref} (${d.messageAuthor}: "${d.gist}")` :
-    e.type === "message.unreacted" ? ` removed ${d.emoji} from ${d.ref} (${d.messageAuthor}: "${d.gist}")` : "";
+    e.type === "message.unreacted" ? ` removed ${d.emoji} from ${d.ref} (${d.messageAuthor}: "${d.gist}")` :
+    e.type === "comment.reacted" ? ` ${d.emoji} ${d.ref} (${d.commentAuthor}: "${d.gist}")` :
+    e.type === "comment.unreacted" ? ` removed ${d.emoji} from ${d.ref} (${d.commentAuthor}: "${d.gist}")` : "";
   return `${String(e.seq).padStart(5)}  ${e.createdAt.slice(11, 19)}  ${who.padEnd(14)} ${e.type}${card}${detail}`;
 }
 
@@ -271,11 +276,17 @@ function parseDecisionNum(ref: string): number {
   return n;
 }
 
-/** Message references parse as `m7` or a bare `7`, mirroring `parseDecisionNum`. */
-function parseMessageNum(ref: string): number {
+/**
+ * `flock react`'s REF is either a comment ref (`4.2`, core's `parseCommentRef`) or a message ref
+ * (`m7`/a bare `7`). Tried in that order since a comment ref always contains a dot a message ref
+ * never has; a ref matching neither is a usage error, not a not-found.
+ */
+function parseReactRef(ref: string): { kind: "comment"; cardNum: number; num: number } | { kind: "message"; num: number } {
+  const comment = parseCommentRef(ref);
+  if (comment) return { kind: "comment", ...comment };
   const n = Number.parseInt(ref.replace(/^[mM]/, ""), 10);
-  if (!Number.isInteger(n) || n <= 0) throw new FlockError(`"${ref}" is not a message reference`, "invalid");
-  return n;
+  if (/^[mM]?\d+$/.test(ref.trim()) && Number.isInteger(n) && n > 0) return { kind: "message", num: n };
+  throw new FlockError(`"${ref}" is not a message reference (m<n>) or a comment reference (<card>.<n>)`, "invalid");
 }
 
 /** `  👍 2 (rob, conductor)` — one line per emoji, under a message in `chat` output. */
@@ -757,7 +768,8 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
             console.log("\n   --- comments ---");
             for (const cm of comments) {
               const imgs = cm.attachments.length ? `  [+${cm.attachments.length} image${cm.attachments.length === 1 ? "" : "s"}]` : "";
-              console.log(`   [${cm.kind}] ${cm.author} ${cm.createdAt.slice(0, 16)}${imgs}\n${cm.body.replace(/^/gm, "     ")}`);
+              console.log(`   ${commentRef(cm.cardNum, cm.num)}  [${cm.kind}] ${cm.author} ${cm.createdAt.slice(0, 16)}${imgs}\n${cm.body.replace(/^/gm, "     ")}`);
+              for (const line of fmtReactions(cm)) console.log(`   ${line}`);
             }
           }
         });
@@ -866,12 +878,22 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
     }
     case "react": {
       const { board, rest } = pickBoard(); a = rest;
-      const num = parseMessageNum(need(0, "message reference (m<n>)"));
+      const target = parseReactRef(need(0, "reference (m<n> or <card>.<n>)"));
       const emoji = need(1, "emoji");
       const remove = bool(flags.remove);
-      const result = remove ? flock.unreact(actor, board, num, emoji) : flock.react(actor, board, num, emoji);
+      if (target.kind === "comment") {
+        const result = remove
+          ? flock.unreactFromComment(actor, board, target.cardNum, target.num, emoji)
+          : flock.reactToComment(actor, board, target.cardNum, target.num, emoji);
+        return out(ctx, result, () => {
+          const ref = commentRef(target.cardNum, target.num);
+          if (!result.changed) return console.log(remove ? "not reacted" : "already reacted");
+          console.log(`${emoji} ${ref} (${actor.name})${remove ? " removed" : ""}`);
+        });
+      }
+      const result = remove ? flock.unreact(actor, board, target.num, emoji) : flock.react(actor, board, target.num, emoji);
       return out(ctx, result, () => {
-        const ref = messageRef(num);
+        const ref = messageRef(target.num);
         if (!result.changed) return console.log(remove ? "not reacted" : "already reacted");
         console.log(`${emoji} ${ref} (${actor.name})${remove ? " removed" : ""}`);
       });
