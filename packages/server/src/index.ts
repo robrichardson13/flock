@@ -360,6 +360,22 @@ export function createApp({ flock, dbPath, staticDir, assets, installScriptPath,
   app.delete("/api/boards/:b/cards/:n/blockers/:by", (c) =>
     c.json(flock.removeBlocker(actorOf(c), c.req.param("b"), c.req.param("n"), c.req.param("by"))),
   );
+  app.post("/api/boards/:b/cards/:n/comments/:num/reactions", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    if (typeof body.emoji !== "string" || !body.emoji.trim()) throw new FlockError("emoji is required");
+    return c.json(flock.reactToComment(actorOf(c), c.req.param("b"), c.req.param("n"), Number(c.req.param("num")), body.emoji));
+  });
+  app.delete("/api/boards/:b/cards/:n/comments/:num/reactions/:emoji", (c) =>
+    c.json(
+      flock.unreactFromComment(
+        actorOf(c),
+        c.req.param("b"),
+        c.req.param("n"),
+        Number(c.req.param("num")),
+        decodeURIComponent(c.req.param("emoji")),
+      ),
+    ),
+  );
 
   // ----- attachments -----
   app.post("/api/boards/:b/attachments", async (c) => {
