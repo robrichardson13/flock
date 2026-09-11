@@ -756,7 +756,20 @@ export function LineComposer({
             data-composer
           />
         </div>
-        <button type="submit" className={`icon-btn icon-btn-primary${sendClass ? ` ${sendClass}` : ""}`} disabled={!canSend} aria-label={action}>{Icons.send(18)}</button>
+        <button
+          type="submit"
+          className={`icon-btn icon-btn-primary${sendClass ? ` ${sendClass}` : ""}`}
+          disabled={!canSend}
+          aria-label={action}
+          // Mousedown (which iOS Safari synthesizes before click on a tap) blurs the
+          // textarea by default; that blur fires two synchronous relayouts (the peek clamp
+          // and the scroll-collapse pin release, see styles.css's mobile `--btn-lift`) that
+          // move this button before the click lands. preventDefault on mousedown suppresses
+          // the focus change without suppressing click, so nothing moves mid-tap.
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          {Icons.send(18)}
+        </button>
       </div>
     </form>
   );
