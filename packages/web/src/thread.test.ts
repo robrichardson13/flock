@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { failPending, mergeThread, nextTempId, resolvePending, type PendingSend, type ThreadEntry } from "./thread.tsx";
+import { failPending, isDoubleTap, mergeThread, nextTempId, resolvePending, tapMoved, type PendingSend, type ThreadEntry } from "./thread.tsx";
 
 /** A minimal `ThreadEntry` for the merge tests: only `id` and `body` matter to them. */
 function entry(id: string, body = id): ThreadEntry {
@@ -94,5 +94,47 @@ describe("nextTempId", () => {
 
   it("cannot collide with a real (short base36) id", () => {
     expect(nextTempId().startsWith("optimistic-")).toBe(true);
+  });
+});
+
+/**
+ * The double-tap gesture's thresholds (#6), unchanged by #1 — what the gesture *does* moved
+ * from "toggle 👍" to "open the reaction sheet", but what counts as a double tap did not, and
+ * these guard that the rework left the detection alone.
+ */
+describe("isDoubleTap", () => {
+  const at = (x: number, y: number, t: number) => ({ x, y, t });
+
+  it("is false with no previous tap to pair against", () => {
+    expect(isDoubleTap(null, at(10, 10, 1000))).toBe(false);
+  });
+
+  it("pairs two quick taps in the same place", () => {
+    expect(isDoubleTap(at(10, 10, 1000), at(12, 11, 1200))).toBe(true);
+  });
+
+  it("does not pair taps more than 300ms apart", () => {
+    expect(isDoubleTap(at(10, 10, 1000), at(10, 10, 1301))).toBe(false);
+    expect(isDoubleTap(at(10, 10, 1000), at(10, 10, 1300))).toBe(true);
+  });
+
+  it("does not pair taps further apart than a fingertip", () => {
+    // 32px is the radius; (24, 24) is ~33.9 away, (20, 20) ~28.3.
+    expect(isDoubleTap(at(0, 0, 1000), at(24, 24, 1100))).toBe(false);
+    expect(isDoubleTap(at(0, 0, 1000), at(20, 20, 1100))).toBe(true);
+  });
+});
+
+describe("tapMoved", () => {
+  it("treats a lift with no recorded press as movement (nothing to measure against)", () => {
+    expect(tapMoved(null, { x: 5, y: 5 })).toBe(true);
+  });
+
+  it("lets a still finger through", () => {
+    expect(tapMoved({ x: 100, y: 100 }, { x: 104, y: 98 })).toBe(false);
+  });
+
+  it("rejects a scroll", () => {
+    expect(tapMoved({ x: 100, y: 100 }, { x: 100, y: 180 })).toBe(true);
   });
 });

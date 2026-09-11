@@ -1708,31 +1708,6 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 }
 @keyframes pending-pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
 
-/* Double-tap-to-react confirmation (#6): every bubble is a tap target for this gesture, so
-   every bubble carries the position it needs to center this over itself. A brief 👍 pops up
-   and fades — the same pill language (--ink-action-soft ring, --ink-action ink) the "mine"
-   reaction chip already wears, just floating rather than inline, since the tap can land before
-   any chip exists yet. `pointer-events: none` keeps it from ever intercepting the next tap. */
-.dt-flash {
-  position: absolute; top: 50%; left: 50%; z-index: 5; pointer-events: none;
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 40px; height: 40px; border-radius: 50%;
-  background: var(--ink-action-soft); color: var(--ink-action);
-  font-size: 20px; line-height: 1;
-  box-shadow: var(--shadow);
-  animation: dt-flash 550ms ease-out forwards;
-}
-@keyframes dt-flash {
-  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
-  30% { opacity: 1; transform: translate(-50%, -50%) scale(1.1); }
-  65% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  100% { opacity: 0; transform: translate(-50%, -50%) scale(1); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .dt-flash { animation: dt-flash-reduced 550ms ease-out forwards; }
-}
-@keyframes dt-flash-reduced { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
-
 /* ---------- the phone channel's gutters (#41) ---------- */
 /* On a 390pt screen the avatar column was costing an agent bubble 40pt of its left edge that
    an own bubble did not pay, so the two kinds started on different lines and the agent side
@@ -1890,6 +1865,14 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 }
 .reaction-picker-item:active { background: var(--surface-press); }
 .reaction-picker-item.mine { background: var(--ink-action-soft); }
+/* The touch reaction sheet (#1): the same palette the desktop popover shows, at a thumb's size
+   — 44pt targets, spread across the sheet's width so the row reads as the sheet's content and
+   not as a popover that happened to land there. It wraps rather than scrolls: seven emoji fit
+   one line at 390pt and an eighth would simply drop to a second. The sheet itself brings the
+   backdrop, the Escape key and the safe-area chin (see `.sheet`), so there is nothing here but
+   the row. */
+.reaction-sheet-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--s2); }
+.reaction-picker-item.lg { width: 44px; height: 44px; font-size: 26px; }
 /* Activity's day separator: the same quiet-head grammar the Cards tab's section names use
    ("Doing 3") — no rule, no background, just a label one step above the runs it introduces. */
 .evt-day-label { font-size: var(--t-cap); font-weight: var(--w-head); color: var(--muted); padding: 0 0 var(--s1) 2px; }
