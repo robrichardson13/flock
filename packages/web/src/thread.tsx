@@ -321,7 +321,7 @@ export function LineComposer({
   onTextChange,
   compact,
   onExpandedChange,
-  onUserExpandedChange,
+  onFocusChange,
 }: {
   placeholder: string;
   action: string;
@@ -356,16 +356,19 @@ export function LineComposer({
    *  changes, so a caller can hide something (the jump-to-latest button) while the composer
    *  is focused or holding a draft, and let it back once the composer collapses. */
   onExpandedChange?: (expanded: boolean) => void;
-  /** Channel only (#4): told whenever *the reasons a caller can actually control* — focus, or
-   *  a non-empty draft/staged attachment — change, independent of `compact`/`expanded` itself.
+  /** Channel and Decisions only (#4, narrowed by #6): told whenever *this field's own focus*
+   *  changes — not `compact`/`expanded`, and (since #6) not a blurred draft either.
    *  `expanded` above is `!compact || focused || text || staged`, which is unconditionally
    *  true on the very first render of a composer whose `compact` prop starts `false` (exactly
    *  Channel's case, since its `compact` is itself derived from scroll progress) — a caller
-   *  driving that same scroll progress off `onExpandedChange` would latch its "user is
-   *  editing" override permanently on that first tick and never let go (#4 reopened). This
-   *  callback only ever reflects the user-driven reasons, so it starts `false` regardless of
-   *  `compact`'s own initial value. */
-  onUserExpandedChange?: (expanded: boolean) => void;
+   *  driving that same scroll progress off `onExpandedChange` would latch an override
+   *  permanently on that first tick and never let go (#4 reopened). Reporting `focused` alone
+   *  avoids that the same way `userExpanded` used to, and additionally lets a *blurred*
+   *  draft fall through to the ordinary scroll-driven collapse instead of being pinned open
+   *  forever (#6): the peek's ceiling is a CSS concern (`.composer-open:not(.composer-focused)`
+   *  in styles.css), keyed off `focused` and `userExpanded`'s `.composer-open`/`.composer-focused`
+   *  classes below, not off anything this callback reports. */
+  onFocusChange?: (focused: boolean) => void;
 }) {
   const key = draftKey(address);
   const [text, setText] = useState(() => getDraft(key).text);
@@ -558,8 +561,11 @@ export function LineComposer({
   // reads false while `compact` is set, the field is unfocused, and there is nothing in it
   // or staged worth keeping open for.
   const expanded = !compact || focused || !!text.trim() || staged.length > 0;
-  // Unlike `expanded`, never true merely because `compact` is false — see
-  // `onUserExpandedChange`'s doc comment for why that distinction matters (#4 reopened).
+  // Unlike `expanded`, never true merely because `compact` is false — see `onFocusChange`'s
+  // doc comment for why that distinction matters (#4 reopened). Drives `.composer-open`
+  // below, which is a wider gate than `onFocusChange` reports: a blurred draft is
+  // `userExpanded` but not focused, and #6 needs CSS (not the scroll-collapse hook) to tell
+  // those two apart.
   const userExpanded = focused || !!text.trim() || staged.length > 0;
 
   useEffect(() => {
@@ -568,9 +574,9 @@ export function LineComposer({
   }, [expanded]);
 
   useEffect(() => {
-    onUserExpandedChange?.(userExpanded);
+    onFocusChange?.(focused);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userExpanded]);
+  }, [focused]);
 
   const submit = async (e?: FormEvent) => {
     e?.preventDefault();
@@ -688,8 +694,23 @@ export function LineComposer({
   // pill-and-sheet): the shell is sized to the visual viewport, so the field rides the
   // keyboard and the tab bar steps out from under it while a field is focused.
   const compactClass = compact ? (expanded ? " composer-expanded" : " composer-collapsed") : "";
+  // Mirrors `userExpanded` as a class so CSS can tell "at rest" apart from "the user is
+  // typing" even when a blurred draft's collapse fires (neither `compactClass` above — a
+  // draft's `expanded` is always true, so this is always `composer-expanded`, never
+  // `composer-collapsed` — nor `--composer-collapse` distinguishes that case on its own).
+  const openClass = userExpanded ? " composer-open" : "";
+  // #6: split out of `.composer-open` so CSS can tell "focused" (never collapses; no clamp
+  // at all — same as before #6) apart from "blurred with a draft" (the new line-quantized
+  // peek). See styles.css's `@media (max-width: 899px)` mobile clamp.
+  const focusedClass = focused ? " composer-focused" : "";
   return (
-    <form ref={footRef} className={`pane-foot${className ? ` ${className}` : ""}${compactClass}`} onSubmit={submit} onDrop={onDrop} onDragOver={onDragOver}>
+    <form
+      ref={footRef}
+      className={`pane-foot${className ? ` ${className}` : ""}${compactClass}${openClass}${focusedClass}`}
+      onSubmit={submit}
+      onDrop={onDrop}
+      onDragOver={onDragOver}
+    >
       {expanded && above}
       {noticeBlock}
       {chips}
@@ -724,7 +745,13 @@ export function LineComposer({
             onPaste={onPaste}
             onScroll={syncMirror}
             onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
+            onBlur={() => {
+              setFocused(false);
+              // #6: pin the internal scroll to the top on blur, so a collapsed multi-line
+              // draft's peek always shows the draft's *first* line (the human's call on #5),
+              // never wherever the caret happened to leave the field scrolled.
+              if (areaRef.current) areaRef.current.scrollTop = 0;
+            }}
             enterKeyHint="enter"
             data-composer
           />

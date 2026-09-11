@@ -478,6 +478,20 @@ html { overscroll-behavior: none; }
      sheet backdrop, which was already anchored to --vvt and stayed put. The bar has to hold
      still under a keyboard, so the shell sits on the same edge the sheets do. */
   .app { position: fixed; top: var(--vvt, 0px); left: 0; right: 0; height: var(--vvh, 100dvh); }
+  /* #16: and in the home-screen app with no keyboard up, the shell fills the glass — said
+     here as well as in JS, because `dvh` is resolved by the layout engine against the very
+     viewport it places this box in, so it cannot be wrong about it the way a JS reading can.
+     With `viewport-fit=cover` iOS hands the page the whole display but reports
+     `window.innerHeight` with the top safe-area inset already subtracted (793 against an
+     852pt display on the human's phone); a shell sized from that ends 59pt above the bottom
+     of the glass, which is the band of dark under the tab bar, the too-short scrollers, and
+     the last message stuck under the composer with no scroll to clear it.
+
+     Scoped to standalone: in a Safari tab `100dvh` is the toolbars-retracted *large*
+     viewport, and flooring at it would grow the shell under Safari's own chrome. Scoped to
+     `:not([data-keyboard])`: a keyboard is exactly when the visible strip is genuinely
+     shorter than the viewport, and only --vvh knows by how much. */
+  html[data-standalone]:not([data-keyboard]) .app { height: max(var(--vvh, 100dvh), 100dvh); }
   /* #9: while iOS is moving the viewport under us — `data-vv-moving` is on the document for
      exactly as long as App.tsx is resampling it, from focus until it has held still — nothing
      the app owns may add motion of its own on top. There is no transition on the shell's
@@ -776,7 +790,10 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 .screen { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
 .screen-body {
   flex: 1; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
-  padding: var(--s3) var(--edge-x) var(--s5); display: flex; flex-direction: column; gap: var(--s4);
+  padding: var(--s3) var(--edge-x) var(--s5); display: flex; flex-direction: column;
+  /* Named, not literal, because the trailing spacer below (#18) cancels exactly one of these
+     gaps with a negative margin, and it can only do that if it can name the value. */
+  --scroll-gap: var(--s4); gap: var(--scroll-gap);
   touch-action: pan-y;
 }
 /* These scrollers are flex columns, so their children are flex items and shrink by
@@ -899,8 +916,8 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
    scope and the guard in one: the card page and Home have no tab bar and are untouched, and so
    is every desktop rule, which never renders one (the phone and desktop shells are separate
    trees — `.app-mobile` / `.app-desktop` in App.tsx — and only the phone one has a `.tabbar`). */
-.screen:has(.tabbar) .screen-body { padding-bottom: calc(var(--s5) + var(--pillbar-space)); }
-.screen:has(.tabbar) .pane:not(:has(> .pane-foot)) .pane-scroll { padding-bottom: calc(var(--s3) + var(--pillbar-space)); }
+.screen:has(.tabbar) .screen-body { padding-bottom: 0; --bottom-reserve: calc(var(--s5) + var(--pillbar-space)); }
+.screen:has(.tabbar) .pane:not(:has(> .pane-foot)) .pane-scroll { padding-bottom: 0; --bottom-reserve: calc(var(--s3) + var(--pillbar-space)); }
 
 /* #1: the Channel and Decisions composer joins the floating bottom layer. #38 lifted the tab
    bar out of the flow but left the chin in it, so those two tabs ended in an opaque band that
@@ -965,7 +982,37 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 .screen:has(.tabbar) .pane:has(> .pane-foot) {
   --composer-space: calc(var(--pillbar-space) + max(var(--composer-h, 56px), var(--composer-h-rest, 0px)));
 }
-.screen:has(.tabbar) .pane:has(> .pane-foot) .pane-scroll { padding-bottom: calc(var(--s3) + var(--composer-space)); }
+.screen:has(.tabbar) .pane:has(> .pane-foot) .pane-scroll { padding-bottom: 0; --bottom-reserve: calc(var(--s3) + var(--composer-space)); }
+
+/* #18: the reservation is a real box, not trailing padding.
+   The three rules above used to spend their reservation as `padding-bottom`, which is right in
+   every engine except the one that matters. iOS WebKit only folds a scroll container's *trailing
+   padding* into its scrollable overflow once the content has already overflowed the padding box
+   on its own; while the content still fits, the padding is not scrollable space, it is just
+   space the reader cannot reach. Measured on the human's phone via the #17 readout, and
+   reproduced at 393x793: nine short messages left the content ending inside the padding box, so
+   `scrollHeight === clientHeight` and there was no scroll at all — with the tail of the feed
+   sitting under the composer, which is precisely card #4's bug wearing a different hat. Ten
+   messages pushed the content past the padding box's bottom edge, at which point the whole 228px
+   appeared at once (scrollHeight 1034 = content 806 + 228) and the feed scrolled. Desktop WebKit
+   counts the padding either way, which is why the harness kept passing what the phone rejected.
+
+   A generated box is content. It is laid out, it is in the flex flow, and every engine puts it
+   in the scrollable overflow rect unconditionally — so the reservation now becomes scrollable at
+   exactly the moment the content would touch the chrome, which is what the mechanism always
+   claimed to do. The negative `margin-top` cancels the one flex `gap` the spacer would otherwise
+   add after the last row, so the reserved distance is the same number the padding reserved.
+
+   `--bottom-reserve` is set on the scroller and inherited by the pseudo-element; `--scroll-gap`
+   is the scroller's own `gap`, named so this can subtract it. Desktop renders no `.tabbar`, so
+   none of this exists there. */
+.screen:has(.tabbar) .screen-body::after,
+.screen:has(.tabbar) .pane .pane-scroll::after {
+  content: "";
+  flex: none;
+  height: var(--bottom-reserve, 0px);
+  margin-top: calc(-1 * var(--scroll-gap));
+}
 /* "N new" is anchored to the bottom of `.pane-body`, which now runs the full height of the
    pane rather than stopping at the chin's top edge — so it has to be lifted clear itself,
    or it sits behind the composer. */
@@ -1097,7 +1144,7 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
    .card-row); and between groups 28px, more than any distance inside a group, which is what
    lets a faded 13px heading mark a boundary at all. The large title sits 24px above its first
    group, closer than the groups sit to each other, because it names them. */
-.screen-body.home, .screen-body:has(> .section-todo) { gap: var(--s5); }
+.screen-body.home, .screen-body:has(> .section-todo) { --scroll-gap: var(--s5); gap: var(--scroll-gap); }
 .screen-body.home > section:not(.inbox) > h2 { margin-bottom: 0; }
 .screen-body > section:has(> .section-head) + section:has(> .section-head) { margin-top: var(--s1); }
 .team-stack { flex: none; display: flex; align-items: center; min-height: var(--tap); padding: 0; background: none; border: none; cursor: pointer; }
@@ -1508,11 +1555,11 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 /* overflow-anchor: none — Chrome's scroll anchoring otherwise fights useStickToBottom: it can
    claw the pane back when content above the viewport resizes, firing a scroll event that flips
    `stuck` false before the ResizeObserver re-pin runs and permanently defeats it (see #3). */
-.pane-scroll { flex: 1; overflow: auto; overflow-anchor: none; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: var(--s3) var(--edge-x); display: flex; flex-direction: column; gap: var(--s4); }
+.pane-scroll { flex: 1; overflow: auto; overflow-anchor: none; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: var(--s3) var(--edge-x); display: flex; flex-direction: column; --scroll-gap: var(--s4); gap: var(--scroll-gap); }
 .pane-foot { flex: none; padding: var(--s2) var(--s3); border-top: 1px solid var(--line); background: var(--bg-chrome); }
 /* Activity groups into day separators and actor runs (#2 design review), each their own flex
    column, so the pane's own --s4 gap belongs between days rather than between every row. */
-.pane-scroll:has(> .evt-day) { gap: var(--s2); }
+.pane-scroll:has(> .evt-day) { --scroll-gap: var(--s2); gap: var(--scroll-gap); }
 .line-composer { display: flex; align-items: flex-end; gap: var(--s2); }
 .line-composer-input {
   flex: 1; resize: none; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere;
@@ -1612,7 +1659,7 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 .msg-group.mine .msg-head { flex-direction: row-reverse; }
 /* Group-to-group is 16px on both sides and at both widths. The generic .pane-scroll drops
    to 10px on desktop, which would put the between-group gap below the within-group one. */
-.pane-scroll.chan-scroll { gap: var(--s4); }
+.pane-scroll.chan-scroll { --scroll-gap: var(--s4); gap: var(--scroll-gap); }
 .msg-head { display: flex; gap: var(--s2); align-items: baseline; font-size: var(--t-foot); line-height: var(--lh-foot); margin-bottom: 2px; }
 .msg-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: var(--lh-body); }
 .bubble {
@@ -2313,15 +2360,109 @@ html[data-topbar] .sheet { max-height: 100%; }
   .card-composer .line-composer-input {
     min-height: 0;
     padding-block: calc(var(--s2) + (var(--s3) - var(--s2)) * (1 - var(--composer-collapse, 0)));
-    /* The lever that actually moves the field's row. `useAutoGrow` writes an inline
-       `style.height` in px on the textarea and `box-sizing` is border-box everywhere, so the
-       padding above cannot change the box — on its own it only slides the text around inside
-       a fixed-height field, which is exactly the "the text moves but the composer doesn't"
-       the human saw. `max-height` outranks an inline `height`, so this is what takes the row
-       from its expanded 48px (`--lh-body` + 2 x `--s3`) to the resting 40px (+ 2 x `--s2`),
-       continuously. Safe against a multi-line draft: a non-empty draft pins the variable at
-       0 via the focus/draft override. */
+  }
+
+  /* The lever that actually moves the field's row. `useAutoGrow` writes an inline
+     `style.height` in px on the textarea and `box-sizing` is border-box everywhere, so the
+     padding above cannot change the box — on its own it only slides the text around inside
+     a fixed-height field, which is exactly the "the text moves but the composer doesn't"
+     the human saw. `max-height` outranks an inline `height`, so this is what takes the row
+     from its expanded 48px (`--lh-body` + 2 x `--s3`) to the resting 40px (+ 2 x `--s2`),
+     continuously — but only while the composer is at rest, i.e. genuinely empty and
+     unfocused. `.composer-open` mirrors `userExpanded` (thread.tsx) — focused, has text, or
+     has a staged attachment — and gating on it, rather than on `--composer-collapse` or
+     `.composer-expanded` (absent exactly when a draft exists, see thread.tsx's
+     `compactClass`), is what makes this rule apply only to the actually-empty case. What
+     `.composer-open` itself does is split further below (#6). */
+  .card-composer:not(.composer-open) .line-composer-input {
     max-height: calc(var(--lh-body) + 2 * (var(--s2) + (var(--s3) - var(--s2)) * (1 - var(--composer-collapse, 0))));
+  }
+
+  /* #6: the line-quantized peek. A composer that is open *because it holds a draft*, not
+     because it is focused, still collapses on scroll — but its ceiling is the grown height
+     (`--composer-grown-h`, published by `useAutoGrow`), interpolating down to one whole line
+     box, never to a fraction of a line. Card #2's bug was arithmetic (48px clamped against a
+     24px line box always cuts a glyph mid-height), so the fix quantizes rather than just
+     picking a nicer pair of endpoints: `--composer-peek-lines` rounds the *content* height
+     down to a whole multiple of `--lh-body` before the (unchanged, ungated) padding above is
+     added back, so the textarea's content box is always an integer number of lines tall at
+     every value of `--composer-collapse`, and only the padding around it moves continuously.
+     `round()` down rather than to-nearest so the endpoint at progress 1 lands on exactly one
+     line (round(down, 24px, 24px) = 24px) rather than a step that could round up past it.
+
+     Focused is excluded (`:not(.composer-focused)`) — a focused draft keeps the base 212px
+     cap plus the live inline height, same as before #6; this only ever fires once the field
+     is blurred, which is exactly when `useScrollCollapse`'s ordinary distance-from-bottom
+     mapping (not the old always-0 override) drives `--composer-collapse` for a draft.
+
+     `overflow` is hidden rather than the base `auto`: the point is a *window* onto the
+     draft, not a finger-scrollable one — thread.tsx pins `scrollTop` to 0 on blur so the
+     window is line-aligned on the draft's first line (the human's call on #5), and disabling
+     scroll keeps a stray touch from moving it off that alignment. The bottom `mask-image`
+     fade (not a hard cut) is what makes the hidden remainder read as tucked away rather than
+     clipped — deepening with `--composer-collapse` the same way everything else here does.
+
+     #15: the draft also has to stay off the buttons, and that is solved here too — on the
+     textarea, where the stray text is — rather than by painting anything behind a button.
+     `--btn-lift` (below) deliberately seats the attach/send row *inside* this box as collapse
+     progresses, and a round button only paints its background inside its circle (its own
+     box's corners stay transparent), so a collapsed line's tail showed through and under the
+     send button: the human's screenshot on #15, the first line's last glyph sitting inside
+     the teal circle. The vertical fade above can never reach it — by progress 1 the whole
+     visible line is inside the button row's band — so each button gets a mask layer shaped
+     like the button: a radial hole exactly where its circle is painted.
+
+     The hole's centre is the button's own centre, derived from the same arithmetic
+     `--btn-lift` uses rather than guessed. Horizontally each button is a `--tap` box at its
+     end of the row, so its centre is `--tap / 2` in from that edge. Vertically the button row
+     sits `--s1 * (1 - collapse)` (the row-gap above) below this box's bottom edge and is then
+     pulled up by `--btn-lift`, so the centre is `--btn-lift - gap - --tap / 2` *above* the
+     bottom edge — negative (below the box, clearing nothing) until collapse has lifted the
+     row far enough to overlap, which is exactly when the hole should start to exist. No
+     progress gate is needed anywhere: the geometry gates itself.
+
+     `--peek-clear-send` is the button's radius plus `--s1` of air, then `--peek-feather-send`
+     ramps back to opaque over `--s2` so the text ends in a fade rather than a cut. The
+     paperclip's own radius is `scale(1 - collapse)`'d below, so its hole scales on the same
+     curve — nothing at progress 1, where the paperclip is gone and the draft's opening
+     characters (the part a reader most wants) must be intact. A hole shaped like the button
+     is also why nothing else is eaten: at mid-collapse the ends of lines nowhere near a
+     button keep their text, which a full-width column clear would have taken.
+
+     Each layer is opaque everywhere except its own hole and `mask-composite: intersect`
+     multiplies the three, so a pixel is hidden if *any* layer hides it.
+     `-webkit-mask-composite: source-in` is the legacy spelling of the same operator, paired
+     with the existing `-webkit-mask-image` for older WebKit. No stacking, `.icon-btn` or
+     backdrop change is involved: #12 rejected an opaque square behind the buttons, and the
+     buttons keep their exact `--tap` circle, colour and position at every progress. */
+  .card-composer.composer-open:not(.composer-focused) .line-composer-input {
+    --composer-peek-lines: round(
+      down,
+      calc((var(--composer-grown-h, 212px) - 2 * var(--s3)) * (1 - var(--composer-collapse, 0)) + var(--lh-body) * var(--composer-collapse, 0)),
+      var(--lh-body)
+    );
+    max-height: calc(var(--composer-peek-lines) + 2 * (var(--s2) + (var(--s3) - var(--s2)) * (1 - var(--composer-collapse, 0))));
+    overflow: hidden;
+    --peek-fade: calc(var(--composer-collapse, 0) * var(--s4));
+    --peek-btn-cy: calc(
+      (var(--lh-body) + 2 * var(--s2)) * var(--composer-collapse, 0)
+      - var(--s1) * (1 - var(--composer-collapse, 0))
+      - var(--tap) / 2
+    );
+    --peek-clear-send: calc(var(--tap) / 2 + var(--s1));
+    --peek-feather-send: var(--s2);
+    --peek-clear-attach: calc((var(--tap) / 2 + var(--s1)) * (1 - var(--composer-collapse, 0)));
+    --peek-feather-attach: calc(var(--s2) * (1 - var(--composer-collapse, 0)));
+    mask-image:
+      linear-gradient(to bottom, black calc(100% - var(--peek-fade)), transparent 100%),
+      radial-gradient(circle calc(var(--peek-clear-send) + var(--peek-feather-send)) at right calc(var(--tap) / 2) bottom var(--peek-btn-cy), transparent var(--peek-clear-send), black 100%),
+      radial-gradient(circle calc(var(--peek-clear-attach) + var(--peek-feather-attach)) at left calc(var(--tap) / 2) bottom var(--peek-btn-cy), transparent var(--peek-clear-attach), black 100%);
+    -webkit-mask-image:
+      linear-gradient(to bottom, black calc(100% - var(--peek-fade)), transparent 100%),
+      radial-gradient(circle calc(var(--peek-clear-send) + var(--peek-feather-send)) at right calc(var(--tap) / 2) bottom var(--peek-btn-cy), transparent var(--peek-clear-send), black 100%),
+      radial-gradient(circle calc(var(--peek-clear-attach) + var(--peek-feather-attach)) at left calc(var(--tap) / 2) bottom var(--peek-btn-cy), transparent var(--peek-clear-attach), black 100%);
+    -webkit-mask-composite: source-in;
+    mask-composite: intersect;
   }
 
   /* The wrapped attach/send row is ~48px of the 52px delta — the human's option A on #4 asked
@@ -3044,7 +3185,7 @@ html[data-topbar] .sheet { max-height: 100%; }
     position: absolute; top: 3px; right: 3px;
     width: 5px; height: 5px; border-radius: var(--r-full); background: var(--muted);
   }
-  .pane-scroll { padding: var(--s2) var(--s3); gap: var(--s2); }
+  .pane-scroll { padding: var(--s2) var(--s3); --scroll-gap: var(--s2); gap: var(--scroll-gap); }
   /* #25/C5: a scrolled pane used to clip its first row mid-glyph right under the head, which
      reads as a rendering fault rather than as scroll. A 24px mask on the scroller itself lets
      that row dissolve instead — the same trick `.brief-clamped` already uses at its cut, just
@@ -3092,7 +3233,7 @@ html[data-topbar] .sheet { max-height: 100%; }
      their own, and 12 inside a group against 16 between them is not a difference the eye
      reads at this width. One turn to the next is now a clear step above one paragraph to the
      next within a turn — which is the only thing grouping was ever meant to say. */
-  .pane-scroll.chan-scroll { gap: var(--s5); }
+  .pane-scroll.chan-scroll { --scroll-gap: var(--s5); gap: var(--scroll-gap); }
   /* Same rounded, bordered chin as mobile (#3): the field, attach and send sit on one raised
      surface rather than a bare field on the pane's own floor. A docked pane has width to
      spare, so unlike the phone's stacked rows this stays a single row — the container just

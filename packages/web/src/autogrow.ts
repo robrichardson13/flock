@@ -17,6 +17,10 @@ export function useAutoGrow(value: string) {
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
+    // #6: published alongside the inline height so the mobile line-quantized peek (styles.css,
+    // `.composer-open:not(.composer-focused) .line-composer-input`) can interpolate its ceiling
+    // *from* the grown height instead of only ever clamping down to a fixed endpoint.
+    el.style.setProperty("--composer-grown-h", `${el.scrollHeight}px`);
   }, []);
   // Layout, not passive (#43): a restored multi-line draft is in the field on the first
   // paint, so a resize that waits for the next frame paints it one row tall and then grows

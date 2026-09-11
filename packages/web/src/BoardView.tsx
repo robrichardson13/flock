@@ -1667,7 +1667,7 @@ function Channel({ boardId, snap, onSent }: { boardId: string; snap: Snapshot; o
       <LineComposer
         className="card-composer"
         compact={mobile && scrollCollapse.collapsed}
-        onUserExpandedChange={scrollCollapse.setExpandedOverride}
+        onFocusChange={scrollCollapse.setFocusOverride}
         placeholder="Message the team"
         action="Send"
         boardId={boardId}
@@ -1799,7 +1799,7 @@ function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap:
       <LineComposer
         className="card-composer"
         compact={mobile && scrollCollapse.collapsed}
-        onUserExpandedChange={scrollCollapse.setExpandedOverride}
+        onFocusChange={scrollCollapse.setFocusOverride}
         placeholder="Record a decision"
         action="Record"
         address={{ board: boardId, pane: "decisions" }}

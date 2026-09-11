@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { readoutRequested, summarizeTrace, traceHead, traceText, type VVFrame } from "./vv.ts";
+import { keyboardShrunk, readoutRequested, shellHeight, summarizeTrace, traceHead, traceText, type VVFrame } from "./vv.ts";
 
 const f = (t: number, bar: number, offsetTop = 0, height = 800, scrollY = 0, slotOpacity = 1): VVFrame =>
   ({ t, bar, screen: bar - offsetTop, offsetTop, height, scrollY, slotOpacity });
@@ -67,5 +67,52 @@ describe("traceHead / traceText", () => {
     expect(text.startsWith("mode=standalone")).toBe(true);
     expect(text).toContain("\"barMin\":-19");
     expect(text.trim().split("\n")).toHaveLength(5);
+  });
+});
+
+/**
+ * #16: the standalone shell's height. The condition every previous harness missed is the
+ * 793-vs-852 split — the home-screen app reports `innerHeight` with the top safe-area inset
+ * already taken off while the layout viewport `position: fixed` uses stays the full display —
+ * so it is written out here as the numbers off the human's own phone.
+ */
+describe("shellHeight", () => {
+  const base = { raw: 793, innerHeight: 793, clientHeight: 793, rest: 793, screenHeight: 852, standalone: true, keyboard: false };
+
+  it("fills the glass in standalone with no keyboard: innerHeight 793, layout viewport 852", () => {
+    expect(shellHeight({ ...base, clientHeight: 852 })).toBe(852);
+  });
+
+  it("changes nothing where the three readings already agree", () => {
+    expect(shellHeight(base)).toBe(793);
+  });
+
+  it("still corrects the status bar and the accessory pill under a real keyboard", () => {
+    // The device's shrunk reading with a field focused: 417 - (852 - 793) - 37.
+    expect(shellHeight({ ...base, raw: 417, clientHeight: 852, keyboard: true })).toBe(321);
+  });
+
+  it("does not take that correction from a short viewport alone — the #10 misfire", () => {
+    // Same numbers, nothing focused. The old inference read `raw < rest - 1` as a keyboard and
+    // put the whole app in the top 40% of the glass.
+    expect(shellHeight({ ...base, raw: 417, clientHeight: 852, keyboard: false })).toBe(852);
+  });
+
+  it("leaves a Safari tab alone: a short visual viewport there is Safari's own toolbar", () => {
+    expect(shellHeight({ ...base, raw: 743, innerHeight: 852, clientHeight: 852, rest: 852, standalone: false })).toBe(743);
+    expect(shellHeight({ ...base, raw: 743, innerHeight: 852, clientHeight: 852, rest: 852, standalone: false, keyboard: true })).toBe(743);
+  });
+
+  it("never floors below what is actually visible", () => {
+    // A visual viewport taller than either layout reading (pinch-out) still wins.
+    expect(shellHeight({ ...base, raw: 900, clientHeight: 852 })).toBe(900);
+  });
+});
+
+describe("keyboardShrunk", () => {
+  it("needs both the focus evidence and the shortfall", () => {
+    expect(keyboardShrunk({ raw: 417, rest: 793, keyboard: true })).toBe(true);
+    expect(keyboardShrunk({ raw: 417, rest: 793, keyboard: false })).toBe(false);
+    expect(keyboardShrunk({ raw: 793, rest: 793, keyboard: true })).toBe(false);
   });
 });
