@@ -241,6 +241,23 @@ New file `packages/core/src/presence.ts`, re-exported from `index.ts`. In memory
 
 ```ts
 export const PRESENCE_TTL_MS = 45_000;
+export const IDLE_MS = 180_000;
+
+export interface LookingInputs {
+  visible: boolean;
+  focused: boolean;      // ignored when foregroundOnly
+  lastInputAt: number;
+  now: number;
+  foregroundOnly: boolean;  // a phone or tablet: one foreground app, no per-window focus
+}
+
+/** Pure, and the only definition of "looking". Desktop: visible && focused && input inside
+ *  `IDLE_MS`. Foreground-only device: `visible` is the whole rule — `document.hasFocus()` is
+ *  unreliable in an iOS standalone web app and reading without tapping is not absence. The OS
+ *  screen-lock is the idle timer there, and `PRESENCE_TTL_MS` bounds a stale "looking" at 45s.
+ *  Also exported from `@flock/core/presence`, a browser-safe entry point the web imports.
+ *  (ADR 0021 amendment; card 20.) */
+export function clientIsLooking(inputs: LookingInputs): boolean;
 
 export interface PresenceReport {
   client: string;
@@ -859,19 +876,21 @@ See ADR 0021.
 
 ```ts
 export const HEARTBEAT_MS = 15_000;   // matches PRESENCE_TTL_MS's three-heartbeat budget (§1.4)
-export const IDLE_MS = 180_000;
 
-export interface LookingInputs { visible: boolean; focused: boolean; lastInputAt: number; now: number }
+// The rule itself lives in @flock/core/presence (§1.4) and is re-exported here for the web's tests.
+export { clientIsLooking, IDLE_MS, type LookingInputs };
 
-/** Pure. `visibilityState === "visible" && document.hasFocus() && now - lastInputAt < IDLE_MS`. */
-export function isLooking(inputs: LookingInputs): boolean;
+/** Pure. `(hover: none) and (pointer: coarse)` — a phone or tablet, where there is one foreground
+ *  app and no per-window focus. Feeds `LookingInputs.foregroundOnly`. */
+export function foregroundOnlyDevice(): boolean;
 
-export interface PresenceState { looking: boolean; board: string | null; lastSentAt: number }
+export interface PresenceState { looking: boolean; board: string | null; lastSentAt: number; failed: boolean }
 export type PresenceAction = "send" | "beat" | "none";
 
 /** Pure. "send" on any change of `looking` or `board` (including the first evaluation, `prev ===
- *  null`); "beat" while still looking once `HEARTBEAT_MS` has elapsed since the last send;
- *  otherwise "none". */
+ *  null`); "beat" once `HEARTBEAT_MS` has elapsed since the last attempt while still looking **or**
+ *  while that attempt failed (a dropped leave beat must be retried, or the server holds a stale
+ *  "looking" for the whole TTL); otherwise "none". */
 export function presenceStep(
   prev: PresenceState | null,
   next: { looking: boolean; board: string | null },
@@ -898,7 +917,9 @@ importing it, so `presence.ts` has no dependency on the shell that mounts it.
   (hash-driven, since `usePresence` re-runs its effect on `[actor, board]`) — any of these can flip
   `looking` or `board`, and `presenceStep` fires `"send"` on either changing.
 - Every `HEARTBEAT_MS` while still looking, via a 5 second re-evaluation interval that also catches
-  the idle threshold lapsing (`IDLE_MS`) with no event of its own to trigger it.
+  the idle threshold lapsing (`IDLE_MS`, desktop only) with no event of its own to trigger it, and
+  retries a report whose `POST` failed. A failure is logged with its `(looking, board)` context,
+  never swallowed.
 - Once more with `looking: false` the moment looking stops, including on `pagehide` — sent via
   `fetch(..., { keepalive: true })` (`api.presence(body, { keepalive: true })`) so the leave signal
   survives the page going away; `sendBeacon` is not used because it cannot carry the
@@ -1027,10 +1048,14 @@ key format.
 The service worker itself, the permission prompt, and the subscribe round trip are not unit
 testable and are not faked. They are card #5's manual iOS checklist.
 
-`packages/web/src/presence.test.ts`: `isLooking` truth table (hidden, unfocused, idle boundary at
-exactly `IDLE_MS - 1` true and `IDLE_MS` false); `presenceStep` sends on the first evaluation and on
-any change of `looking` or `board`, beats once `HEARTBEAT_MS` has elapsed while still looking, and
-never beats while not looking.
+`packages/web/src/presence.test.ts`: the `clientIsLooking` truth table as the web wires it (hidden,
+unfocused, idle boundary at exactly `IDLE_MS - 1` true and `IDLE_MS` false on a desktop, and each of
+those overridden on a foreground-only device); `foregroundOnlyDevice` against a stub `window`;
+`presenceStep` sends on the first evaluation and on any change of `looking` or `board`, beats once
+`HEARTBEAT_MS` has elapsed while still looking or after a failed report, and never beats while not
+looking after a report that succeeded. `packages/core/test/presence.test.ts` owns the rule's own
+truth table; `packages/server/src/push.test.ts` drives the real predicate through the real
+`POST /api/presence` into the real pump for both device kinds.
 
 ### 4.4 Card #5's manual checklist
 

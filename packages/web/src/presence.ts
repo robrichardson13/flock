@@ -1,21 +1,22 @@
 import { useEffect, useRef } from "react";
+import { clientIsLooking, IDLE_MS, type LookingInputs } from "@flock/core/presence";
 import { api } from "./api.ts";
 
 /** Three heartbeats; matches `PRESENCE_TTL_MS` in `@flock/core`'s `Presence` (§3.4, D6). */
 export const HEARTBEAT_MS = 15_000;
-/** §3.3, D7: a focused, visible tab with no input in the last three minutes is not "looking". */
-export const IDLE_MS = 180_000;
 
-export interface LookingInputs {
-  visible: boolean;
-  focused: boolean;
-  lastInputAt: number;
-  now: number;
-}
+/** The rule itself lives in core (§3.3, D7, ADR 0021 amendment); re-exported for the web's tests. */
+export { clientIsLooking, IDLE_MS, type LookingInputs };
 
-/** Pure. §3.3: `visibilityState === "visible" && document.hasFocus() && now - lastInputAt < IDLE_MS`. */
-export function isLooking(inputs: LookingInputs): boolean {
-  return inputs.visible && inputs.focused && inputs.now - inputs.lastInputAt < IDLE_MS;
+/**
+ * True on a device that shows one app at a time and has no per-window focus — a phone or tablet.
+ * `(hover: none) and (pointer: coarse)` is the touch-primary query; a desktop browser, including
+ * one with a touchscreen attached, still reports a fine pointer and hover. Feeds
+ * `clientIsLooking`, which drops the focus and idle requirements when it is true.
+ */
+export function foregroundOnlyDevice(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  return window.matchMedia("(hover: none) and (pointer: coarse)").matches;
 }
 
 export interface PresenceState {
@@ -23,19 +24,23 @@ export interface PresenceState {
   /** The board slug, or null on Home. */
   board: string | null;
   lastSentAt: number;
+  /** The last POST failed; the next beat retries instead of waiting for a state change. */
+  failed: boolean;
 }
 
 export type PresenceAction = "send" | "beat" | "none";
 
 /**
- * Pure. `prev` is the last state actually sent (or null before the first report); `next` is the
+ * Pure. `prev` is the last state we tried to send (or null before the first report); `next` is the
  * freshly computed `(looking, board)`. "send" fires immediately on any change of either; "beat"
- * fires while still looking once `HEARTBEAT_MS` has elapsed since the last send; otherwise "none".
+ * fires once `HEARTBEAT_MS` has elapsed since the last attempt, while still looking **or** while
+ * that attempt failed — a dropped `looking: false` leave beat would otherwise never be retried and
+ * the server would hold a stale "looking" for the whole TTL. Otherwise "none".
  */
 export function presenceStep(prev: PresenceState | null, next: { looking: boolean; board: string | null }, now: number): PresenceAction {
   if (!prev || prev.looking !== next.looking || prev.board !== next.board) return "send";
-  if (next.looking && now - prev.lastSentAt >= HEARTBEAT_MS) return "beat";
-  return "none";
+  if (now - prev.lastSentAt < HEARTBEAT_MS) return "none";
+  return next.looking || prev.failed ? "beat" : "none";
 }
 
 /** `#/b/<slug>/...` -> the board slug; anything else (Home included) -> null. Mirrors the board
@@ -75,21 +80,30 @@ export function usePresence(actor: string, hash: string): void {
       bumpInput();
     };
 
+    const report = (next: { looking: boolean; board: string | null }, now: number) => {
+      const state: PresenceState = { looking: next.looking, board: next.board, lastSentAt: now, failed: false };
+      prevRef.current = state;
+      api.presence({ client: CLIENT_ID, board: next.board, looking: next.looking }, { keepalive: !next.looking }).catch((err: unknown) => {
+        // Never swallowed: a dropped beat is one of the ways a foregrounded phone looks absent.
+        // Mark it so the next heartbeat retries — bounded by HEARTBEAT_MS, never a tight loop.
+        state.failed = true;
+        console.warn(`[presence] report failed (looking=${next.looking}, board=${next.board ?? "-"}); retrying on the next beat`, err);
+      });
+    };
+
     const evaluate = (leaving = false) => {
       if (!actor) return;
       const now = Date.now();
-      const looking = !leaving && isLooking({
+      const looking = !leaving && clientIsLooking({
         visible: document.visibilityState === "visible",
         focused: document.hasFocus(),
         lastInputAt: lastInputAtRef.current,
         now,
+        foregroundOnly: foregroundOnlyDevice(),
       });
       const next = { looking, board };
-      const step = presenceStep(prevRef.current, next, now);
-      if (step === "none") return;
-      const keepalive = !looking;
-      api.presence({ client: CLIENT_ID, board: next.board, looking: next.looking }, { keepalive }).catch(() => {});
-      prevRef.current = { looking: next.looking, board: next.board, lastSentAt: now };
+      if (presenceStep(prevRef.current, next, now) === "none") return;
+      report(next, now);
     };
 
     const onVisibility = () => {
