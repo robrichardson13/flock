@@ -38,6 +38,13 @@ export interface NotificationPayload {
   tag: string;
   /** The event that produced it. For dedupe and for debugging a delivery. */
   seq: number;
+  /**
+   * `true` on a leading edge and on every ask/awaiting-human notification: a same-tag
+   * replacement should alert (Chrome/Edge default to a silent replacement otherwise).
+   * `false` on a trailing batch flush, where the count updates quietly in place.
+   * Safari/iOS and Firefox ignore the field; nothing else depends on it.
+   */
+  renotify: boolean;
 }
 
 /** What the sender knows about the event's board and card that the event row does not carry. */
@@ -74,6 +81,7 @@ export function notificationFor(event: Event, ctx: NotifyContext): NotificationP
       url,
       tag: url,
       seq: event.seq,
+      renotify: true,
     };
   }
 
@@ -86,6 +94,7 @@ export function notificationFor(event: Event, ctx: NotifyContext): NotificationP
       url,
       tag: url,
       seq: event.seq,
+      renotify: true,
     };
   }
 
@@ -97,10 +106,57 @@ export function notificationFor(event: Event, ctx: NotifyContext): NotificationP
       url,
       tag: url,
       seq: event.seq,
+      renotify: true,
     };
   }
 
   return null;
+}
+
+/**
+ * "urgent" = card.asked, card.moved -> awaiting-human (bypasses batching and presence).
+ * "chatter" = message.posted (the only class that batches or is suppressed by presence).
+ * Everything else is null: it never produces a notification.
+ */
+export function notificationClass(event: Event): "urgent" | "chatter" | null {
+  if (event.type === "card.asked") return "urgent";
+  if (event.type === "card.moved" && event.data.to === "awaiting-human") return "urgent";
+  if (event.type === "message.posted") return "chatter";
+  return null;
+}
+
+/**
+ * Merges a batch of `count` folded messages into one notification: title becomes
+ * "<count> new in <board>" (the board title is `latest.title` for message.posted), body/url/tag/seq
+ * come from the latest folded message so the notification reflects the current state of the
+ * conversation, and `renotify` is passed through explicitly (`true` on a leading-edge burst,
+ * `false` on a trailing flush).
+ */
+export function mergedNotification(
+  latest: NotificationPayload,
+  count: number,
+  renotify: boolean,
+): NotificationPayload {
+  return {
+    title: `${count} new in ${latest.title}`,
+    body: latest.body,
+    url: latest.url,
+    tag: latest.tag,
+    seq: latest.seq,
+    renotify,
+  };
+}
+
+/** Distinct actor names of the targets, in first-seen order. */
+export function recipientsOf(targets: readonly NotifyTarget[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const target of targets) {
+    if (seen.has(target.subscription.actor)) continue;
+    seen.add(target.subscription.actor);
+    result.push(target.subscription.actor);
+  }
+  return result;
 }
 
 /** Every (subscription, payload) pair this event should produce. Empty when nothing applies. */

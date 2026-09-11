@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
+  mergedNotification,
+  notificationClass,
   notificationFor,
   notifyTargets,
+  recipientsOf,
   summarize,
+  type NotificationPayload,
   type NotifyContext,
+  type NotifyTarget,
   type PushSubscriptionRecord,
 } from "../src/index.ts";
 import type { Event } from "../src/index.ts";
@@ -72,6 +77,7 @@ describe("notificationFor", () => {
       url: "#/b/flock/channel",
       tag: "#/b/flock/channel",
       seq: 7,
+      renotify: true,
     });
   });
 
@@ -104,6 +110,7 @@ describe("notificationFor", () => {
       url: "#/b/flock/c/12",
       tag: "#/b/flock/c/12",
       seq: 3,
+      renotify: true,
     });
   });
 
@@ -116,6 +123,7 @@ describe("notificationFor", () => {
       url: "#/b/flock/c/4",
       tag: "#/b/flock/c/4",
       seq: 9,
+      renotify: true,
     });
   });
 
@@ -202,5 +210,65 @@ describe("notifyTargets", () => {
     const targets = notifyTargets(e, ctx, subs);
     expect(targets.length).toBe(2);
     expect(targets[0].payload).toBe(targets[1].payload);
+  });
+});
+
+describe("notificationClass", () => {
+  test("card.asked and card.moved->awaiting-human are urgent", () => {
+    expect(notificationClass(ev({ type: "card.asked", data: { question: "q" } }))).toBe("urgent");
+    expect(notificationClass(ev({ type: "card.moved", data: { to: "awaiting-human" } }))).toBe("urgent");
+  });
+
+  test("message.posted is chatter", () => {
+    expect(notificationClass(ev({ type: "message.posted", data: { body: "hi" } }))).toBe("chatter");
+  });
+
+  test("card.moved to another status, and every other event type, is null", () => {
+    expect(notificationClass(ev({ type: "card.moved", data: { to: "doing" } }))).toBeNull();
+    expect(notificationClass(ev({ type: "card.created" }))).toBeNull();
+    expect(notificationClass(ev({ type: "comment.posted" }))).toBeNull();
+  });
+});
+
+describe("mergedNotification", () => {
+  const latest: NotificationPayload = {
+    title: "flock",
+    body: "ada: latest message",
+    url: "#/b/flock/channel",
+    tag: "#/b/flock/channel",
+    seq: 42,
+    renotify: true,
+  };
+
+  test("title is '<count> new in <board>', body/url/tag/seq come from latest", () => {
+    const merged = mergedNotification(latest, 3, true);
+    expect(merged).toEqual({
+      title: "3 new in flock",
+      body: "ada: latest message",
+      url: "#/b/flock/channel",
+      tag: "#/b/flock/channel",
+      seq: 42,
+      renotify: true,
+    });
+  });
+
+  test("renotify is passed through explicitly", () => {
+    expect(mergedNotification(latest, 5, false).renotify).toBe(false);
+    expect(mergedNotification(latest, 5, true).renotify).toBe(true);
+  });
+});
+
+describe("recipientsOf", () => {
+  function target(actor: string): NotifyTarget {
+    return { subscription: sub({ actor, id: `s-${actor}-${Math.random()}` }), payload: {} as NotificationPayload };
+  }
+
+  test("distinct actor names, in first-seen order", () => {
+    const targets = [target("scout"), target("builder"), target("scout"), target("ada")];
+    expect(recipientsOf(targets)).toEqual(["scout", "builder", "ada"]);
+  });
+
+  test("empty targets produces an empty list", () => {
+    expect(recipientsOf([])).toEqual([]);
   });
 });
