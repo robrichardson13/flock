@@ -48,7 +48,7 @@ export function parseArgs(argv: string[]): Parsed {
 }
 
 export const BOOLEAN_FLAGS = new Set([
-  "json", "human", "agent", "force", "frontier", "open", "mine", "wait", "follow", "all", "help", "h", "archived", "no-open", "quiet", "q", "blocked", "here", "local", "none", "archive", "activate", "wontfix", "isolated", "dry-run", "yes", "foreground", "f", "version", "no-start", "skill-only", "if-newer",
+  "json", "human", "agent", "force", "frontier", "open", "mine", "wait", "follow", "all", "help", "h", "archived", "no-open", "quiet", "q", "blocked", "here", "local", "none", "archive", "activate", "wontfix", "isolated", "dry-run", "yes", "foreground", "f", "version", "no-start", "skill-only", "if-newer", "tailscale", "no-tailscale",
 ]);
 
 export function str(v: string | boolean | string[] | undefined): string | undefined {

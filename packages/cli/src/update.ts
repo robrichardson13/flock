@@ -181,11 +181,14 @@ export function stampIsStale(stamp: UpdateStamp | undefined, now = Date.now(), m
  * `~/.flock/config.json`. Unknown keys are ignored, junk is treated as absent.
  * `host` (ADR 0015): the bind host `flock serve`/`flock up` fall back to when there is no
  * `--host` and no `FLOCK_HOST` — below `FLOCK_HOST` and above the built-in `0.0.0.0` default in
- * `resolveHost` (dev.ts). See `docs/config.md`.
+ * `resolveHost` (dev.ts). `tailscale` (ADR 0018): whether `flock up`/`restart` fronts the
+ * browser-facing port with a `tailscale serve` HTTPS mount, below `FLOCK_TAILSCALE` and above the
+ * `false` default — see `resolveTailscale` in `tailscale.ts`. See `docs/config.md`.
  */
 export interface FlockConfig {
   autoupdate?: boolean;
   host?: string;
+  tailscale?: boolean;
 }
 
 export function readConfig(file = configPath()): FlockConfig {
@@ -196,6 +199,7 @@ export function readConfig(file = configPath()): FlockConfig {
     const config: FlockConfig = {};
     if (typeof o.autoupdate === "boolean") config.autoupdate = o.autoupdate;
     if (typeof o.host === "string" && o.host) config.host = o.host;
+    if (typeof o.tailscale === "boolean") config.tailscale = o.tailscale;
     return config;
   } catch {
     return {};

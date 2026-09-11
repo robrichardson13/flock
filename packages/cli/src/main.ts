@@ -470,10 +470,38 @@ async function main(argv: string[]) {
       all: bool(flags.all),
       follow: bool(flags.follow) || bool(flags.f),
       lines: str(flags.n) ? Number(str(flags.n)) : str(flags.lines) ? Number(str(flags.lines)) : undefined,
+      // --tailscale / --no-tailscale > FLOCK_TAILSCALE > "tailscale" in config.json > off; see
+      // resolveTailscale in tailscale.ts. undefined here means "not specified on this invocation".
+      tailscale: bool(flags["no-tailscale"]) ? false : bool(flags.tailscale) ? true : undefined,
     };
     // `up --foreground` is `serve` on the port this checkout would have used: fall through.
     if ((cmd === "up" || cmd === "start") && bool(flags.foreground)) {
       if (!str(flags.port)) process.env.FLOCK_PORT = String(foregroundPort(opts));
+      const { resolveTailscale, establishTailscale, releaseTailscale, spawnRunner, findTailscaleReal } = await import("./tailscale.ts");
+      if (resolveTailscale(opts.tailscale, process.env)) {
+        const host = resolveHost(opts.host, process.env);
+        const port = Number(process.env.FLOCK_PORT);
+        const bin = findTailscaleReal();
+        const mount = establishTailscale({ run: spawnRunner, bin, host, port });
+        process.env.FLOCK_TAILSCALE_URL = mount.url;
+        let released = false;
+        const cleanup = () => {
+          if (released) return;
+          released = true;
+          releaseTailscale({ run: spawnRunner, bin, target: mount.target });
+        };
+        // A SIGKILLed foreground `serve` leaves the mount behind; the next `flock up --tailscale`
+        // re-asserts it and `flock down` clears it.
+        process.on("SIGINT", () => {
+          cleanup();
+          process.exit(0);
+        });
+        process.on("SIGTERM", () => {
+          cleanup();
+          process.exit(0);
+        });
+        process.on("exit", cleanup);
+      }
       cmd = "serve";
     } else {
       await daemonCommand(cmd, opts);
@@ -543,8 +571,9 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       const hostname = resolveHost(str(flags.host), process.env);
       const server = serve({ flock, dbPath: ctx.dbPath, port, hostname, staticDir, assets, installScriptPath, flockHome: flockHome() });
       // The first advertisedUrls entry, never the literal bind host: a wildcard bind would
-      // otherwise print/--open the unusable `http://0.0.0.0:PORT`.
-      const url = baseUrl(hostname, server.port ?? port);
+      // otherwise print/--open the unusable `http://0.0.0.0:PORT`. `FLOCK_TAILSCALE_URL` is set by
+      // `up --foreground --tailscale` just above, before this same process fell through to `serve`.
+      const url = process.env.FLOCK_TAILSCALE_URL || baseUrl(hostname, server.port ?? port);
       const ui = assets?.["/index.html"] ? "embedded" : existsSync(join(staticDir, "index.html")) ? "built" : "not built (run `bun run build`, or use `bun run dev`)";
       console.log(`flock serving ${url}\n  db: ${ctx.dbPath}\n  ui: ${ui}`);
       // Spawned by `flock up`? Write the runfile now that we are listening: it is up's readiness signal.
