@@ -1404,10 +1404,33 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 .empty p { margin: 0; max-width: 32ch; }
 .stat-row { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); font-size: var(--t-foot); color: var(--muted); }
 
-/* The notifications row at the foot of Home (ADR 0017): ordinary content in the existing
-   scroller, aligned to the same left gutter as every list title above it. */
-.settings { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s2); padding: 0 var(--row-pad-r) 0 var(--row-pad-l); }
-.settings p { margin: 0; max-width: 42ch; }
+/* The notifications row (ADR 0017): a `.list-row` like a board row, and the panel it opens.
+   §9: every colour here is an existing semantic token; no hex, no dimming via opacity. */
+.push-row { width: 100%; background: none; border: none; text-align: left; font: inherit; }
+.push-icon { display: inline-flex; flex: none; color: var(--text); }
+.push-icon--blocked { color: var(--status-blocked); }
+.push-icon--needs-install { color: var(--status-await); }
+.push-icon--server-off, .push-icon--insecure, .push-icon--unsupported { color: var(--muted); }
+.push-meta { font-size: var(--t-foot); line-height: var(--lh-foot); color: var(--muted); }
+.push-dot { width: 7px; height: 7px; border-radius: 999px; flex: none; display: none; }
+.push-dot--on { display: block; background: var(--dot-working); }
+.push-dot--blocked { display: block; background: var(--status-blocked); }
+.push-dot--needs-install { display: block; background: var(--status-await); }
+@media (prefers-reduced-motion: no-preference) { .push-dot--on { animation: pill-pulse 2s ease-in-out infinite; } }
+.push-panel { display: flex; flex-direction: column; gap: var(--s4); }
+.push-lead { margin: 0; max-width: 42ch; }
+.push-note { display: flex; gap: var(--s3); padding: var(--s3); border-radius: var(--r-md);
+  background: var(--bg-3); border: 1px solid var(--line); }
+.push-note--blocked { background: var(--warn-bg); border-color: var(--warn-line); }
+.push-note--needs-install { background: var(--attention-bg); border-color: var(--attention-line); }
+.push-note p { margin: 0; }
+.push-note-icon { flex: none; color: var(--muted); }
+.push-note--blocked .push-note-icon { color: var(--status-blocked); }
+.push-note--needs-install .push-note-icon { color: var(--status-await); }
+.push-steps { margin: var(--s2) 0 0; padding-left: var(--s4); display: flex; flex-direction: column; gap: var(--s1); }
+.push-hint { margin: var(--s2) 0 0; font-size: var(--t-foot); line-height: var(--lh-foot); color: var(--muted); }
+.push-actions, .push-test { display: flex; flex-direction: column; gap: var(--s2); }
+.push-device-remove { width: var(--tap); height: var(--tap); color: var(--muted); }
 
 /* ---------- cold-start skeletons (#43) ---------- */
 /* A cached snapshot paints the settled screen on every refresh of something already seen,
@@ -3434,6 +3457,7 @@ html[data-topbar] .sheet { max-height: 100%; }
   .sheet-grip { display: none; }
   .sheet-cancel { display: none; }
   .action-item { min-height: 42px; font-size: var(--t-sub); }
+  .push-sheet { max-width: 420px; }
 }
 /* Reduced motion still cross-fades the dialog rather than popping it (critique #17 B2's
    own acceptance list): scoped to >=900px so the phone's bottom sheet, which already goes

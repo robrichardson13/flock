@@ -16,6 +16,7 @@ import { TopBar, TopBarProvider } from "./TopBar.tsx";
 import { keyboardShrunk, readoutRequested, shellHeight } from "./vv.ts";
 import { VVReadout } from "./VVReadout.tsx";
 import { ActorLinks, Avatar, Icons, OverlayProvider, PromptProvider, PushStack, useEdgeSwipePeek, useIsMobile, usePrompt } from "./ui.tsx";
+import { PushPanel, PushRow } from "./Notifications.tsx";
 import { currentSubscription, disablePush, enablePush, primePushKey, pushKeyNow, pushState, readPushEnv, withServerKey, type PushState } from "./push.ts";
 
 /**
@@ -582,6 +583,7 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
   const [pushKind, setPushKind] = useState<PushState["kind"]>("off");
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
+  const [pushPanelOpen, setPushPanelOpen] = useState(false);
   useEffect(() => {
     let cancelled = false;
     currentSubscription().then((sub) => {
@@ -591,23 +593,29 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
     });
     return () => { cancelled = true; };
   }, []);
-  const onTogglePush = useCallback(() => {
+  const onEnablePush = useCallback(() => {
     setPushBusy(true);
     setPushError(null);
-    const run = async (): Promise<PushState> => {
-      if (pushKind === "on") return disablePush();
-      // Gesture-safe: when the key is already primed this awaits nothing before enablePush.
-      // The cold path (key not yet resolved) falls back to awaiting the fetch here, which is
-      // no worse than today's unconditional fetch — the prefetch just makes it rare.
+    // Gesture-safe: when the key is already primed this awaits nothing before enablePush.
+    // The cold path (key not yet resolved) falls back to awaiting the fetch here, which is
+    // no worse than today's unconditional fetch — the prefetch just makes it rare.
+    (async (): Promise<PushState> => {
       const key = pushKeyNow() ?? (await primePushKey());
       if (!key.enabled || !key.publicKey) return { kind: "server-off" };
       return enablePush(key.publicKey);
-    };
-    run()
+    })()
       .then((s) => setPushKind(s.kind))
       .catch((e) => setPushError((e as Error).message))
       .finally(() => setPushBusy(false));
-  }, [pushKind]);
+  }, []);
+  const onDisablePush = useCallback(() => {
+    setPushBusy(true);
+    setPushError(null);
+    disablePush()
+      .then((s) => setPushKind(s.kind))
+      .catch((e) => setPushError((e as Error).message))
+      .finally(() => setPushBusy(false));
+  }, []);
 
   return (
     <div className="screen screen-home">
@@ -687,51 +695,27 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
           </>
         )}
 
-        <section className="settings">
-          <PushSettingsRow kind={pushKind} busy={pushBusy} error={pushError} onToggle={onTogglePush} />
-        </section>
+        {/* Card C moves this under Home's own section-head layout and wires the panel from the
+            avatar menu too; here it is rendered directly so the row is reviewable on its own. */}
+        <PushRow
+          state={{ kind: pushKind } as PushState}
+          busy={pushBusy}
+          error={pushError}
+          onEnable={onEnablePush}
+          onOpen={() => setPushPanelOpen(true)}
+        />
       </div>
+      <PushPanel
+        open={pushPanelOpen}
+        onClose={() => setPushPanelOpen(false)}
+        state={{ kind: pushKind } as PushState}
+        busy={pushBusy}
+        error={pushError}
+        onEnable={onEnablePush}
+        onDisable={onDisablePush}
+      />
     </div>
   );
-}
-
-/**
- * One row at the foot of Home. It says what is actually wrong rather than "unsupported",
- * which is the failure mode that would make this feature look broken to the person it is for.
- * `blocked`/`needs-install`/`insecure`/`unsupported` have no button: `requestPermission`
- * cannot recover from `denied`, and none of the other three is a permission problem to retry.
- */
-function PushSettingsRow({ kind, busy, error, onToggle }: { kind: PushState["kind"]; busy: boolean; error: string | null; onToggle: () => void }) {
-  // Plain text for now — card B restyles this as `.inline-error` in the row's meta slot.
-  const errorLine = error && <p>{error}</p>;
-  switch (kind) {
-    case "on":
-      return (
-        <>
-          <p>Notifications are on for this device.</p>
-          {errorLine}
-          <button className="btn" onClick={onToggle} disabled={busy}>Turn off</button>
-        </>
-      );
-    case "off":
-      return (
-        <>
-          <button className="btn btn-primary" onClick={onToggle} disabled={busy}>Turn on notifications</button>
-          {errorLine}
-          <p className="muted">Get a notification when someone posts in a channel, or when a card needs you.</p>
-        </>
-      );
-    case "blocked":
-      return <p className="muted">Notifications are blocked. Turn them back on in your browser or device settings.</p>;
-    case "needs-install":
-      return <p className="muted">Add flock to your Home Screen — Share → Add to Home Screen — then turn notifications on from there.</p>;
-    case "insecure":
-      return <p className="muted">Notifications need a secure connection. Open flock over HTTPS, or on localhost.</p>;
-    case "unsupported":
-      return <p className="muted">This browser doesn't support notifications.</p>;
-    case "server-off":
-      return <p className="muted">This flock server has no notification key, so it can't send anything yet.</p>;
-  }
 }
 
 /** A bare clock: re-renders on an interval so `timeAgo` and `isActive` keep up with time. */
