@@ -121,6 +121,8 @@ while true; do
      "\(.type) #\(.cardNum // "-") \(.actor): " +
      (if .type=="message.reacted" or .type=="message.unreacted"
         then "\(.data.emoji) on \(.data.ref) (\(.data.messageAuthor): \"\(.data.gist)\")"
+        elif .type=="comment.reacted" or .type=="comment.unreacted"
+        then "\(.data.emoji) on \(.data.ref) (\(.data.commentAuthor): \"\(.data.gist)\")"
         elif .type=="message.posted"
         then "\(.data.body)" + (if .data.ref then " (\(.data.ref))" else "" end)
         else (.data.body // .data.gist // .data.answer // .data.question // .data.title // (.data|tostring))
@@ -145,7 +147,9 @@ What each event means and what you do with it, in the same turn it arrives:
 | `card.created` | The human added work | Read it (`flock card show <n> --json`), place it in the plan (blockers, ordering), delegate it when it reaches the frontier. Acknowledge in the channel. |
 | `decision.recorded` | The human set a constraint | It binds every delegation from now on. Tell in-flight background agents by SendMessage; put it in every later prompt. |
 | `card.answered` | The human answered an ask | The card goes back to `doing` if it still has an assignee, `todo` if it does not — a subagent that followed the contract released it, so expect `todo`. Delegate a fresh agent to it; the answer is a comment on the card. |
-| `comment.posted` | The human commented on a card | Instruction or context for that card. Relay to the agent holding it, or fold it into the next delegation. A card comment carries images the same way a channel message does, so a line with `[attachments: ...]` is handled the same way: `flock attachment get <id> --out /tmp/flock-<id>.<ext>` for each, Read the file, and transcribe it for any subagent. |
+| `comment.posted` | The human commented on a card | Instruction or context for that card. The listener line ends with the comment's ref (`<card>.<n>`) — a pure acknowledgement gets `flock react <ref> 👍 --as conductor` instead of a text comment; anything substantive still gets relayed to the agent holding the card, or folded into the next delegation. A card comment carries images the same way a channel message does, so a line with `[attachments: ...]` is handled the same way: `flock attachment get <id> --out /tmp/flock-<id>.<ext>` for each, Read the file, and transcribe it for any subagent. |
+| `comment.reacted` | The human reacted to a card comment (yours or another agent's) | Same semantics as a message reaction: 👍 is an ack/approval of what the comment proposed — proceed with it. 👀 is "seen, no action needed." 👎 is a rejection — stop, and either ask a clarifying question or re-plan. Any other emoji is tone, not a command. Relay to the agent holding the card, or fold it into the next delegation. |
+| `comment.unreacted` | The human retracted a reaction on a card comment | Treat the prior signal as withdrawn, same as `message.unreacted`. Re-read the comment before assuming either way. |
 | `card.moved`, `card.closed`, `card.updated` | The human changed the plan | Re-read the board and re-plan. A card the human closed is done; a card they reopened is work again. |
 | `card.claimed`, `card.released`, `card.blocked`, `card.unblocked` | The human re-sequenced work | Same: re-read the board, respect the new shape. |
 | `card.held`, `card.unheld` | The human parked a card, or un-parked it | A held card is off the table: never delegate it, and pull back any agent you already sent at it. When the hold lifts, treat it as new frontier work and delegate it the way you would any card that just became claimable. Do not ask the human to justify a hold. |
