@@ -18,6 +18,7 @@ import { VVReadout } from "./VVReadout.tsx";
 import { ActorLinks, Avatar, Icons, OverlayProvider, PromptProvider, PushStack, useEdgeSwipePeek, useIsMobile, usePrompt } from "./ui.tsx";
 import { PushPanel } from "./Notifications.tsx";
 import { currentSubscription, disablePush, enablePush, primePushKey, pushKeyNow, pushState, readPushEnv, withServerKey, type PushState } from "./push.ts";
+import { usePresence } from "./presence.ts";
 
 /**
  * Reads the hash and remembers which board was last resolved from it, so that only
@@ -392,6 +393,8 @@ function Shell() {
   const [dbPath, setDbPath] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+
+  usePresence(actor, hash);
 
   const load = useCallback(async () => {
     try {

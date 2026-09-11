@@ -16,6 +16,12 @@ self.addEventListener("push", (event) => {
       // back to notificationclick, and the tag always survives. `data` is set anyway for the
       // browsers that do honour it — the click handler prefers it and falls back to the tag.
       tag: p.tag || p.url,
+      // Chrome/Edge silently swallow a same-tag replacement's alert unless renotify is set; the
+      // pump now sets it true on a leading edge/ask, false on a quiet trailing flush. The `&&`
+      // guard is belt and braces (Chrome throws if renotify is true with an empty tag, which
+      // never happens here since tag falls back to url above); old service workers ignoring the
+      // field is fine, renotify is an enhancement only (§2.6).
+      renotify: p.renotify === true && !!(p.tag || p.url),
       data: { url: p.url },
       icon: "/icon-192.png",
       badge: "/icon-192.png",
