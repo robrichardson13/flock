@@ -34,7 +34,7 @@ import { joinDraft } from "./addToChat.tsx";
 import { hasHighlight, highlightDraft } from "./draftHighlight.ts";
 import { useAutoGrow } from "./autogrow.ts";
 import { focusNoScroll, shouldBlurOnSend } from "./focus.ts";
-import { ActorTap, Avatar, Icons, useHasFinePointer, useIsMobile } from "./ui.tsx";
+import { ActorTap, Avatar, Icons, Sheet, useHasFinePointer, useIsMobile } from "./ui.tsx";
 
 /** One bubble's worth of thread: what both a channel message and a card comment carry. */
 export interface ThreadEntry {
@@ -105,12 +105,8 @@ export function failPending<T extends ThreadEntry>(pending: readonly PendingSend
   return pending.filter((p) => p.tempId !== tempId);
 }
 
-/** The emoji a double tap toggles (#6) — the same ack emoji the conductor reads a 👍 as
- *  elsewhere on the board. */
-export const DOUBLE_TAP_EMOJI = "👍";
-
-/** Whether `viewer` is one of `emoji`'s actors — `MessageReactions`' own highlighting and the
- *  double-tap gesture below both need "am I already reacted" and previously computed it their
+/** Whether `viewer` is one of `emoji`'s actors — the chip row's highlighting and the reaction
+ *  sheet the double tap opens both need "am I already reacted" and previously computed it their
  *  own way; this is the one definition both use. */
 export function hasReaction(reactions: readonly Reaction[], viewer: string, emoji: string): boolean {
   return !!viewer && (reactions.find((r) => r.emoji === emoji)?.actors.includes(viewer) ?? false);
@@ -136,6 +132,45 @@ export function isDoubleTap(prev: TapPoint | null, now: TapPoint): boolean {
   return Math.hypot(now.x - prev.x, now.y - prev.y) <= DOUBLE_TAP_PX;
 }
 
+/**
+ * A touch double tap ends with the browser's own compatibility `click`, dispatched after the
+ * second `pointerup` that the gesture acted on. With the gesture opening an overlay, that click
+ * lands on a backdrop that did not exist when the finger went down and closes it again on the
+ * frame it opened — the reaction sheet flashing open and shut, which is exactly what the first
+ * pass through card #1 did on a real touch emulation.
+ *
+ * So the gesture eats its own trailing click: one capture-phase listener on `window`, ahead of
+ * React's delegated root, dropped again the moment it fires or after `CLICK_SWALLOW_MS`,
+ * whichever comes first. The timeout matters — a browser that never sends the compatibility
+ * click would otherwise leave the listener armed to swallow the user's next real one.
+ *
+ * `target` is injected so this is testable without a DOM; callers pass nothing.
+ */
+const CLICK_SWALLOW_MS = 400;
+type ClickTarget = {
+  addEventListener: (type: "click", fn: (e: Event) => void, opts: { capture: boolean }) => void;
+  removeEventListener: (type: "click", fn: (e: Event) => void, opts: { capture: boolean }) => void;
+};
+export function swallowNextClick(
+  target: ClickTarget = window,
+  setTimer: (fn: () => void, ms: number) => number = ((fn: () => void, ms: number) => window.setTimeout(fn, ms)),
+  clearTimer: (id: number) => void = ((id: number) => window.clearTimeout(id)),
+): () => void {
+  const opts = { capture: true } as const;
+  function stop() {
+    clearTimer(timer);
+    target.removeEventListener("click", onClick, opts);
+  }
+  const onClick = (e: Event) => {
+    e.stopPropagation();
+    e.preventDefault();
+    stop();
+  };
+  const timer = setTimer(stop, CLICK_SWALLOW_MS);
+  target.addEventListener("click", onClick, opts);
+  return stop;
+}
+
 /** Pure: did the pointer travel far enough between down and up that this lift was a scroll or
  *  a drag rather than a tap? A moved lift neither reacts nor becomes a tap to pair against. */
 export function tapMoved(down: { x: number; y: number } | null, up: { x: number; y: number }): boolean {
@@ -143,10 +178,12 @@ export function tapMoved(down: { x: number; y: number } | null, up: { x: number;
 }
 
 /**
- * Double-tap-to-react (#6): one gesture detector shared by the channel message bubble and the
- * card comment bubble — both render through `ThreadGroup` below, so it calls this once and
+ * Double-tap-to-react (#6, reworked in #1): one gesture detector shared by the channel message
+ * bubble and the card comment bubble — both render through `ThreadGroup` below, so it calls this once and
  * gets back a per-entry handler factory (React needs a fixed hook count per render; the
- * factory is plain JS, safe to call once per bubble in a `.map`).
+ * factory is plain JS, safe to call once per bubble in a `.map`). The gesture itself is
+ * unchanged; what it does landed is not — it opens `ReactionSheet` over the tapped bubble
+ * rather than toggling one hard-coded emoji on the spot.
  *
  * Deliberately not `onDoubleClick`: on desktop a double-click selects a word, so this pairs
  * two `pointerup`s itself, and only on a coarse (touch) pointer — `useHasFinePointer` is the
@@ -191,6 +228,9 @@ export function useDoubleTapReact<T>(
         const now: TapPoint = { x: e.clientX, y: e.clientY, t: Date.now() };
         if (isDoubleTap(lastTap.current, now)) {
           lastTap.current = null;
+          // Before the callback, so the overlay it opens is already behind the guard when the
+          // browser's trailing compatibility click arrives (see `swallowNextClick`).
+          swallowNextClick();
           onDoubleTap(entry);
         } else {
           lastTap.current = now;
@@ -217,7 +257,7 @@ export function ThreadGroup<T extends ThreadEntry>({
   entryClass,
   entryStyle,
   entryFooter,
-  onDoubleTapReact,
+  doubleTapReact,
 }: {
   group: readonly T[];
   mine: boolean;
@@ -230,20 +270,26 @@ export function ThreadGroup<T extends ThreadEntry>({
    *  and add-reaction affordance (#4). Comments have nothing here; only the channel passes
    *  this. */
   entryFooter?: (entry: T) => ReactNode;
-  /** A double tap on this bubble (#6, touch only — see `useDoubleTapReact`): the caller owns
-   *  the toggle itself (it knows the entry's `num` and current reactions), this just tells it
-   *  which entry was tapped. Both callers currently pass one that toggles 👍 through the same
-   *  path their reaction chip's click already uses. */
-  onDoubleTapReact?: (entry: T) => void;
+  /** Double-tap-to-react (#6, touch only — see `useDoubleTapReact`). A double tap opens the
+   *  reaction sheet over the tapped bubble; picking an emoji there calls `onPick`, which the
+   *  caller answers through the same toggle path its reaction chips already use (it is the one
+   *  that knows the entry's `num`). `canReact` gates the gesture — the callers use it to ignore
+   *  an optimistic bubble that has no server-assigned number yet — and `isMine` is what marks
+   *  the emoji already carrying the viewer's reaction inside the sheet. */
+  doubleTapReact?: {
+    canReact?: (entry: T) => boolean;
+    isMine: (entry: T, emoji: string) => boolean;
+    onPick: (entry: T, emoji: string, mine: boolean) => void;
+  };
 }) {
   const mobile = useIsMobile();
-  // Which bubble just got a double tap, so its brief 👍 confirmation (styles.css `.dt-flash`)
-  // knows where to render; cleared by the animation itself (`onAnimationEnd`) so there is no
-  // timer to leak if the bubble unmounts first.
-  const [flashId, setFlashId] = useState<string | null>(null);
+  // The bubble a double tap picked, i.e. what the reaction sheet is open over. Holding the
+  // entry rather than a bare id is what lets the sheet mark the viewer's existing reactions
+  // (`isMine`) and hand the pick back with the entry the caller needs to address it.
+  const [picked, setPicked] = useState<T | null>(null);
   const tapHandlers = useDoubleTapReact<T>((entry) => {
-    onDoubleTapReact?.(entry);
-    setFlashId(entry.id);
+    if (doubleTapReact?.canReact && !doubleTapReact.canReact(entry)) return;
+    setPicked(entry);
   });
   const head = group[0];
   if (!head) return null;
@@ -268,13 +314,8 @@ export function ThreadGroup<T extends ThreadEntry>({
             style={entryStyle?.(m)}
             title={mine ? timeAgo(m.createdAt) : undefined}
             data-msg-author={m.author}
-            {...(onDoubleTapReact ? tapHandlers(m) : undefined)}
+            {...(doubleTapReact ? tapHandlers(m) : undefined)}
           >
-            {flashId === m.id && (
-              <span className="dt-flash" aria-hidden onAnimationEnd={() => setFlashId((id) => (id === m.id ? null : id))}>
-                {DOUBLE_TAP_EMOJI}
-              </span>
-            )}
             {m.body.trim() && <ClampedBody text={m.body} />}
             {m.attachments && m.attachments.length > 0 && (
               <MessageAttachments boardId={boardId} attachments={m.attachments} author={m.author} createdAt={m.createdAt} />
@@ -283,6 +324,14 @@ export function ThreadGroup<T extends ThreadEntry>({
           </div>
         ))}
       </div>
+      {doubleTapReact && (
+        <ReactionSheet
+          entry={picked}
+          onClose={() => setPicked(null)}
+          isMine={(entry, emoji) => doubleTapReact.isMine(entry, emoji)}
+          onPick={(entry, emoji, mine) => doubleTapReact.onPick(entry, emoji, mine)}
+        />
+      )}
     </div>
   );
 }
@@ -376,7 +425,40 @@ export function MessageAttachments({ boardId, attachments, author, createdAt }: 
 /** The fixed palette a reaction picker offers (ADR 0017, card #4). Free-text emoji entry
  *  was in scope but optional; this fixed set covers the acknowledgements a channel message
  *  actually gets and costs nothing beyond a row of buttons. */
-const REACTION_PALETTE = ["👍", "👎", "❤️", "🎉", "👀", "✅", "🤔"] as const;
+export const REACTION_PALETTE = ["👍", "👎", "❤️", "🎉", "👀", "✅", "🤔"] as const;
+
+/**
+ * The palette itself, as a row of buttons — the one emoji list in the app, rendered by both
+ * the desktop popover (`ReactionPicker`) and the touch reaction sheet (`ReactionSheet`). A
+ * second list would be a second thing to keep in step; a second toggle path would be a second
+ * thing to get wrong, so both forms hand the pick straight back to the caller's existing
+ * `onToggle`.
+ */
+export function ReactionPalette({ isMine, onPick, size = "sm", role }: {
+  isMine: (emoji: string) => boolean;
+  onPick: (emoji: string) => void;
+  /** `lg` is the touch sheet's 44pt target; `sm` is the desktop popover's. */
+  size?: "sm" | "lg";
+  role?: "menu" | "group";
+}) {
+  return (
+    <>
+      {REACTION_PALETTE.map((emoji) => (
+        <button
+          key={emoji}
+          type="button"
+          role={role === "menu" ? "menuitem" : undefined}
+          className={`reaction-picker-item${size === "lg" ? " lg" : ""}${isMine(emoji) ? " mine" : ""}`}
+          aria-pressed={isMine(emoji)}
+          aria-label={emoji}
+          onClick={() => onPick(emoji)}
+        >
+          {emoji}
+        </button>
+      ))}
+    </>
+  );
+}
 
 /**
  * The "+ 🙂" affordance under a message: a small popover of the fixed palette, closing on an
@@ -456,20 +538,14 @@ function ReactionPicker({ isMine, onPick }: { isMine: (emoji: string) => boolean
           role="menu"
           style={shift ? { transform: `translateX(${shift}px)` } : undefined}
         >
-          {REACTION_PALETTE.map((emoji) => (
-            <button
-              key={emoji}
-              type="button"
-              role="menuitem"
-              className={`reaction-picker-item${isMine(emoji) ? " mine" : ""}`}
-              onClick={() => {
-                onPick(emoji);
-                setOpen(false);
-              }}
-            >
-              {emoji}
-            </button>
-          ))}
+          <ReactionPalette
+            role="menu"
+            isMine={isMine}
+            onPick={(emoji) => {
+              onPick(emoji);
+              setOpen(false);
+            }}
+          />
         </div>
       )}
     </div>
@@ -477,14 +553,68 @@ function ReactionPicker({ isMine, onPick }: { isMine: (emoji: string) => boolean
 }
 
 /**
+ * What a double tap on a bubble opens on touch (#1): the same palette, as a bottom sheet.
+ *
+ * A sheet rather than a popover anchored over the bubble for three reasons. `ui.tsx`'s `Sheet`
+ * is already the app's one touch overlay — it brings the backdrop, the Escape key, the overlay
+ * stack Escape unwinds one level at a time, the entrance/exit motion and, the part a hand-rolled
+ * popover would have had to re-derive, the safe-area and visual-viewport chin (`--sab-in`,
+ * `--vvh`) that keeps a bottom-edge overlay off the home indicator and above the keyboard. It
+ * also always lands in the same place, near the thumb, whereas a bubble-anchored popover on a
+ * message near the top of the channel opens where a thumb on a phone cannot comfortably reach —
+ * and the tapped bubble stays visible behind the backdrop either way.
+ *
+ * Open is `entry !== null`: the caller keeps the picked entry, so the sheet has what it needs to
+ * mark the viewer's existing reactions and to hand the pick back.
+ */
+function ReactionSheet<T extends ThreadEntry>({ entry, onClose, isMine, onPick }: {
+  entry: T | null;
+  onClose: () => void;
+  isMine: (entry: T, emoji: string) => boolean;
+  onPick: (entry: T, emoji: string, mine: boolean) => void;
+}) {
+  // The entry the sheet was opened on, kept for the frames `Sheet` stays mounted while it
+  // slides back down — clearing it with `open` would empty the sheet mid-exit.
+  const last = useRef<T | null>(entry);
+  if (entry) last.current = entry;
+  const shown = entry ?? last.current;
+  return (
+    <Sheet open={!!entry} onClose={onClose} title="React" hideClose>
+      <div className="reaction-sheet-row" role="group" aria-label="Reactions">
+        {shown && (
+          <ReactionPalette
+            size="lg"
+            isMine={(emoji) => isMine(shown, emoji)}
+            onPick={(emoji) => {
+              onPick(shown, emoji, isMine(shown, emoji));
+              onClose();
+            }}
+          />
+        )}
+      </div>
+      <button className="btn btn-block btn-ghost sheet-cancel" onClick={onClose}>Cancel</button>
+    </Sheet>
+  );
+}
+
+/**
  * The reaction chips under a channel message (#4): emoji + count, highlighted (and titled
  * with who) when the viewer is among that emoji's actors, tapping toggles react/unreact. The
- * add-reaction affordance always rides at the end of the row, even with zero reactions yet.
+ * add-reaction affordance rides at the end of the row on a fine pointer, even with zero
+ * reactions yet; on touch it is not rendered at all and the double-tap sheet is the way in.
  * `onToggle` gets `mine` precomputed so the caller (which owns the API round-trip and any
  * optimistic patch) never has to re-derive it.
  */
 export function MessageReactions({ reactions, viewer, onToggle }: { reactions: readonly Reaction[]; viewer: string; onToggle: (emoji: string, mine: boolean) => void }) {
+  // Touch devices reach the palette by double-tapping the bubble (`ReactionSheet`), so the
+  // dashed "🙂+" resting chip is desktop-only (#1): with no hover to hide behind, it sat
+  // permanently under every bubble on the phone, which is the clutter the human asked to lose.
+  // The same "mouse or trackpad" test the gesture itself uses, so exactly one of the two
+  // affordances is live on a given device. With nothing to show either — no reactions yet and
+  // no add chip — the row renders nothing at all rather than an empty box under the bubble.
+  const fine = useHasFinePointer();
   const isMine = (emoji: string) => hasReaction(reactions, viewer, emoji);
+  if (!fine && reactions.length === 0) return null;
   return (
     <div className="msg-reactions">
       {reactions.map((r) => {
@@ -503,7 +633,7 @@ export function MessageReactions({ reactions, viewer, onToggle }: { reactions: r
           </button>
         );
       })}
-      <ReactionPicker isMine={isMine} onPick={(emoji) => onToggle(emoji, isMine(emoji))} />
+      {fine && <ReactionPicker isMine={isMine} onPick={(emoji) => onToggle(emoji, isMine(emoji))} />}
     </div>
   );
 }

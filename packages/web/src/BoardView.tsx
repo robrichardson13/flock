@@ -50,7 +50,7 @@ import {
 } from "./live.ts";
 import { groupMessages, splitByDay } from "./grouping.ts";
 import { matchShortcut, SHORTCUT_HINT, type Shortcut } from "./shortcuts.ts";
-import { DOUBLE_TAP_EMOJI, failPending, hasReaction, LineComposer, mergeThread, MessageReactions, nextTempId, resolvePending, ThreadGroup, type PendingSend } from "./thread.tsx";
+import { failPending, hasReaction, LineComposer, mergeThread, MessageReactions, nextTempId, resolvePending, ThreadGroup, type PendingSend } from "./thread.tsx";
 import { AddToChatTip, quoteBlock, useAddToChat } from "./addToChat.tsx";
 import { draftKey, requestInsert } from "./compose.ts";
 import { ActivitySkeleton, BoardSideSkeleton, CardPageSkeleton, CardsSkeleton, KanbanSkeleton, Line } from "./Skeleton.tsx";
@@ -1674,12 +1674,14 @@ function Channel({ boardId, snap, onSent }: { boardId: string; snap: Snapshot; o
               boardId={boardId}
               entryClass={(m) => enterClass(entrants.has(m.id)) + (sendingIds.has(m.id) ? " pending" : "")}
               entryStyle={(m) => enterDelay(orders.get(m.id))}
-              // Double-tap-to-react (#6): the same toggle path and 👍 default the reaction
-              // chip's own click already uses; num 0 is the unconfirmed optimistic placeholder,
-              // nothing to react to yet.
-              onDoubleTapReact={(m) => {
-                if (m.num <= 0) return;
-                toggleReaction(m.num, DOUBLE_TAP_EMOJI, hasReaction(m.reactions, me, DOUBLE_TAP_EMOJI));
+              // Double-tap-to-react (#6, reworked in #1): a double tap on touch opens the
+              // reaction sheet, and the emoji picked there goes through the same toggle path
+              // the reaction chip's own click already uses. num 0 is the unconfirmed optimistic
+              // placeholder, nothing to react to yet.
+              doubleTapReact={{
+                canReact: (m) => m.num > 0,
+                isMine: (m, emoji) => hasReaction(m.reactions, me, emoji),
+                onPick: (m, emoji, mine) => toggleReaction(m.num, emoji, mine),
               }}
               entryFooter={(m) =>
                 // num 0 is the not-yet-confirmed optimistic placeholder (see onSubmit below);

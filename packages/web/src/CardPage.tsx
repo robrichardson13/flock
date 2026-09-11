@@ -6,7 +6,7 @@ import { Markdownish, MessageBody } from "./markdown.tsx";
 import { agoText, timeAgo } from "./App.tsx";
 import { enterClass, useNewIds } from "./live.ts";
 import { threadChunks } from "./grouping.ts";
-import { ClampedBody, DOUBLE_TAP_EMOJI, failPending, hasReaction, LineComposer, mergeThread, MessageReactions, nextTempId, resolvePending, ThreadGroup, type PendingSend } from "./thread.tsx";
+import { ClampedBody, failPending, hasReaction, LineComposer, mergeThread, MessageReactions, nextTempId, resolvePending, ThreadGroup, type PendingSend } from "./thread.tsx";
 import { buildDetailRows, type DetailRow } from "./details.ts";
 import { autoFocusField, useDialogFocus } from "./focus.ts";
 import { readSnapshot, snapKey, writeSnapshot } from "./snapshot.ts";
@@ -448,12 +448,13 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
             boardId={boardId}
             headerExtra={<RuntimeTag harness={actors.get(chunk.items[0].author)?.harness} model={actors.get(chunk.items[0].author)?.model} effort={actors.get(chunk.items[0].author)?.effort} />}
             entryClass={(c) => enterClass(newComments.has(c.id)) + (sendingCommentIds.has(c.id) ? " pending" : "")}
-            // Double-tap-to-react (#6): same toggle path and 👍 default as the channel message
-            // bubble, through the shared `ThreadGroup`/`useDoubleTapReact` — num 0 is the
-            // unconfirmed optimistic placeholder, nothing to react to yet.
-            onDoubleTapReact={(c) => {
-              if (c.num <= 0) return;
-              toggleCommentReaction(c.num, DOUBLE_TAP_EMOJI, hasReaction(c.reactions, me, DOUBLE_TAP_EMOJI));
+            // Double-tap-to-react (#6, reworked in #1): same reaction sheet and toggle path as
+            // the channel message bubble, through the shared `ThreadGroup`/`useDoubleTapReact` —
+            // num 0 is the unconfirmed optimistic placeholder, nothing to react to yet.
+            doubleTapReact={{
+              canReact: (c) => c.num > 0,
+              isMine: (c, emoji) => hasReaction(c.reactions, me, emoji),
+              onPick: (c, emoji, mine) => toggleCommentReaction(c.num, emoji, mine),
             }}
             entryFooter={(c) =>
               // num 0 is the not-yet-confirmed optimistic placeholder (see onSubmit below);
