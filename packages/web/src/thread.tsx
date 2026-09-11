@@ -153,8 +153,8 @@ type ClickTarget = {
 };
 export function swallowNextClick(
   target: ClickTarget = window,
-  setTimer: (fn: () => void, ms: number) => number = ((fn: () => void, ms: number) => window.setTimeout(fn, ms)),
-  clearTimer: (id: number) => void = ((id: number) => window.clearTimeout(id)),
+  setTimer: (fn: () => void, ms: number) => number = ((fn: () => void, ms: number) => setTimeout(fn, ms) as unknown as number),
+  clearTimer: (id: number) => void = ((id: number) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>)),
 ): () => void {
   const opts = { capture: true } as const;
   function stop() {
@@ -193,9 +193,12 @@ export function tapMoved(down: { x: number; y: number } | null, up: { x: number;
  * clicks are untouched); the pointer moved more than a tap's worth between down and up (a
  * scroll or a drag, not a tap); or it ended a long-press text selection (`window.getSelection`
  * is non-empty).
+ *
+ * `onDoubleTap` returns whether it acted — whether an overlay is now opening. That is what
+ * decides if the trailing compatibility click is guarded; see the call site below.
  */
 export function useDoubleTapReact<T>(
-  onDoubleTap: (entry: T) => void,
+  onDoubleTap: (entry: T) => boolean,
 ): (entry: T) => { onPointerDown: (e: ReactPointerEvent) => void; onPointerUp: (e: ReactPointerEvent) => void } {
   const coarse = !useHasFinePointer();
   const lastTap = useRef<TapPoint | null>(null);
@@ -228,10 +231,14 @@ export function useDoubleTapReact<T>(
         const now: TapPoint = { x: e.clientX, y: e.clientY, t: Date.now() };
         if (isDoubleTap(lastTap.current, now)) {
           lastTap.current = null;
-          // Before the callback, so the overlay it opens is already behind the guard when the
-          // browser's trailing compatibility click arrives (see `swallowNextClick`).
-          swallowNextClick();
-          onDoubleTap(entry);
+          // Only guard the trailing click when the callback actually opened something (see
+          // `swallowNextClick`). A double tap the caller declined — an optimistic bubble with
+          // no server-assigned number yet — opens no overlay, so there is nothing for a stray
+          // click to hit, and arming anyway would leave a global capture-phase listener up for
+          // 400ms that could swallow an unrelated tap on a browser that sends no compatibility
+          // click. Arming *after* the callback is still in time: the callback only schedules a
+          // React state update, so the overlay mounts no earlier than the next render.
+          if (onDoubleTap(entry)) swallowNextClick();
         } else {
           lastTap.current = now;
         }
@@ -288,8 +295,9 @@ export function ThreadGroup<T extends ThreadEntry>({
   // (`isMine`) and hand the pick back with the entry the caller needs to address it.
   const [picked, setPicked] = useState<T | null>(null);
   const tapHandlers = useDoubleTapReact<T>((entry) => {
-    if (doubleTapReact?.canReact && !doubleTapReact.canReact(entry)) return;
+    if (doubleTapReact?.canReact && !doubleTapReact.canReact(entry)) return false;
     setPicked(entry);
+    return true;
   });
   const head = group[0];
   if (!head) return null;
