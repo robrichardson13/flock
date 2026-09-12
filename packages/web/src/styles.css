@@ -2516,13 +2516,28 @@ html[data-topbar] .sheet { max-height: 100%; }
 
 /* The actor page's totals strip: the same figures as a run row, laid out as one line above
    the per-session rows rather than per-session — cost, tokens, tool calls, session count and
-   total time, each already summed over distinct sessions. */
-.actor-telemetry { margin-top: var(--s2); }
+   total time, each already summed over distinct sessions.
+   Card 97: unlike the card page's `RunBlock`, this never wears `.run-block` — no border,
+   fill or radius here. The actor sheet's own padding already insets this from the sheet's
+   edges, so a second boxed inset on top of that sat narrower than the sheet's content width
+   and clipped on the phone sheet. Full-bleed to that content width instead, with a hairline
+   above the totals line and another above each session row standing in for the box — the
+   same `--line` token `.run-row`'s own inter-row border already uses. */
+.actor-telemetry {
+  margin-block: var(--s2);
+  display: flex; flex-direction: column; gap: var(--s1);
+}
 .actor-totals {
   display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3);
   font-size: var(--t-sub); font-weight: var(--w-head); color: var(--text);
   font-variant-numeric: var(--num);
+  border-top: 1px solid var(--line); padding-top: var(--s2);
 }
+/* Reinstates the divider `.run-row:first-of-type` strips for the boxed `RunBlock` idiom
+   (there, the box's own top edge reads as the separation) — here there is no box, so the
+   first row needs its hairline too, whether it follows the totals line or, with exactly one
+   session, stands alone. */
+.actor-telemetry .run-row:first-of-type { border-top: 1px solid var(--line); padding-top: var(--s1); }
 .actor-run-row { font-size: var(--t-cap); line-height: var(--lh-cap); }
 
 /* Phone width (~400px): a run row already wraps via `flex-wrap`, but the context bar's

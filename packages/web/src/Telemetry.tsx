@@ -150,7 +150,14 @@ export function RunBlock({ telemetry, duration, status }: { telemetry: HarnessSe
 /** The actor page's totals strip: cost, tokens, tool calls, session count and total time
  *  across distinct sessions — never re-summing a session that touched several cards. The
  *  strip only appears with two or more sessions; with one it would restate the single row
- *  beneath it, mostly in em dashes. */
+ *  beneath it, mostly in em dashes.
+ *
+ *  Card 97: this renders inside the actor sheet, whose own content width is already inset
+ *  by the sheet's padding — a second boxed container here (`.run-block`'s border/fill/
+ *  radius/shadow, the card page's `RunBlock` idiom) sat narrower than that inset on the
+ *  phone sheet and read as clipped. So this strip carries only `.actor-telemetry`, never
+ *  `.run-block`: full-bleed to the sheet's own edges, hairline dividers (the same `--line`
+ *  token `.run-row` already draws its inter-row borders with) standing in for the box. */
 export function ActorTelemetryStrip({
   telemetry,
   totals,
@@ -163,7 +170,7 @@ export function ActorTelemetryStrip({
   const tokens = totalTokens(telemetry);
   const time = totalDurationMs(telemetry);
   return (
-    <div className="run-block actor-telemetry" role="group" aria-label="Run totals">
+    <div className="actor-telemetry" role="group" aria-label="Run totals">
       {telemetry.length > 1 ? (
         <div className="actor-totals">
           <span title={totals.costExact ? undefined : "at least one session's cost is inexact"}>
