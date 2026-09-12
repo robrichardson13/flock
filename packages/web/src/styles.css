@@ -878,32 +878,42 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
   display: inline-flex; align-items: center; justify-content: center;
 }
 
-/* ---------- Card 50: the cards search composer ---------- */
+/* ---------- Card 50/55: the cards search composer ---------- */
 
 /* --search-bar-h is a constant rather than a measured height (unlike --composer-h): the field
-   never grows past one line, so there is nothing to observe. Used by both shells' own
-   reservation rules below. */
+   never grows past one line, so there is nothing to observe. Mirrors the phone message
+   composer's own resting height (`.line-composer-input`'s comment: one row + padding is
+   exactly --tap), so the two chins read as the same kind of surface. */
 :root { --search-bar-h: var(--tap); }
 
 .search-bar {
   display: flex; align-items: center; gap: var(--s2);
   min-height: var(--search-bar-h); padding: 0 var(--s2) 0 var(--s3);
-  border: 1px solid var(--line); border-radius: var(--r-full);
+  border: 1px solid var(--line); border-radius: var(--r-md);
   background: var(--bg); color: var(--text);
 }
+/* The field itself carries no border, so the ring belongs to the surface around it — the same
+   idiom `.input`/`.line-composer` already use (border tints on focus instead of an outline). */
+.search-bar:focus-within { border-color: var(--ink-focus); }
 .search-bar-icon { display: inline-flex; flex: none; color: var(--muted); }
 .search-bar-input {
   flex: 1; min-width: 0; border: none; background: none; color: inherit;
   font-size: var(--t-body); padding: 0;
 }
 .search-bar-input:focus { outline: none; }
-.search-bar-count { flex: none; white-space: nowrap; }
-.search-bar-clear, .search-bar-close { flex: none; }
+.search-bar-count { flex: none; white-space: nowrap; color: var(--muted); }
+.search-bar-clear { flex: none; }
 .search-bar-cancel { flex: none; padding: 0 var(--s1); }
 
-/* The phone composer chin: fixed above the tab bar, on the same --pillbar-x inset and the
-   same translucent chrome as every other bottom surface, so it reads as this app's composer
-   and not a bolted-on search widget. `.search-open` is set on `.screen` only while the Cards
+/* card 55: the nav icon that opens the composer wears the tab bar's own tinted "current"
+   look while it's open, so the trigger and the surface it opens visibly belong together. */
+.icon-btn.active { background: var(--accent-soft); color: var(--ink-tab-active); }
+
+/* The phone composer chin: fixed above the tab bar, on the same --pillbar-x inset, the same
+   rounding and chrome fill as the message composer (`.line-composer` at >=900px is the
+   exception — this matches its *phone* shape, `--r-lg` over `--bg-chrome`), and the same
+   translucent blur as every other bottom surface, so it reads as this app's composer rather
+   than a bolted-on search widget. `.search-open` is set on `.screen` only while the Cards
    pane itself is showing (BoardView.tsx), so the reservation never fires on another tab. */
 .screen.search-open:has(.tabbar) .screen-body {
   --bottom-reserve: calc(var(--s3) + var(--pillbar-space) + var(--search-bar-h) + var(--s2));
@@ -912,6 +922,8 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
   position: absolute; z-index: 15;
   left: var(--pillbar-x); right: var(--pillbar-x);
   bottom: var(--pillbar-space);
+  border-radius: var(--r-lg);
+  background: var(--bg-chrome);
   box-shadow: var(--elev-2);
 }
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
@@ -922,10 +934,16 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
   }
 }
 
-/* Desktop: an ordinary row in `.board-main`'s own flex flow, the same width as the brief and
-   the kanban beside it rather than a floating overlay — there is no keyboard chin to match. */
+/* Desktop: an ordinary row in `.board-main`'s own flex flow, the same left edge as the brief
+   and the kanban beside it rather than a floating overlay — there is no keyboard chin to
+   match here. Sized to `.column-head`/`.pane-head`'s own 36px rhythm (that pair, not --tap's
+   44px touch target, is what desktop's other row-shaped chrome uses) so the field reads as
+   part of that row of surfaces rather than a taller, mismatched one dropped in beside them. */
 @media (min-width: 900px) {
-  .search-bar-desktop { max-width: 420px; }
+  .search-bar-desktop {
+    max-width: 420px; min-height: 36px;
+    padding: 0 var(--s2) 0 var(--s3);
+  }
 }
 
 /* What the pill costs the boxes underneath it. A scroller pays it as trailing padding, so

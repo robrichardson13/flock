@@ -207,16 +207,29 @@ function SearchBar({ inputRef, value, onChange, onClose, count, variant = "mobil
         onChange={(e) => onChange(e.target.value)}
         aria-label="Search cards"
       />
-      {count && <span className="search-bar-count muted tiny">{count.matched} of {count.total}</span>}
-      {value !== "" && (
-        <button type="button" className="icon-btn search-bar-clear" onClick={() => onChange("")} aria-label="Clear search">
+      {count && <span className="search-bar-count tiny">{count.matched} of {count.total}</span>}
+      {variant === "mobile" ? (
+        <>
+          {value !== "" && (
+            <button type="button" className="icon-btn search-bar-clear" onClick={() => onChange("")} aria-label="Clear search">
+              {Icons.close(14)}
+            </button>
+          )}
+          <button type="button" className="linkish search-bar-cancel" onClick={onClose}>Cancel</button>
+        </>
+      ) : (
+        // Desktop has no separate Cancel, so one × does both jobs (card 55): with text it
+        // clears — the filter is the thing in the way — and only once the field is already
+        // empty does the same button close the composer, rather than showing a clear × and a
+        // close × side by side.
+        <button
+          type="button"
+          className="icon-btn search-bar-clear"
+          onClick={() => (value !== "" ? onChange("") : onClose())}
+          aria-label={value !== "" ? "Clear search" : "Close search"}
+        >
           {Icons.close(14)}
         </button>
-      )}
-      {variant === "mobile" ? (
-        <button type="button" className="linkish search-bar-cancel" onClick={onClose}>Cancel</button>
-      ) : (
-        <button type="button" className="icon-btn search-bar-close" onClick={onClose} aria-label="Close search">{Icons.close(16)}</button>
       )}
     </div>
   );
@@ -770,6 +783,7 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
     onOpenTeam: () => dispatchRoster({ type: "open" }),
     // Cards-tab-only chrome (card 50): the icon appears and disappears with the tab.
     onOpenSearch: tab === "cards" ? openSearch : undefined,
+    searchOpen,
   } : null);
 
   // Which way the tab bar moved, kept in a ref: derived fresh each render it would flip
@@ -1102,12 +1116,18 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
           <>
             {/* Card 50: the kanban is always on screen on desktop (there is no separate
                 "Cards tab" the way the phone has one), so the toggle is always live here
-                rather than gated on `tab`. */}
-            {!searchOpen && (
-              <button className="icon-btn" onClick={openSearch} aria-label="Search cards" title="Search cards (⌘K)">
-                {Icons.search(18)}
-              </button>
-            )}
+                rather than gated on `tab`. Stays visible while open (card 55) and wears the
+                same tinted "active" look the tab bar gives its current tab, rather than
+                vanishing — the field below has its own way to close. */}
+            <button
+              className={`icon-btn${searchOpen ? " active" : ""}`}
+              onClick={openSearch}
+              aria-label="Search cards"
+              aria-pressed={searchOpen}
+              title="Search cards (⌘K)"
+            >
+              {Icons.search(18)}
+            </button>
             <button className="btn btn-primary" onClick={() => setNewCard(true)}>{Icons.plus(16)} New card</button>
           </>
         )}

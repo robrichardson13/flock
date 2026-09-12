@@ -47,6 +47,10 @@ export interface TopBarSlot {
   /** Board, Cards tab only (card 50): opens the search composer. Undefined on every other
    *  tab, so the bar draws no icon there. */
   onOpenSearch?: () => void;
+  /** Board (card 55): whether the search composer is currently open, so the nav icon can wear
+   *  the same tinted "active" look the tab bar gives its current tab rather than looking
+   *  identical whether or not the composer is up. */
+  searchOpen?: boolean;
   /** Card: the overflow menu. */
   onCardMenu?: () => void;
   /** Card: the way back, which the board owns so the exit push and the route stay in step. */
@@ -61,7 +65,7 @@ type Slots = Record<TopBarSlotName, TopBarSlot>;
  *  Cards is exactly the fact that decides whether the bar draws the search icon, and — like
  *  the title — it has to be state, not read off the ref, for the icon to appear and disappear
  *  as the reader switches tabs without any title change to force a re-render. */
-type Titles = { board?: string; card?: string; search?: boolean };
+type Titles = { board?: string; card?: string; search?: boolean; searchOpen?: boolean };
 /** The board's avatar stack, which the bar also renders and so also needs as state (see
  *  `Titles`) rather than read from the ref alone. `undefined` until the snapshot lands. */
 type BoardTeam = { team: TeamMember[]; cards: Card[] } | undefined;
@@ -97,9 +101,9 @@ export function TopBarProvider({ children }: { children: ReactNode }) {
       owners.current[name] = null;
       slots.current[name] = {};
       setTitles((t) => {
-        if (t[name] === undefined && (name !== "board" || t.search === undefined)) return t;
+        if (t[name] === undefined && (name !== "board" || (t.search === undefined && t.searchOpen === undefined))) return t;
         const next = { ...t, [name]: undefined };
-        if (name === "board") next.search = undefined;
+        if (name === "board") { next.search = undefined; next.searchOpen = undefined; }
         return next;
       });
       if (name === "board") setBoardTeam(undefined);
@@ -109,8 +113,9 @@ export function TopBarProvider({ children }: { children: ReactNode }) {
     slots.current[name] = value;
     setTitles((t) => {
       const search = name === "board" ? !!value.onOpenSearch : t.search;
-      if (t[name] === value.title && t.search === search) return t;
-      return { ...t, [name]: value.title, search };
+      const searchOpen = name === "board" ? !!value.searchOpen : t.searchOpen;
+      if (t[name] === value.title && t.search === search && t.searchOpen === searchOpen) return t;
+      return { ...t, [name]: value.title, search, searchOpen };
     });
     // `team`/`teamCards` only ever come from the board slot, and only carry a stable
     // reference across re-renders that don't touch `snap` — same trick as `title` above, so
@@ -300,7 +305,13 @@ export function TopBar({ route, actor, boardLabel, onNewBoard, onRename, onOpenN
         {/* Card 50: search is Cards-tab-only chrome, so it appears and disappears with the
             tab rather than sitting in every pane's nav. */}
         {titles.search && (
-          <button className="icon-btn" onClick={() => slots.current.board.onOpenSearch?.()} aria-label="Search cards" title="Search cards">
+          <button
+            className={`icon-btn${titles.searchOpen ? " active" : ""}`}
+            onClick={() => slots.current.board.onOpenSearch?.()}
+            aria-label="Search cards"
+            aria-pressed={!!titles.searchOpen}
+            title="Search cards"
+          >
             {Icons.search(20)}
           </button>
         )}
