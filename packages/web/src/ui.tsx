@@ -4,6 +4,7 @@ import type { ActorKind, CardStatus, TeamMember } from "@flock/core/types";
 import { actorHref, avatarColor, groupRoster, initialsOf, isActive, presenceOf, rosterCaption, rosterCounts, ROSTER_GROUPS, shortAge } from "./people.ts";
 import { autoFocusField } from "./focus.ts";
 import { D_BASE, D_FAST, D_SLOW } from "./motion.ts";
+import { latchSwapIn, sheetBackdropClass } from "./sheetSwap.ts";
 
 /* ---------- viewport ---------- */
 
@@ -1007,13 +1008,25 @@ export function Sheet({ open, onClose, title, lead, trail, children, foot, tall,
   useEscape(open, onClose);
   const overlay = useContext(OverlayCountCtx);
   const [closing, setClosing] = useState(false);
+  // Whether *this* close is the second half of a swap. Captured when the close begins rather
+  // than read live, because the caller's flag expires part-way through it (card 41).
+  const [closeSwap, setCloseSwap] = useState(false);
   const [mounted, setMounted] = useState(open);
+  // The caller's `swap` as of this render, so the close effect can capture it without taking
+  // a dependency on it and re-running mid fade.
+  const swapNow = useRef(false);
+  swapNow.current = !!swap;
+  // Latched for as long as the sheet is on screen: see sheetSwap.ts for why following the
+  // live flag replayed the sheet's entry animation on a sheet that had already settled.
+  const swappedIn = useRef(false);
+  swappedIn.current = latchSwapIn(swappedIn.current, open, mounted, !!swap);
   const shown = useRef<{ title?: string; lead?: ReactNode; trail?: ReactNode; children: ReactNode; foot?: ReactNode }>({ title, lead, trail, children, foot });
   if (open) shown.current = { title, lead, trail, children, foot };
   useEffect(() => {
     if (open) {
       setMounted(true);
       setClosing(false);
+      setCloseSwap(false);
       return;
     }
     // Nothing to play out: either it was never up, or motion is off and it goes at once.
@@ -1021,12 +1034,15 @@ export function Sheet({ open, onClose, title, lead, trail, children, foot, tall,
     if (prefersReducedMotion()) {
       setMounted(false);
       setClosing(false);
+      setCloseSwap(false);
       return;
     }
     setClosing(true);
+    setCloseSwap(swapNow.current);
     const t = window.setTimeout(() => {
       setMounted(false);
       setClosing(false);
+      setCloseSwap(false);
     }, D_BASE);
     return () => window.clearTimeout(t);
   }, [open, mounted]);
@@ -1038,7 +1054,7 @@ export function Sheet({ open, onClose, title, lead, trail, children, foot, tall,
   if (!open && !mounted) return null;
   const body = open ? { title, lead, trail, children, foot } : shown.current;
   return createPortal(
-    <div className={`sheet-backdrop${closing ? " closing" : ""}${swap ? " sheet-swap" : ""}`} onClick={onClose}>
+    <div className={sheetBackdropClass({ closing, swappedIn: swappedIn.current, closeSwap })} onClick={onClose}>
       <div ref={sheetRef} className={`sheet ${tall ? "sheet-tall" : ""} ${className ?? ""}`} role="dialog" aria-modal="true" aria-label={body.title} onClick={(e) => e.stopPropagation()}>
         <div className="sheet-grip" aria-hidden />
         {/* #28: one close affordance per sheet. A tall sheet can fill the backdrop (the
