@@ -21,6 +21,10 @@ export interface ClaudeCodeReaderOptions {
   home?: string;
   limits?: Partial<ScanLimits>;
   freshWindowMs?: number;
+  /** Clock for the freshness comparison against a transcript's mtime. Default `Date.now`;
+   * overridable so a test can assert "fresh"/"stale" deterministically instead of racing real
+   * wall-clock time against a tiny `freshWindowMs`. */
+  now?: () => number;
 }
 
 export class ClaudeCodeReader implements HarnessReader {
@@ -28,11 +32,13 @@ export class ClaudeCodeReader implements HarnessReader {
   private readonly home: string;
   private readonly limits: ScanLimits;
   private readonly freshWindowMs: number;
+  private readonly now: () => number;
 
   constructor(opts: ClaudeCodeReaderOptions = {}) {
     this.home = claudeHome(opts.home);
     this.limits = defaultScanLimits(opts.limits);
     this.freshWindowMs = opts.freshWindowMs ?? DEFAULT_FRESH_WINDOW_MS;
+    this.now = opts.now ?? Date.now;
   }
 
   async resolve(hint: RunHint): Promise<RunRef | null> {
@@ -81,7 +87,7 @@ export class ClaudeCodeReader implements HarnessReader {
     const reused = pidFile.procStart ? (await procStartMatches(pidFile.pid, pidFile.procStart)) === false : false;
     if (reused) return { liveness: "gone", endedReason: "absent", lastActivityAt };
 
-    const fresh = Date.now() - scan.mtime.getTime() <= this.freshWindowMs;
+    const fresh = this.now() - scan.mtime.getTime() <= this.freshWindowMs;
     return {
       liveness: fresh ? "running" : "idle",
       livenessNote: pidFile.status,

@@ -135,12 +135,15 @@ describe("ClaudeCodeReader.liveness", () => {
     expect(liveness.livenessNote).toBe("busy");
   });
 
-  test("idle when the pid is alive but the transcript is stale against a tiny fresh window", async () => {
+  test("idle when the transcript is stale against the fresh window", async () => {
     await writeFile(
       join(home, "sessions", `${process.pid}.json`),
       JSON.stringify({ pid: process.pid, sessionId: "11111111-1111-1111-1111-111111111111", status: "busy" }),
     );
-    const reader = new ClaudeCodeReader({ home, freshWindowMs: 1 });
+    // A fixed, far-future clock rather than a real one racing a tiny window: makes "stale"
+    // deterministic instead of depending on how fast this machine's disk and scheduler are
+    // between the write above and the read inside liveness().
+    const reader = new ClaudeCodeReader({ home, freshWindowMs: 1000, now: () => Date.now() + 1_000_000_000 });
     const ref = await reader.resolve({ key: LIVE_KEY, cwd: CWD });
     expect(await reader.liveness(ref!)).toMatchObject({ liveness: "idle" });
   });
