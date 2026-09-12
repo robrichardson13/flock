@@ -1,0 +1,17 @@
+{
+  "name": "@flock/harness",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    "./reader": "./src/reader.ts",
+    "./registry": "./src/registry.ts",
+    "./limits": "./src/limits.ts",
+    "./claude-code": "./src/claude-code.ts",
+    "./claude-code-paths": "./src/claude-code-paths.ts",
+    "./claude-code-parse": "./src/claude-code-parse.ts",
+    "./claude-code-liveness": "./src/claude-code-liveness.ts"
+  },
+  "dependencies": {
+    "@flock/core": "workspace:*"
+  }
+}

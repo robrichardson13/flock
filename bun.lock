@@ -24,6 +24,13 @@
       "name": "@flock/core",
       "version": "0.1.0",
     },
+    "packages/harness": {
+      "name": "@flock/harness",
+      "version": "0.1.0",
+      "dependencies": {
+        "@flock/core": "workspace:*",
+      },
+    },
     "packages/server": {
       "name": "@flock/server",
       "version": "0.1.0",
@@ -140,6 +147,8 @@
     "@flock/cli": ["@flock/cli@workspace:packages/cli"],
 
     "@flock/core": ["@flock/core@workspace:packages/core"],
+
+    "@flock/harness": ["@flock/harness@workspace:packages/harness"],
 
     "@flock/server": ["@flock/server@workspace:packages/server"],
 

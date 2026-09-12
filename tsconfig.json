@@ -10,5 +10,5 @@
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["packages/core/src", "packages/core/test", "packages/cli/src", "packages/server/src", "scripts"]
+  "include": ["packages/core/src", "packages/core/test", "packages/cli/src", "packages/server/src", "packages/harness/src", "scripts"]
 }

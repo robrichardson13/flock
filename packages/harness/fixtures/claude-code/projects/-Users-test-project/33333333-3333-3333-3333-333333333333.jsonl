@@ -1,0 +1,5 @@
+{"type":"user","sessionId":"33333333-3333-3333-3333-333333333333","timestamp":"2026-09-11T17:00:00.000Z","message":{"content":[{"type":"text","text":"hi"}]}}
+not-json-at-all
+{"type":"assistant","sessionId":"33333333-3333-3333-3333-333333333333","timestamp":"2026-09-11T17:00:05.000Z","message":{"id":"msg_m1","role":"assistant","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"toolu_m1","name":"Bash","input":{}}],"usage":{"input_tokens":1,"cache_creation_input_tokens":1,"cache_read_input_tokens":1,"output_tokens":1}}}
+{"malformed": true, "missing_type_field": tru
+{"type":"assistant","sessionId":"33333333-3333-3333-3333-333333333333","timestamp":"2026-09-11T17:00:10.000Z","message":{"id":"msg_m2","role":"assistant","model":"claude-sonnet-5","content":[{"type":"text","text":"final"}],"usage":{"input_tokens":2,"cache_creation_input_tokens":2,"cache_read_input_tokens":2,"output_tokens":2}}}
