@@ -907,10 +907,17 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
    standalone link) push Cancel past the bar's own right inset at 390px — the overflow the
    390px screenshot caught. This row is a fixed-height toolbar, not a lone tappable line, so
    Cancel keeps `.linkish`'s look but not its expanded box: no negative margin, no inflated
-   min-height, just enough padding to keep its own hit target comfortable within the row. */
+   min-height, just enough padding to keep its own hit target comfortable within the row.
+   card 67: `.linkish` also carries its own `align-self: flex-start` (it is normally a lone
+   line with nothing to centre against), which pinned Cancel to the row's top edge regardless
+   of `.search-bar`'s `align-items: center` — an `align-self` on the child always wins over
+   the parent's `align-items` for that one item. `align-self: center` puts it back in the
+   row's flow, and matching the input's own font-size/line-height lines its baseline up with
+   the query text, the count and the × beside it instead of merely sharing their midpoint. */
 .search-bar-cancel {
-  flex: none; margin: 0; min-height: 0;
+  flex: none; margin: 0; min-height: 0; align-self: center;
   padding: var(--s1) var(--s1);
+  font-size: var(--t-body); line-height: var(--lh-body);
   white-space: nowrap;
 }
 
