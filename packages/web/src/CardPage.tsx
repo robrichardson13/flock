@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } f
 import { createPortal } from "react-dom";
 import { api, getActorName, type Card, type CardStatus, type Comment } from "./api.ts";
 import { type ActorRuntimes } from "./BoardView.tsx";
+import { questionEntry, type QuestionEntry } from "./NeedsYou.tsx";
 import { Markdownish, MessageBody } from "./markdown.tsx";
 import { agoText, timeAgo } from "./App.tsx";
 import { enterClass, useNewIds } from "./live.ts";
@@ -70,6 +71,7 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
   // The reopen sheet holds the target status while it's open (todo or doing) rather than a
   // plain boolean, since Move-to can reopen straight into either.
   const [reopenSheet, setReopenSheet] = useState<CardStatus | null>(null);
+  const [pickedQuestion, setPickedQuestion] = useState<QuestionEntry | null>(null);
   const me = getActorName();
   const shownComments = mergeThread(comments ?? [], pendingComments);
   const newComments = useNewIds(shownComments.map((c) => c.id), comments !== null);
@@ -163,6 +165,27 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
       // best-effort; the chip reconciles on the next refetch either way
     }
   };
+
+  // The pending ask box (card 76): the same reaction toggle as the thread's own comments, but
+  // through the card's `questionCommentNum` since the ask box is not one of `comments` — it is
+  // drawn from the card record itself so it shows even before the thread has loaded. Reacting
+  // here is a human reacting to the card's own pending question, so core answers it the same
+  // way typing into `AnswerBox` would; `onChange` picks that transition up like any other.
+  const toggleQuestionReaction = async (entry: QuestionEntry, emoji: string, mine: boolean) => {
+    try {
+      if (mine) await api.unreactFromComment(boardId, card.num, entry.num, emoji);
+      else await api.reactToComment(boardId, card.num, entry.num, emoji);
+      onChange();
+      reload();
+    } catch {
+      // best-effort; the chip reconciles on the next refetch either way
+    }
+  };
+  const questionTapHandlers = useDoubleTapReact<QuestionEntry>((entry) => {
+    setPickedQuestion(entry);
+    return true;
+  });
+  const pendingQuestion = questionEntry(card);
 
   // #29: show the jump button only while the newest comment is actually scrolled out of
   // view. The sentinel sits just past the thread, so a card whose whole page already fits
@@ -404,10 +427,19 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
   const createdLine = <div className="muted small">Created by {card.createdBy}, {agoText(card.createdAt)}. Updated {agoText(card.updatedAt)}.</div>;
 
   const askBox = card.status === "awaiting-human" && card.question && (
-    <div className="ask-box">
+    <div className="ask-box" {...(pendingQuestion ? questionTapHandlers(pendingQuestion) : {})}>
       <div className="muted small">{card.questionBy} asks</div>
       <div className="needs-q"><MessageBody text={card.question} /></div>
+      {pendingQuestion && (
+        <MessageReactions reactions={pendingQuestion.reactions} viewer={me} onToggle={(emoji, mine) => toggleQuestionReaction(pendingQuestion, emoji, mine)} />
+      )}
       <AnswerBox onAnswer={(a) => act(() => api.answer(boardId, card.num, a))} />
+      <ReactionSheet
+        entry={pickedQuestion}
+        onClose={() => setPickedQuestion(null)}
+        isMine={(entry, emoji) => hasReaction(entry.reactions, me, emoji)}
+        onPick={(entry, emoji, mine) => toggleQuestionReaction(entry, emoji, mine)}
+      />
     </div>
   );
 
