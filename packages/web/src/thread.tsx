@@ -582,7 +582,7 @@ function ReactionPicker({ isMine, onPick }: { isMine: (emoji: string) => boolean
  * Open is `entry !== null`: the caller keeps the picked entry, so the sheet has what it needs to
  * mark the viewer's existing reactions and to hand the pick back.
  */
-function ReactionSheet<T extends ThreadEntry>({ entry, onClose, isMine, onPick, onReply }: {
+export function ReactionSheet<T extends ThreadEntry>({ entry, onClose, isMine, onPick, onReply }: {
   entry: T | null;
   onClose: () => void;
   isMine: (entry: T, emoji: string) => boolean;
