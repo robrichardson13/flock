@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"22222222-2222-2222-2222-222222222222","timestamp":"2026-09-11T18:00:00.000Z","message":{"content":[{"type":"text","text":"hi"}]}}
+{"type":"assistant","sessionId":"22222222-2222-2222-2222-222222222222","timestamp":"2026-09-11T18:00:05.000Z","message":{"id":"msg_d1","role":"assistant","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"toolu_d1","name":"Write","input":{}}],"usage":{"input_tokens":4,"cache_creation_input_tokens":6,"cache_read_input_tokens":8,"output_tokens":9}}}

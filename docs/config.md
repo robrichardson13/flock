@@ -101,6 +101,21 @@ everything else and the check-in off, and a 20-minute threshold. See
 [ADR 0024](adr/0024-notification-levels.md) and
 [docs/notifications-contract.md](notifications-contract.md) §5.
 
+## Harness telemetry
+
+See [ADR 0026](adr/0026-harness-telemetry.md) and
+[docs/harness-telemetry.md](harness-telemetry.md) for the full design. Nothing here needs a config
+key or an install of any kind: the card→session link is read from the harness's own environment,
+and a session's numbers are read from its transcript on demand, whenever a card or actor page is
+viewed. Flock never installs or relies on Claude Code hooks.
+
+| Env var | Default | What it does |
+| --- | --- | --- |
+| `FLOCK_SESSION` | auto-detected | The harness run key this write's events carry, e.g. `claude-code:<session id>`. Detected from `CLAUDE_CODE_SESSION_ID` when flock is running under Claude Code; set this for a harness flock cannot detect. Precedence: `--session`, this var, then detection. |
+
+flock reads transcripts on this machine only, stores numbers and paths and never transcript text,
+and the HTTP API omits the stored transcript path unless the request comes from loopback.
+
 ## `~/.flock/skill.md`
 
 Optional. This is the one place to put a standing personalization of the `/flock` skill — routing

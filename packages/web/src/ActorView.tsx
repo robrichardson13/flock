@@ -16,9 +16,16 @@
  * skeleton stands in only where the snapshot has nothing to say.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import { api, type ActorCard, type ActorProfile, type Card, type TeamMember } from "./api.ts";
+import { api, type ActorCard, type ActorProfile, type ActorTelemetryTotals, type Card, type HarnessSessionTelemetry, type TeamMember } from "./api.ts";
 import { groupActorCards, rolesCaption, sharedRoles, shortAge } from "./people.ts";
+import { ActorTelemetryStrip } from "./Telemetry.tsx";
 import { Avatar, EMPTY_TEXT, RuntimeTag, Sheet, SheetBack } from "./ui.tsx";
+
+/** ADR 0026: the two fields `GET /api/boards/:b/actors/:name` adds on top of `ActorProfile`.
+ *  Optional here (rather than folded into `ActorProfile` itself) so `seedProfile` below —
+ *  which answers from the board snapshot alone, before this route has ever been fetched —
+ *  never has to fake a telemetry reading it does not have. */
+type FullProfile = ActorProfile & { telemetry?: HarnessSessionTelemetry[]; totals?: ActorTelemetryTotals };
 
 /** What the caller can hand over from the board snapshot without another request. */
 export interface ActorSeed {
@@ -34,7 +41,7 @@ const GROUPS: { key: "doing" | "done" | "other"; label: string }[] = [
 ];
 
 /** Seeded profile: everything the snapshot alone can answer, with the same shape as the fetch. */
-function seedProfile(name: string, seed: ActorSeed): ActorProfile | null {
+function seedProfile(name: string, seed: ActorSeed): FullProfile | null {
   if (!seed.member && seed.holding.length === 0) return null;
   return {
     name,
@@ -84,7 +91,7 @@ export function ActorSheet({
   renderCard: (card: ActorCard) => ReactNode;
 }) {
   // Seeded synchronously, so an actor whose cards are already on screen opens on them.
-  const [profile, setProfile] = useState<ActorProfile | null>(() => (open ? seedProfile(name, seed) : null));
+  const [profile, setProfile] = useState<FullProfile | null>(() => (open ? seedProfile(name, seed) : null));
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -135,6 +142,10 @@ export function ActorSheet({
           {profile && profile.events > 0 ? ` · ${profile.events} ${profile.events === 1 ? "write" : "writes"}` : ""}
         </div>
       </div>
+
+      {profile?.telemetry && profile.telemetry.length > 0 && profile.totals && (
+        <ActorTelemetryStrip telemetry={profile.telemetry} totals={profile.totals} />
+      )}
 
       {err && !profile && <p className="muted">{err}</p>}
       {!err && !profile && <ActorSkeleton />}

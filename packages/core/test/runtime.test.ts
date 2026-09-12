@@ -38,6 +38,21 @@ describe("detectRuntime", () => {
     const env = { CLAUDECODE: "1", CLAUDE_MODEL: "sonnet" } as NodeJS.ProcessEnv;
     expect(detectRuntime(env).model).toBeUndefined();
   });
+
+  test("learns the run key from CLAUDE_CODE_SESSION_ID (ADR 0026)", () => {
+    const env = { CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: "8ea8caf2-d288-4e0a-89de-04c45158535c" } as NodeJS.ProcessEnv;
+    expect(detectRuntime(env).session).toBe("claude-code:8ea8caf2-d288-4e0a-89de-04c45158535c");
+  });
+
+  test("no session key when CLAUDE_CODE_SESSION_ID is absent", () => {
+    const env = { CLAUDECODE: "1" } as NodeJS.ProcessEnv;
+    expect(detectRuntime(env).session).toBeUndefined();
+  });
+
+  test("no session key outside a detected Claude Code environment, even with the var present", () => {
+    const env = { CLAUDE_CODE_SESSION_ID: "8ea8caf2-d288-4e0a-89de-04c45158535c" } as NodeJS.ProcessEnv;
+    expect(detectRuntime(env).session).toBeUndefined();
+  });
 });
 
 describe("normalizeRuntime", () => {
@@ -53,5 +68,19 @@ describe("normalizeRuntime", () => {
   test("caps at 64 characters", () => {
     const long = "x".repeat(100);
     expect(normalizeRuntime({ model: long }).model).toHaveLength(64);
+  });
+
+  test("trims session but never lowercases it (it's a case-sensitive lookup key)", () => {
+    const r = normalizeRuntime({ session: "  claude-code:8EA8caf2-Agent#Abc  " });
+    expect(r.session).toBe("claude-code:8EA8caf2-Agent#Abc");
+  });
+
+  test("caps session at 200 characters, wider than the 64-char runtime label cap", () => {
+    const long = "claude-code:" + "x".repeat(250);
+    expect(normalizeRuntime({ session: long }).session).toHaveLength(200);
+  });
+
+  test("drops an empty session", () => {
+    expect(normalizeRuntime({ session: "   " }).session).toBeUndefined();
   });
 });

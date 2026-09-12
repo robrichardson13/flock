@@ -115,6 +115,49 @@ describe("openDatabase / schema_version", () => {
     }
   });
 
+  test("a v6 database gains events.session, actors.session, and the harness_sessions table (ADR 0026)", () => {
+    const { dir, path } = freshPath();
+    try {
+      // Simulate a v6 database: events/actors carry harness/model/effort but no session column,
+      // and harness_sessions does not exist yet.
+      const legacy = new Database(path, { create: true });
+      legacy.exec(`
+        CREATE TABLE boards (
+          id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+          project TEXT, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE events (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT, board_id TEXT NOT NULL, actor TEXT NOT NULL, actor_kind TEXT NOT NULL,
+          type TEXT NOT NULL, card_num INTEGER, data TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+          harness TEXT, model TEXT, effort TEXT
+        );
+        CREATE TABLE actors (
+          name TEXT PRIMARY KEY, kind TEXT NOT NULL, last_seen TEXT NOT NULL, harness TEXT, model TEXT, effort TEXT
+        );
+      `);
+      legacy.exec("PRAGMA user_version = 6;");
+      legacy.close();
+
+      const db = openDatabase(path);
+      const eventCols = new Set((db.query("PRAGMA table_info(events)").all() as { name: string }[]).map((c) => c.name));
+      const actorCols = new Set((db.query("PRAGMA table_info(actors)").all() as { name: string }[]).map((c) => c.name));
+      expect(eventCols.has("session")).toBe(true);
+      expect(actorCols.has("session")).toBe(true);
+
+      const tables = new Set((db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((t) => t.name));
+      expect(tables.has("harness_sessions")).toBe(true);
+      const sessionCols = new Set((db.query("PRAGMA table_info(harness_sessions)").all() as { name: string }[]).map((c) => c.name));
+      for (const col of ["key", "harness", "session_id", "model", "cost_usd", "tool_calls", "liveness", "observed_at", "updated_at"]) {
+        expect(sessionCols.has(col)).toBe(true);
+      }
+
+      expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION);
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("the error names both versions and tells the user to upgrade", () => {
     const { dir, path } = freshPath();
     try {

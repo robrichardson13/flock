@@ -137,6 +137,17 @@ The skill that drives the orchestration is `skills/flock`, installed at `~/.clau
 and refreshed on upgrade (`docs/adr/0004-the-flock-skill-is-the-conductor.md`). Without the skill,
 onboarding is `flock init` once and then `flock handoff`.
 
+## What a run cost
+
+Every write an agent makes already carries the harness, model and effort it ran under. It now also
+carries a run key, read from the harness's own environment, and flock uses that to read the
+session's transcript on this machine: cost in dollars, context used against the model's maximum,
+tool calls, wall clock, and whether that agent is still alive. A card page grows a **Run** block
+showing one row per session that worked the card, `flock telemetry` is the terminal version, and a
+board where nothing is linked looks exactly as it did before. Numbers only, same machine, never any
+transcript text — and a live session's cost renders as `—`, never as `$0.00`, because the harness
+has not computed it yet. See `docs/harness-telemetry.md`.
+
 ## Scope and storage
 
 A board is scoped to a directory, normally a repo checkout or a git worktree, and `flock init`
@@ -164,6 +175,7 @@ format; SQLite is the store (`docs/adr/0001-sqlite-is-the-store.md`).
 
 - `docs/install.md` — platforms, env overrides, updates, uninstall
 - `docs/config.md` — `~/.flock/config.json`
+- `docs/harness-telemetry.md` — cost, context, duration and liveness per session
 - `docs/agents/issue-tracker.md` — using flock as a project's issue tracker
 - `docs/adr/` — every decision and why
 - `VISION.md` — where this is going

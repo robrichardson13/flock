@@ -26,7 +26,8 @@ export function resolveActor(flags: Parsed["flags"]): Actor {
   const harness = str(flags.harness) ?? process.env.FLOCK_HARNESS ?? detected.harness;
   const model = str(flags.model) ?? process.env.FLOCK_MODEL ?? detected.model;
   const effort = str(flags.effort) ?? process.env.FLOCK_EFFORT ?? detected.effort;
-  const runtime = normalizeRuntime({ harness, model, effort });
+  const session = str(flags.session) ?? process.env.FLOCK_SESSION ?? detected.session;
+  const runtime = normalizeRuntime({ harness, model, effort, session });
 
   return { name, kind, ...runtime };
 }

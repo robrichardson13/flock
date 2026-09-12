@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { parseArgs } from "./args.ts";
 import { resolveActor } from "./identity.ts";
 
-const RUNTIME_ENV_KEYS = ["FLOCK_ACTOR", "FLOCK_ACTOR_KIND", "FLOCK_HARNESS", "FLOCK_MODEL", "FLOCK_EFFORT", "CLAUDECODE", "AI_AGENT", "CLAUDE_EFFORT", "CLAUDE_CODE_EXECPATH"];
+const RUNTIME_ENV_KEYS = ["FLOCK_ACTOR", "FLOCK_ACTOR_KIND", "FLOCK_HARNESS", "FLOCK_MODEL", "FLOCK_EFFORT", "FLOCK_SESSION", "CLAUDECODE", "AI_AGENT", "CLAUDE_EFFORT", "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_SESSION_ID"];
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -60,5 +60,31 @@ describe("resolveActor runtime precedence: flag > env > detection > nothing", ()
     expect(actor.harness).toBe("claude-code@9.9.9");
     expect(actor.model).toBe("sonnet-5");
     expect(actor.effort).toBe("low");
+  });
+
+  test("session: nothing set stays undefined", () => {
+    const { flags } = parseArgs(["--as", "scout"]);
+    expect(resolveActor(flags).session).toBeUndefined();
+  });
+
+  test("session: detected from CLAUDE_CODE_SESSION_ID (ADR 0026)", () => {
+    process.env.CLAUDECODE = "1";
+    process.env.CLAUDE_CODE_SESSION_ID = "8ea8caf2-d288-4e0a-89de-04c45158535c";
+    const { flags } = parseArgs(["--as", "scout"]);
+    expect(resolveActor(flags).session).toBe("claude-code:8ea8caf2-d288-4e0a-89de-04c45158535c");
+  });
+
+  test("session: FLOCK_SESSION overrides detection", () => {
+    process.env.CLAUDECODE = "1";
+    process.env.CLAUDE_CODE_SESSION_ID = "8ea8caf2-d288-4e0a-89de-04c45158535c";
+    process.env.FLOCK_SESSION = "claude-code:override-id";
+    const { flags } = parseArgs(["--as", "scout"]);
+    expect(resolveActor(flags).session).toBe("claude-code:override-id");
+  });
+
+  test("session: --session overrides everything", () => {
+    process.env.FLOCK_SESSION = "claude-code:from-env";
+    const { flags } = parseArgs(["--as", "scout", "--session", "claude-code:from-flag"]);
+    expect(resolveActor(flags).session).toBe("claude-code:from-flag");
   });
 });

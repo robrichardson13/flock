@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@flock/core": "workspace:*",
+    "@flock/harness": "workspace:*",
     "hono": "^4.6.0",
     "web-push": "^3.6.7"
   },

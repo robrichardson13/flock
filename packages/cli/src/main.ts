@@ -84,6 +84,8 @@ IDENTITY
   --harness NAME   Runtime harness, e.g. claude-code@2.1.261. Env: FLOCK_HARNESS. Auto-detected for Claude Code.
   --model NAME     Model name, e.g. opus-5. Env: FLOCK_MODEL. Never auto-detected; pass it or it stays unknown.
   --effort LEVEL   Reasoning effort, e.g. high. Env: FLOCK_EFFORT. Auto-detected from CLAUDE_EFFORT when present.
+  --session KEY    Harness run key, e.g. claude-code:<session-id>. Env: FLOCK_SESSION. Auto-detected
+                    from CLAUDE_CODE_SESSION_ID. Links this write's events to \`flock telemetry\`.
   --json           Machine-readable output
   --db PATH        Database file. Env: FLOCK_DB. Default: ~/.flock/flock.db, or a .flock/ found walking up from cwd
   --host H         Bind host for serve/up. Precedence: --host, FLOCK_HOST, "host" in
@@ -152,6 +154,12 @@ TEAM
   log [BOARD] [--all] [--since SEQ] [--wait | --follow] [--for NAME] [--timeout MS]
                                       --wait: block until a matching event, then exit. --all: every board
   actors                              Who has touched this database
+  telemetry [BOARD] [N] [--refresh] [--json]
+                                      Harness sessions for card N, or for --as/FLOCK_ACTOR when N
+                                      is omitted: cost, context used/max, tool calls, liveness.
+                                      Re-reads any session that is not yet final (cost still
+                                      missing, and either recently active or the transcript
+                                      still there); --refresh forces every session. See docs/adr/0026.
 
 SETUP
   init [TITLE] [--body MD | --body-file F] [--local]
@@ -163,7 +171,8 @@ SETUP
                                       loopback only. Prints the https tailnet URL first when its
                                       parent (\`up --foreground --tailscale\`) established a mount;
                                       --open still opens the loopback address.
-  setup [--no-start] [--skill-only]   Write ~/.claude/skills/flock/SKILL.md, then \`flock up\`
+  setup [--no-start] [--skill-only]
+                                      Write ~/.claude/skills/flock/SKILL.md, then \`flock up\`
                                       (a symlinked destination is left alone). --skill-only
                                       does just the skill; --no-start skips starting the daemon.
                                       Reports ~/.flock/skill.md (your personalization of the
@@ -374,7 +383,11 @@ async function main(argv: string[]) {
 
   if (cmd === "setup") {
     const { setupCommand } = await import("./setup.ts");
-    await setupCommand({ json: bool(flags.json), noStart: bool(flags["no-start"]), skillOnly: bool(flags["skill-only"]) });
+    await setupCommand({
+      json: bool(flags.json),
+      noStart: bool(flags["no-start"]),
+      skillOnly: bool(flags["skill-only"]),
+    });
     return;
   }
 
@@ -538,6 +551,20 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
           console.log(`    → flock answer ${c.boardSlug} ${c.num} "..."`);
         }
       });
+    }
+
+    case "telemetry": {
+      const { board, rest } = pickBoard(); a = rest;
+      const { telemetryForCard, telemetryForActor, printTelemetryCard, printTelemetryActor } = await import("./telemetry.ts");
+      const refresh = bool(flags.refresh);
+      const projectCwd = flock.board(board).project;
+      if (a[0] !== undefined) {
+        const cardNum = Flock.parseCardRef(a[0]);
+        const result = await telemetryForCard(flock, board, cardNum, { refresh, cwd: projectCwd });
+        return out(ctx, result, () => printTelemetryCard(result));
+      }
+      const result = await telemetryForActor(flock, board, actor.name, { refresh, cwd: projectCwd });
+      return out(ctx, result, () => printTelemetryActor(result));
     }
 
     case "actors":
@@ -732,6 +759,8 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
     case "release": {
       const { board, rest } = pickBoard(); a = rest;
       const c = flock.releaseCard(actor, board, need(0, "card number"));
+      const { bestEffortRefresh } = await import("./telemetry.ts");
+      await bestEffortRefresh(flock, actor.session, cwd);
       return out(ctx, c, () => console.log(`Released ${fmtCard(c)}`));
     }
     case "hold": {
@@ -760,6 +789,8 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
     case "close": {
       const { board, rest } = pickBoard(); a = rest;
       const c = flock.closeCard(actor, board, need(0, "card number"), { resolution: str(flags.resolution) ?? a[1], status: bool(flags.wontfix) ? "wontfix" : "done" });
+      const { bestEffortRefresh } = await import("./telemetry.ts");
+      await bestEffortRefresh(flock, actor.session, cwd);
       return out(ctx, c, () => console.log(`Closed ${fmtCard(c)}`));
     }
     case "block": {

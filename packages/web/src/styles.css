@@ -182,6 +182,14 @@
   --on-attn-fill: var(--on-human);
   /* The one live signal in the app: a thing that is happening right now. */
   --dot-working: var(--accent);
+  /* ADR 0023: the four liveness states a harness session reads as (running/idle/gone/
+     unknown). Aliases of already-audited hues rather than new ones — a dot never carries
+     text on top of it, so its own contrast is not what the gate checks, but the colour it
+     borrows already holds 4.5:1 as a foreground on every ground this block sits on. */
+  --liveness-running: var(--dot-working);
+  --liveness-idle: var(--human);
+  --liveness-gone: var(--muted);
+  --liveness-unknown: var(--muted-2);
 }
 
 ::selection { background: color-mix(in srgb, var(--ink-sel) 22%, transparent); }
@@ -2465,6 +2473,80 @@ html[data-topbar] .sheet { max-height: 100%; }
 .detail-token { display: inline-flex; align-items: center; gap: 2px; font-variant-numeric: var(--num); }
 .detail-token.is-open { color: var(--status-blocked); }
 .detail-chev { flex: none; display: inline-flex; color: var(--muted); opacity: 0.6; margin-right: calc(var(--s2) * -1); }
+
+/* ---------- run block (ADR 0023: harness telemetry) ---------- */
+/* One row per session that worked this card, in the same raised-group idiom as
+   `.card-details` just above (a card floating on the page, hairlines between rows rather
+   than a border on each). Absent entirely when there is no telemetry — CardPage/ActorView
+   never render this element at all in that case, so there is no empty-state rule to write. */
+.run-block {
+  background: var(--bg-2); border-radius: var(--r-md); box-shadow: var(--elev-1);
+  padding: var(--s3) var(--s4); margin-block: var(--s2);
+  display: flex; flex-direction: column; gap: var(--s3);
+}
+.run-block > h2 { margin: 0; }
+.run-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s3);
+  padding-block: var(--s1);
+  font-size: var(--t-foot); line-height: var(--lh-foot); color: var(--muted);
+  border-top: 1px solid var(--line);
+}
+.run-row:first-of-type { border-top: none; padding-top: 0; }
+.run-model { color: var(--text); font-weight: var(--w-sub); font-variant-numeric: var(--num); }
+.run-cost, .run-tools, .run-duration { font-variant-numeric: var(--num); }
+/* The context bar: a short track plus its own label, so "182K / 1M (15%)" and the fill
+   always agree — both are driven by the same `contextPercent` reading. */
+.run-context { display: inline-flex; align-items: center; gap: var(--s1); }
+.run-context-bar {
+  display: inline-block; width: 64px; height: 6px; border-radius: var(--r-full);
+  background: var(--bar-track); overflow: hidden; flex: none;
+}
+.run-context-fill { display: block; height: 100%; background: var(--bar-doing); border-radius: inherit; }
+.run-context-label { font-variant-numeric: var(--num); }
+/* The liveness dot: a filled circle in one of the four ADR 0023 states, never itself
+   carrying text — the label beside it is painted in the row's own `--muted`, which is
+   already one of the pairs the contrast gate checks. */
+.run-liveness { display: inline-flex; align-items: center; gap: var(--s1); }
+.run-dot { width: 8px; height: 8px; border-radius: var(--r-full); flex: none; background: var(--liveness-unknown); }
+.run-dot-running { background: var(--liveness-running); }
+.run-dot-idle { background: var(--liveness-idle); }
+.run-dot-gone { background: var(--liveness-gone); }
+.run-dot-unknown { background: var(--liveness-unknown); }
+.run-also { white-space: normal; }
+
+/* The actor page's totals strip: the same figures as a run row, laid out as one line above
+   the per-session rows rather than per-session — cost, tokens, tool calls, session count and
+   total time, each already summed over distinct sessions.
+   Card 97: unlike the card page's `RunBlock`, this never wears `.run-block` — no border,
+   fill or radius here. The actor sheet's own padding already insets this from the sheet's
+   edges, so a second boxed inset on top of that sat narrower than the sheet's content width
+   and clipped on the phone sheet. Full-bleed to that content width instead, with a hairline
+   above the totals line and another above each session row standing in for the box — the
+   same `--line` token `.run-row`'s own inter-row border already uses. */
+.actor-telemetry {
+  margin-block: var(--s2);
+  display: flex; flex-direction: column; gap: var(--s1);
+}
+.actor-totals {
+  display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3);
+  font-size: var(--t-sub); font-weight: var(--w-head); color: var(--text);
+  font-variant-numeric: var(--num);
+  border-top: 1px solid var(--line); padding-top: var(--s2);
+}
+/* Reinstates the divider `.run-row:first-of-type` strips for the boxed `RunBlock` idiom
+   (there, the box's own top edge reads as the separation) — here there is no box, so the
+   first row needs its hairline too, whether it follows the totals line or, with exactly one
+   session, stands alone. */
+.actor-telemetry .run-row:first-of-type { border-top: 1px solid var(--line); padding-top: var(--s1); }
+.actor-run-row { font-size: var(--t-cap); line-height: var(--lh-cap); }
+
+/* Phone width (~400px): a run row already wraps via `flex-wrap`, but the context bar's
+   fixed 64px track plus its label is the one piece wide enough to want its own line when
+   the rest of the row has already claimed the width above it. */
+@media (max-width: 420px) {
+  .run-row { row-gap: var(--s1); }
+  .run-context { flex-basis: 100%; }
+}
 
 .ask-box { background: var(--attention-bg); border: 1px solid var(--attention-line); border-radius: var(--radius); padding: var(--s3) var(--s4); display: flex; flex-direction: column; gap: var(--s2); }
 .ask-box .input { background: var(--bg-2); }

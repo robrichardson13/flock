@@ -8,5 +8,7 @@ export * from "./presence.ts";
 export * from "./batching.ts";
 export * from "./settled.ts";
 export * from "./tasks.ts";
+export type { SessionReading, HarnessSessionTelemetry, CardDuration, Liveness, TelemetrySource, FinalityCheck } from "./telemetry-types.ts";
+export { ENDED_SESSION_MAX_AGE_MS, isSessionFinal } from "./telemetry-types.ts";
 export { detectRuntime, normalizeRuntime } from "./runtime.ts";
 export { openDatabase, readStamp, schemaStamp, copyDatabase, resolveDbPath, findProjectDb, globalDbPath, DB_DIRNAME, DB_FILENAME, SCHEMA_VERSION, SchemaVersionError, SchemaBehindError, type OpenOptions } from "./db.ts";

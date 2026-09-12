@@ -363,6 +363,21 @@ describe("runtime", () => {
     expect(actor.harness).toBeUndefined();
     expect(actor.model).toBeUndefined();
     expect(actor.effort).toBeUndefined();
+    expect(actor.session).toBeUndefined();
+  });
+
+  test("session (ADR 0026) lands on the event and caches onto the actor row, and survives a session-less write", () => {
+    const { f, board } = fresh();
+    const scoutRun1: Actor = { name: "scout", kind: "agent", session: "claude-code:8ea8caf2-…" };
+    const c = f.createCard(scoutRun1, board.id, { title: "X" });
+    const created = f.events({ boardId: board.id }).find((e) => e.type === "card.created")!;
+    expect(created.session).toBe("claude-code:8ea8caf2-…");
+    expect(f.listActors().find((a) => a.name === "scout")!.session).toBe("claude-code:8ea8caf2-…");
+
+    // A later write with no session (an unlinked agent, or a caller that forgot the flag) does
+    // not erase the actor's last known session.
+    f.addComment({ name: "scout", kind: "agent" }, board.id, c.num, "no session on this one");
+    expect(f.listActors().find((a) => a.name === "scout")!.session).toBe("claude-code:8ea8caf2-…");
   });
 });
 
