@@ -3,6 +3,7 @@ export * from "./attachments.ts";
 export * from "./flock.ts";
 export * from "./markdown.ts";
 export * from "./notify.ts";
+export * from "./notify-levels.ts";
 export * from "./presence.ts";
 export * from "./batching.ts";
 export * from "./tasks.ts";
