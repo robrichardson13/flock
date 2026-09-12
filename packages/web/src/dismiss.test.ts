@@ -127,3 +127,15 @@ describe("installForegroundDismiss", () => {
     expect(f.count("visibilitychange") + f.count("pageshow") + f.count("focus")).toBe(0);
   });
 });
+
+describe("installForegroundDismiss names the signal that woke it", () => {
+  it("labels the mount, the visibility change, the pageshow and the focus differently", () => {
+    const seen: string[] = [];
+    const f = fakeTargets("visible");
+    installForegroundDismiss((reason) => seen.push(reason), f.targets, () => true);
+    f.fire("visibilitychange");
+    f.fire("pageshow");
+    f.fire("focus");
+    expect(seen).toEqual(["mount", "visible", "pageshow", "focus"]);
+  });
+});

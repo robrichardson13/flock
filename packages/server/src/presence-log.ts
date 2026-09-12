@@ -12,6 +12,11 @@ import type { NotifyLevel, NotifySettings, PresenceClientInfo } from "@flock/cor
 /** Longest user agent we will ever accept or store, before shortening. */
 export const MAX_USER_AGENT = 256;
 
+/** Longest dismissal label (a reason, a worker state, an ack) we will accept. */
+export const MAX_DISMISS_LABEL = 64;
+/** Longest dismissal error string we will accept. */
+export const MAX_DISMISS_ERR = 120;
+
 /** A short device label from a user agent, for the log. Never the raw string. */
 export function shortUserAgent(ua: string | undefined | null): string {
   if (!ua) return "?";
@@ -85,8 +90,33 @@ export function formatPresenceReport(l: PresenceLogLine): string {
     `fg=${flag(i.foregroundOnly)}`,
     `ua=${val(shortUserAgent(i.userAgent))}`,
     `client=${val(l.client.slice(0, 8))}`,
+    ...dismissParts(i),
   ];
   return parts.join(" ");
+}
+
+/**
+ * The notification-dismissal read-out (card 70), appended to the presence line only once the
+ * client has swept at least once. `sweep=-` on a client that has never swept is the whole point:
+ * it says the resume produced no sweep, which no other line in the log can say.
+ *
+ * `seen`/`closed` are the page's numbers, `wseen`/`wclosed` the worker's own; the pair being
+ * `0`/`-1` while the tray plainly holds a notification is the WebKit enumeration failure.
+ */
+export function dismissParts(i: PresenceClientInfo): string[] {
+  if (i.sweepCount === undefined && i.sweepAgeMs === undefined) return ["sweep=-"];
+  const n = (v: number | undefined): string => (v === undefined ? "-" : String(v));
+  return [
+    `sweep=${shortDuration(i.sweepAgeMs)}/${val(i.sweepReason ?? "-")}#${n(i.sweepCount)}`,
+    `sw=${val(i.swState ?? "-")}`,
+    `seen=${n(i.notifsSeen)}`,
+    `closed=${n(i.notifsClosed)}`,
+    `ack=${val(i.workerAck ?? "-")}`,
+    `wseen=${n(i.workerSeen)}`,
+    `wclosed=${n(i.workerClosed)}`,
+    `act=${n(i.activateSeen)}/${n(i.activateClosed)}`,
+    ...(i.dismissErr ? [`derr=${val(i.dismissErr)}`] : []),
+  ];
 }
 
 export interface PushDecisionLine {
@@ -170,5 +200,28 @@ export function normalizeClientInfo(raw: unknown, userAgent: string | undefined)
   }
   if (typeof o.foregroundOnly === "boolean") info.foregroundOnly = o.foregroundOnly;
   if (userAgent) info.userAgent = userAgent.slice(0, MAX_USER_AGENT);
+
+  // The dismissal read-out (card 70). Every field is optional, clamped, and never read by any
+  // decision — a hostile client can make the log wrong about its own phone and nothing else.
+  const int = (v: unknown, max: number): number | undefined =>
+    typeof v === "number" && Number.isFinite(v) ? Math.max(-1, Math.min(Math.round(v), max)) : undefined;
+  const short = (v: unknown, max: number): string | undefined =>
+    typeof v === "string" && v.length > 0 ? v.slice(0, max) : undefined;
+  info.sweepAgeMs = int(o.sweepAgeMs, 24 * 60 * 60 * 1000);
+  info.sweepReason = short(o.sweepReason, MAX_DISMISS_LABEL);
+  info.sweepCount = int(o.sweepCount, 1_000_000);
+  info.swState = short(o.swState, MAX_DISMISS_LABEL);
+  info.notifsSeen = int(o.notifsSeen, 10_000);
+  info.notifsClosed = int(o.notifsClosed, 10_000);
+  info.workerAck = short(o.workerAck, MAX_DISMISS_LABEL);
+  info.workerSeen = int(o.workerSeen, 10_000);
+  info.workerClosed = int(o.workerClosed, 10_000);
+  info.activateSeen = int(o.activateSeen, 10_000);
+  info.activateClosed = int(o.activateClosed, 10_000);
+  info.dismissErr = short(o.dismissErr, MAX_DISMISS_ERR);
+  for (const k of Object.keys(info) as (keyof PresenceClientInfo)[]) {
+    if (info[k] === undefined) delete info[k];
+  }
+
   return Object.keys(info).length > 0 ? info : undefined;
 }

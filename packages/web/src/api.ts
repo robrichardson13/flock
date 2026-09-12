@@ -149,6 +149,19 @@ export interface PresenceReportInfo {
   focused: boolean;
   lastInputAgeMs: number;
   foregroundOnly: boolean;
+  /** The dismissal read-out (card 70), from `dismissLog.ts`. Absent before the first sweep. */
+  sweepAgeMs?: number;
+  sweepReason?: string;
+  sweepCount?: number;
+  swState?: string;
+  notifsSeen?: number;
+  notifsClosed?: number;
+  workerAck?: string;
+  workerSeen?: number;
+  workerClosed?: number;
+  activateSeen?: number;
+  activateClosed?: number;
+  dismissErr?: string;
 }
 
 export const api = {

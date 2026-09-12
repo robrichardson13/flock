@@ -63,7 +63,7 @@ describe("formatPresenceReport", () => {
     });
     expect(line).toBe(
       "[presence] 2026-09-12T17:00:00.000Z actor=robrichardson kind=human board=flock-2 looking=true " +
-        "mode=standalone build=1365363-m0abc visible=true focused=false input=12.0s fg=true ua=iPhone/18.7/Safari client=9f1c2d3e",
+        "mode=standalone build=1365363-m0abc visible=true focused=false input=12.0s fg=true ua=iPhone/18.7/Safari client=9f1c2d3e sweep=-",
     );
   });
 
@@ -294,5 +294,66 @@ describe("GET /api/presence", () => {
     await beat(false);
     const dump = await (await app.request("/api/presence", {}, loopback)).json();
     expect(dump.clients).toHaveLength(0);
+  });
+});
+
+describe("the dismissal read-out on a presence line (card 70)", () => {
+  const at = Date.parse("2026-09-12T17:00:00.000Z");
+  const line = (info: Record<string, unknown>) =>
+    formatPresenceReport({ at, client: "c1", actor: "rob", actorKind: "human", board: "flock", resolved: true, looking: true, info });
+
+  test("a client that has never swept says so, which no other field can", () => {
+    expect(line({ mode: "standalone" })).toContain(" sweep=-");
+  });
+
+  test("the page seeing none while the worker closed some is legible at a glance", () => {
+    const l = line({
+      sweepAgeMs: 1_200,
+      sweepReason: "pageshow",
+      sweepCount: 3,
+      swState: "sw.js@activated,ctl1,wait0",
+      notifsSeen: 0,
+      notifsClosed: 0,
+      workerAck: "yes",
+      workerSeen: 2,
+      workerClosed: 2,
+      activateSeen: 1,
+      activateClosed: 1,
+    });
+    expect(l).toContain("sweep=1.2s/pageshow#3");
+    expect(l).toContain("sw=sw.js@activated,ctl1,wait0");
+    expect(l).toContain("seen=0 closed=0");
+    expect(l).toContain("ack=yes wseen=2 wclosed=2");
+    expect(l).toContain("act=1/1");
+  });
+
+  test("an error is appended only when there is one, and the line stays one line", () => {
+    expect(line({ sweepCount: 1 })).not.toContain("derr=");
+    const l = line({ sweepCount: 1, dismissErr: "TypeError: boom" });
+    expect(l).toContain('derr="TypeError: boom"');
+    expect(l.split("\n")).toHaveLength(1);
+  });
+});
+
+describe("normalizeClientInfo clamps the dismissal read-out", () => {
+  test("keeps sane values and drops the rest", () => {
+    const info = normalizeClientInfo(
+      { sweepAgeMs: 1_500.4, sweepReason: "focus", sweepCount: 2, notifsSeen: 0, workerAck: "yes", dismissErr: "x".repeat(500), swState: null },
+      undefined,
+    );
+    expect(info?.sweepAgeMs).toBe(1_500);
+    expect(info?.sweepReason).toBe("focus");
+    expect(info?.notifsSeen).toBe(0);
+    expect(info?.dismissErr?.length).toBe(120);
+    expect(info?.swState).toBeUndefined();
+  });
+
+  test("keeps -1 (the client could not even ask) but nothing below it", () => {
+    expect(normalizeClientInfo({ notifsSeen: -1 }, undefined)?.notifsSeen).toBe(-1);
+    expect(normalizeClientInfo({ notifsSeen: -99 }, undefined)?.notifsSeen).toBe(-1);
+  });
+
+  test("a beat with no diagnostics at all is still undefined, not an empty object", () => {
+    expect(normalizeClientInfo({}, undefined)).toBeUndefined();
   });
 });

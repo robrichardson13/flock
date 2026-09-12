@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { dismissRecorder } from "./dismissLog.ts";
 import { askWorkerToCloseAll, closeBoardNotifications, CLOSE_ALL_MESSAGE, dismissAllNotifications, pushState, urlBase64ToUint8Array, withServerKey, type PushEnv, type PushState } from "./push.ts";
 
 const base = (): PushEnv => ({
@@ -113,7 +114,8 @@ describe("withServerKey", () => {
 });
 
 type FakeNotification = { tag: string; close: () => void };
-type FakeRegistration = { getNotifications: () => Promise<FakeNotification[]>; active?: { postMessage: (m: unknown) => void } | null };
+type FakeWorker = { postMessage: (m: unknown, transfer?: unknown) => void; scriptURL?: string; state?: string };
+type FakeRegistration = { getNotifications: () => Promise<FakeNotification[]>; active?: FakeWorker | null; waiting?: unknown };
 
 /** A minimal fake of what the close/sweep helpers touch: `navigator.serviceWorker` (`ready`,
  *  `getRegistration`, `controller`), `Notification` (only checked for existence) and a
@@ -121,7 +123,7 @@ type FakeRegistration = { getNotifications: () => Promise<FakeNotification[]>; a
  *  always restored, even on failure. `ready` rejects when there is no registration so the
  *  fallback path is taken immediately rather than waiting out the real timeout. */
 function withFakeNotificationEnv<T>(
-  opts: { registration: FakeRegistration | null; controller?: { postMessage: (m: unknown) => void } | null },
+  opts: { registration: FakeRegistration | null; controller?: FakeWorker | null },
   fn: () => Promise<T>,
 ): Promise<T> {
   const savedNav = (globalThis as { navigator?: unknown }).navigator;
@@ -245,5 +247,59 @@ describe("dismissAllNotifications", () => {
   it("resolves without throwing when both routes fail", async () => {
     const reg: FakeRegistration = { getNotifications: async () => { throw new Error("boom"); }, active: null };
     await withFakeNotificationEnv({ registration: reg }, () => dismissAllNotifications());
+  });
+});
+
+describe("the sweep records what it saw (card 70)", () => {
+  it("fills the read-out with the page's counts and the worker state", async () => {
+    const reg: FakeRegistration = {
+      getNotifications: async () => [{ tag: "#/b/flock/channel", close: () => {} }],
+      active: { postMessage: () => {}, scriptURL: "https://x.test/sw.js", state: "activated" },
+      waiting: null,
+    };
+    await withFakeNotificationEnv({ registration: reg, controller: { postMessage: () => {} } }, () =>
+      dismissAllNotifications("pageshow"),
+    );
+    const r = dismissRecorder.read();
+    expect(r.sweepReason).toBe("pageshow");
+    expect(r.sweepCount).toBeGreaterThan(0);
+    expect(r.notifsSeen).toBe(1);
+    expect(r.notifsClosed).toBe(1);
+    expect(r.swState).toBe("sw.js@activated,ctl1,wait0");
+    // The message went out; the fake worker never answers, so the ack is still outstanding.
+    expect(r.workerAck).toBe("pending");
+  });
+
+  it("records no-worker rather than a silent nothing when there is no worker to ask", async () => {
+    await withFakeNotificationEnv({ registration: null }, () => dismissAllNotifications("mount"));
+    const r = dismissRecorder.read();
+    expect(r.workerAck).toBe("no-worker");
+    expect(r.notifsSeen).toBe(-1);
+    expect(r.swState).toBe("none");
+  });
+
+  it("takes the worker's own counts off the reply port", async () => {
+    let delivered: { data: unknown; ports: readonly MessagePort[] } | null = null;
+    const reg: FakeRegistration = {
+      getNotifications: async () => [],
+      active: {
+        postMessage: (m: unknown, transfer?: unknown) => {
+          delivered = { data: m, ports: (transfer as MessagePort[]) ?? [] };
+        },
+      },
+    };
+    await withFakeNotificationEnv({ registration: reg }, () => dismissAllNotifications("visible"));
+    // Answer the way sw.js does.
+    const port = delivered!.ports[0]!;
+    port.postMessage({ type: "flock:close-all:done", seen: 2, closed: 2, activateSeen: 1, activateClosed: 0 });
+    await new Promise((r) => setTimeout(r, 10));
+    const r = dismissRecorder.read();
+    expect(r.workerAck).toBe("yes");
+    expect(r.workerSeen).toBe(2);
+    expect(r.workerClosed).toBe(2);
+    expect(r.activateSeen).toBe(1);
+    expect(r.activateClosed).toBe(0);
+    // The page saw nothing while the worker saw two: exactly the WebKit split this exists to show.
+    expect(r.notifsSeen).toBe(0);
   });
 });
