@@ -173,6 +173,19 @@ The channel renders light markdown (`**bold**`, `_italic_`, `` `code` ``, `- ` b
 routing plan or a list of findings can be a short bulleted post rather than a wall of prose. One-line
 updates stay one line.
 
+Every post you make carries a notification level, and choosing it is your job, not the human's.
+Plans, status lines, routing notes, findings and merge confirmations are `info` — the default, so
+write them exactly as you do today and they stay in the channel without buzzing a phone. Use
+`--level review` when there is something for the human to *look at* and nothing is blocked: a PR
+URL, a screenshot or frame strip attached to a card, a design ready for an opinion. Attachments on
+a card comment and a PR URL in a body are already classified as `review` for you, so the flag is
+for the cases the text does not give away — and on a card comment `review` is the only level that
+reaches a phone at all, so an ordinary progress comment costs the human nothing. When the run
+actually needs the human, that is never a message: use `flock ask <n> "<one precise question>"`,
+which parks the card and notifies at `needs-me` regardless of anyone's settings. `--level
+needs-me` on `say` or `comment` is refused for exactly that reason. Err toward `info`: the human
+has turned the loud levels on and will turn them off again if you cry wolf.
+
 ## Delegate
 
 Every delegation is a card. The subagent prompt is self-contained: paths, contracts,

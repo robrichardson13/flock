@@ -34,6 +34,37 @@ export interface PushSubscriptionSummary {
   lastUsedAt: string | null;
 }
 
+/**
+ * ADR 0024: one (actor, board) row's fields as the server reads/writes them. `null` means
+ * "inherit" — from the global row, or, on the global row itself, from the built-in default.
+ * Kept as a plain duplicate of core's `NotifySettingsFields` rather than an import: the web
+ * package only ever sees the wire shape, the same way `PushSubscriptionSummary` duplicates
+ * `PushSubscriptionRecord` instead of importing it.
+ */
+export interface NotifySettingsFields {
+  needsMe: boolean | null;
+  review: boolean | null;
+  info: boolean | null;
+  settled: boolean | null;
+  settledAfterMs: number | null;
+}
+
+/** Resolved, always-concrete settings for one (actor, board) pair — every inherit applied. */
+export interface NotifySettings {
+  needsMe: boolean;
+  review: boolean;
+  info: boolean;
+  settled: boolean;
+  settledAfterMs: number;
+}
+
+/** `GET/PUT /api/notify/settings`'s shape. */
+export interface NotifySettingsResponse {
+  boardId: string;
+  raw: NotifySettingsFields | null;
+  resolved: NotifySettings;
+}
+
 /** The actors roll-up: latest-seen name/kind, with runtime cached from that actor's last write. */
 export interface ActorInfo {
   name: string;
@@ -190,6 +221,11 @@ export const api = {
     req<PushSubscriptionSummary>("POST", "/push/subscriptions", input),
   pushUnsubscribe: (endpoint: string) => req<void>("DELETE", "/push/subscriptions", { endpoint }),
   pushTest: () => req<{ sent: number; pruned: number }>("POST", "/push/test"),
+  /** ADR 0024. Omit `board` for the actor's global row; pass a board slug for its override. */
+  notifySettings: (board?: string) =>
+    req<NotifySettingsResponse>("GET", `/notify/settings${board ? `?board=${encodeURIComponent(board)}` : ""}`),
+  putNotifySettings: (patch: Partial<NotifySettingsFields>, board?: string) =>
+    req<NotifySettingsResponse>("PUT", `/notify/settings${board ? `?board=${encodeURIComponent(board)}` : ""}`, patch),
   /** `POST /api/presence`, §3.3: fire from `usePresence`. `keepalive` lets the final
    * `looking: false` beat survive the page going away (blur/hide never needs it; pagehide does). */
   presence: (body: { client: string; board: string | null; looking: boolean; info?: PresenceReportInfo }, opts?: { keepalive?: boolean }) =>

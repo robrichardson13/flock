@@ -123,7 +123,7 @@ describe("PushPump.deliver", () => {
     const { send, calls } = fakeSend();
     const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
     try {
-      flock.say(ada, board.id, "hello everyone");
+      flock.say(ada, board.id, "hello everyone", { level: "review" });
       const event = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
       const result = await pump.deliver(event);
       expect(result).toEqual({ sent: 1, pruned: 0 });
@@ -146,7 +146,7 @@ describe("PushPump.deliver", () => {
     });
     const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
     try {
-      flock.say(ada, board.id, "ping");
+      flock.say(ada, board.id, "ping", { level: "review" });
       const event = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
       const result = await pump.deliver(event);
       expect(result).toEqual({ sent: 1, pruned: 3 });
@@ -164,7 +164,7 @@ describe("PushPump.deliver", () => {
     const { send } = fakeSend({ "https://push.example/rate-limited": 429, "https://push.example/too-big": 413 });
     const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
     try {
-      flock.say(ada, board.id, "ping");
+      flock.say(ada, board.id, "ping", { level: "review" });
       const event = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
       const result = await pump.deliver(event);
       expect(result).toEqual({ sent: 0, pruned: 0 });
@@ -182,7 +182,7 @@ describe("PushPump.deliver", () => {
     };
     const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
     try {
-      flock.say(ada, board.id, "ping");
+      flock.say(ada, board.id, "ping", { level: "review" });
       const event = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
       const result = await pump.deliver(event);
       expect(result).toEqual({ sent: 0, pruned: 0 });
@@ -198,7 +198,7 @@ describe("PushPump.deliver", () => {
     const { send } = fakeSend();
     const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
     try {
-      flock.say(ada, board.id, "ping");
+      flock.say(ada, board.id, "ping", { level: "review" });
       const event = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
       await pump.deliver(event);
       const sub = flock.pushSubscriptions({ actor: "scout" })[0]!;
@@ -214,7 +214,7 @@ describe("PushPump.deliver", () => {
     const { send, calls } = fakeSend();
     const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
     try {
-      flock.say(ada, board.id, "x".repeat(2000));
+      flock.say(ada, board.id, "x".repeat(2000), { level: "review" });
       const event = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
       await pump.deliver(event);
       const payload = calls[0]!.payload;
@@ -270,11 +270,11 @@ describe("PushPump.deliver", () => {
   test("the pump starts at lastSeq() and does not replay events written before it started", async () => {
     const { flock, board } = fixture();
     flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
-    flock.say(ada, board.id, "before the pump started");
+    flock.say(ada, board.id, "before the pump started", { level: "review" });
     const { send, calls } = fakeSend();
     const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 20 });
     try {
-      flock.say(ada, board.id, "after the pump started");
+      flock.say(ada, board.id, "after the pump started", { level: "review" });
       await Bun.sleep(200);
       expect(calls.length).toBe(1);
     } finally {
@@ -285,7 +285,7 @@ describe("PushPump.deliver", () => {
   test("a board deleted between the write and the tail is skipped, not thrown", async () => {
     const { flock, board } = fixture();
     flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
-    flock.say(ada, board.id, "hello");
+    flock.say(ada, board.id, "hello", { level: "review" });
     const event = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
     flock.deleteBoard(ada, board.id);
     const { send } = fakeSend();
@@ -436,16 +436,16 @@ describe("PushPump batching", () => {
     let t = 1_000_000;
     const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000, now: () => t });
     try {
-      flock.say(ada, board.id, "one");
+      flock.say(ada, board.id, "one", { level: "review" });
       await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
       expect(calls.length).toBe(1); // leading edge, dispatched at once
 
       t += 1_000;
-      flock.say(ada, board.id, "two");
+      flock.say(ada, board.id, "two", { level: "review" });
       await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
 
       t += 1_000;
-      flock.say(ada, board.id, "three");
+      flock.say(ada, board.id, "three", { level: "review" });
       await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
 
       // "two" and "three" fold inside the window: still exactly one send.
@@ -475,10 +475,10 @@ describe("PushPump batching", () => {
     let t = 1_000_000;
     const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000, now: () => t });
 
-    flock.say(ada, board.id, "one");
+    flock.say(ada, board.id, "one", { level: "review" });
     await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
     t += 1_000;
-    flock.say(ada, board.id, "two");
+    flock.say(ada, board.id, "two", { level: "review" });
     await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
     expect(calls.length).toBe(1);
 
@@ -502,7 +502,7 @@ describe("PushPump presence", () => {
     presence.report({ client: "c1", actor: "ada", boardId: board.id, looking: true }, t);
     const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000, now: () => t, presence });
     try {
-      flock.say(scout, board.id, "hi everyone");
+      flock.say(scout, board.id, "hi everyone", { level: "review" });
       const message = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
       await pump.deliver(message);
       // ada is looking at this board: suppressed, never asked. designer is not: still notified.
@@ -522,6 +522,182 @@ describe("PushPump presence", () => {
   });
 });
 
+describe("PushPump notify-level filtering (ADR 0024)", () => {
+  test("info-level chatter (default off) does not deliver until the recipient turns it on", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
+    try {
+      flock.say(ada, board.id, "starting card 41"); // no --level, no PR url: info by default
+      const event = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
+      expect((await pump.deliver(event)).sent).toBe(0);
+      expect(calls.length).toBe(0);
+
+      flock.putNotifySettings(scout, board.id, { info: true });
+      flock.say(ada, board.id, "another status line", { level: "info" });
+      const second = flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!;
+      expect((await pump.deliver(second)).sent).toBe(1);
+    } finally {
+      pump.stop();
+    }
+  });
+
+  // d15: a card comment is a push trigger, but only at `review`.
+  test("a card comment with an image attachment delivers as review under the default settings", async () => {
+    const { flock, board } = fixture();
+    const card = flock.createCard(ada, board.id, { title: "Fix the bell" });
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
+    try {
+      const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const att = flock.attach(ada, board.id, { mime: "image/png", bytes: png, name: "phone.png" });
+      flock.addComment(ada, board.id, String(card.num), "phone and desktop", undefined, { attachments: [att.id] });
+      const event = flock.events({ boardId: board.id }).find((e) => e.type === "comment.posted")!;
+      expect((await pump.deliver(event)).sent).toBe(1);
+      const payload = JSON.parse(calls[0]!.payload);
+      expect(payload.title).toBe("Fix the bell");
+      expect(payload.body).toContain("📎 1 image");
+      expect(payload.tag).toBe(`#/b/${board.slug}/c/${card.num}`);
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("an explicit --level review on a comment delivers; a plain comment never does, even with everything on", async () => {
+    const { flock, board } = fixture();
+    const card = flock.createCard(ada, board.id, { title: "Fix the bell" });
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    flock.putNotifySettings(scout, board.id, { info: true }); // "Everything else" on
+    const { send, calls } = fakeSend();
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
+    try {
+      flock.addComment(ada, board.id, String(card.num), "picking this up", undefined, {});
+      const chatter = flock.events({ boardId: board.id }).find((e) => e.type === "comment.posted")!;
+      expect((await pump.deliver(chatter)).sent).toBe(0);
+      expect(calls.length).toBe(0);
+
+      flock.addComment(ada, board.id, String(card.num), "ready for a look", undefined, { level: "review" });
+      const review = flock.events({ boardId: board.id }).findLast((e) => e.type === "comment.posted")!;
+      expect((await pump.deliver(review)).sent).toBe(1);
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("turning review off silences a screenshot comment too", async () => {
+    const { flock, board } = fixture();
+    const card = flock.createCard(ada, board.id, { title: "Fix the bell" });
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    flock.putNotifySettings(scout, board.id, { review: false });
+    const { send, calls } = fakeSend();
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
+    try {
+      flock.addComment(ada, board.id, String(card.num), "have a look", undefined, { level: "review" });
+      const event = flock.events({ boardId: board.id }).find((e) => e.type === "comment.posted")!;
+      expect((await pump.deliver(event)).sent).toBe(0);
+      expect(calls.length).toBe(0);
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("a message.posted body with a GitHub PR URL is 'review' and delivers under the default settings", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
+    try {
+      flock.say(ada, board.id, "Land: https://github.com/robrichardson13/flock/pull/78");
+      const event = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
+      expect((await pump.deliver(event)).sent).toBe(1);
+      expect(calls.length).toBe(1);
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("turning review off blocks a review-level message but not an ask", async () => {
+    const { flock, board } = fixture();
+    const card = flock.createCard(ada, board.id, { title: "Fix the thing" });
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    flock.putNotifySettings(scout, board.id, { review: false });
+    const { send, calls } = fakeSend();
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
+    try {
+      flock.say(ada, board.id, "screenshots are up", { level: "review" });
+      const reviewEvent = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
+      expect((await pump.deliver(reviewEvent)).sent).toBe(0);
+
+      flock.askHuman(ada, board.id, card.num, "Which way?");
+      const ask = flock.events({ boardId: board.id }).find((e) => e.type === "card.asked")!;
+      expect((await pump.deliver(ask)).sent).toBe(1);
+      expect(calls.length).toBe(1);
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("turning needs-me off blocks even an ask, which no other toggle can do", async () => {
+    const { flock, board } = fixture();
+    const card = flock.createCard(ada, board.id, { title: "Fix the thing" });
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    flock.putNotifySettings(scout, board.id, { needsMe: false });
+    const { send } = fakeSend();
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
+    try {
+      flock.askHuman(ada, board.id, card.num, "Which way?");
+      const ask = flock.events({ boardId: board.id }).find((e) => e.type === "card.asked")!;
+      expect((await pump.deliver(ask)).sent).toBe(0);
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("a per-board override wins over the actor's global setting for that board only", async () => {
+    const { flock, board } = fixture();
+    const other = flock.createBoard(ada, { title: "Other board" });
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout-a", keys: { p256dh: "p", auth: "a" }, boardId: board.id });
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout-b", keys: { p256dh: "p", auth: "a" }, boardId: other.id });
+    flock.putNotifySettings(scout, "", { review: false }); // global: off
+    flock.putNotifySettings(scout, board.id, { review: true }); // this board: on, overriding global
+    const { send, calls } = fakeSend();
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
+    try {
+      flock.say(ada, board.id, "screenshots on this one", { level: "review" });
+      const onOverride = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
+      expect((await pump.deliver(onOverride)).sent).toBe(1);
+
+      flock.say(ada, other.id, "screenshots on the other one", { level: "review" });
+      const onGlobal = flock.events({ boardId: other.id }).find((e) => e.type === "message.posted")!;
+      expect((await pump.deliver(onGlobal)).sent).toBe(0);
+    } finally {
+      pump.stop();
+      expect(calls.map((c) => c.endpoint)).toEqual(["https://push.example/scout-a"]);
+    }
+  });
+
+  test("a muted recipient never opens a batch key: a later subscriber-visible message still starts its own count at 1", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    let t = 1_000_000;
+    const { send, calls } = fakeSend();
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000, now: () => t });
+    try {
+      flock.say(ada, board.id, "quiet chatter one"); // info, off by default: filtered before the batcher
+      await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
+      expect(calls.length).toBe(0);
+
+      flock.say(ada, board.id, "now something to review", { level: "review" });
+      await pump.deliver(flock.events({ boardId: board.id }).findLast((e) => e.type === "message.posted")!);
+      expect(calls.length).toBe(1); // leading edge of a fresh key, not folded with the filtered post
+    } finally {
+      pump.stop();
+    }
+  });
+});
+
 describe("PushPump tick", () => {
   test("the interval tick flushes a due batch on its own, with no new event to trigger it", async () => {
     const { flock, board } = fixture();
@@ -532,11 +708,11 @@ describe("PushPump tick", () => {
     // has closed and flush without any further event arriving.
     const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 20, now: () => t });
     try {
-      flock.say(ada, board.id, "one");
+      flock.say(ada, board.id, "one", { level: "review" });
       await Bun.sleep(60);
       expect(calls.length).toBe(1); // leading edge, picked up by the tick itself
 
-      flock.say(ada, board.id, "two");
+      flock.say(ada, board.id, "two", { level: "review" });
       await Bun.sleep(60);
       expect(calls.length).toBe(1); // folded, window still open
 
@@ -671,7 +847,7 @@ describe("POST /api/presence end to end through the pump", () => {
     });
     expect(presRes.status).toBe(204);
 
-    flock.say(scout, board.id, "hi ada");
+    flock.say(scout, board.id, "hi ada", { level: "review" });
     await Bun.sleep(60); // let the pump's own tick pick it up
     expect(calls.length).toBe(0); // suppressed: ada is looking
 
@@ -683,7 +859,7 @@ describe("POST /api/presence end to end through the pump", () => {
     });
     expect(stopRes.status).toBe(204);
 
-    flock.say(scout, board.id, "still there?");
+    flock.say(scout, board.id, "still there?", { level: "review" });
     await Bun.sleep(60);
     expect(calls.length).toBe(1);
     expect(calls[0]!.endpoint).toBe("https://push.example/ada");
@@ -716,7 +892,7 @@ describe("a foregrounded phone is never pushed channel chatter", () => {
   });
 
   async function sayAndSettle(app: ReturnType<typeof createApp>, flock: Flock, boardId: string, body: string) {
-    flock.say(scout, boardId, body);
+    flock.say(scout, boardId, body, { level: "review" });
     await Bun.sleep(60);
     return app;
   }
@@ -860,7 +1036,7 @@ describe("PushPump delivery lease across processes on one database", () => {
     const pumpA = startPushPump({ flock: a, keys: KEYS, send: first.send, intervalMs: 20 });
     const pumpB = startPushPump({ flock: b, keys: KEYS, send: second.send, intervalMs: 20 });
     try {
-      a.say(ada, board.id, "hello everyone");
+      a.say(ada, board.id, "hello everyone", { level: "review" });
       await Bun.sleep(150);
       expect(first.calls.length + second.calls.length).toBe(1);
       expect([pumpA.leading(), pumpB.leading()].filter(Boolean).length).toBe(1);
@@ -886,7 +1062,7 @@ describe("PushPump delivery lease across processes on one database", () => {
     const pumpB = startPushPump({ flock: b, keys: KEYS, send: second.send, intervalMs: 20 });
     try {
       await Bun.sleep(60);
-      a.say(ada, board.id, "while A leads");
+      a.say(ada, board.id, "while A leads", { level: "review" });
       await Bun.sleep(120);
       expect(first.calls.length).toBe(1);
       expect(second.calls.length).toBe(0);
@@ -896,7 +1072,7 @@ describe("PushPump delivery lease across processes on one database", () => {
       expect(pumpB.leading()).toBe(true);
       expect(second.calls.length).toBe(0); // no replay of the event A already delivered
 
-      b.say(ada, board.id, "while B leads");
+      b.say(ada, board.id, "while B leads", { level: "review" });
       await Bun.sleep(120);
       expect(second.calls.length).toBe(1);
     } finally {
@@ -942,18 +1118,18 @@ describe("a phone sitting on Home is not buzzed for a board (card 54)", () => {
     // The app is open on Home: `board: null`, looking. This is what the phone actually reported.
     expect((await beat(app, { client: "phone", board: null, looking: true })).status).toBe(204);
 
-    flock.say(scout, board.id, "a line on the board she is not scoped to");
+    flock.say(scout, board.id, "a line on the board she is not scoped to", { level: "review" });
     await Bun.sleep(60);
     expect(calls.length).toBe(0);
 
     // Every board, not just the one she last visited.
-    flock.say(scout, other.id, "a line on a different board entirely");
+    flock.say(scout, other.id, "a line on a different board entirely", { level: "review" });
     await Bun.sleep(60);
     expect(calls.length).toBe(0);
 
     // She puts the phone down: the leave beat lands and the next message reaches her.
     expect((await beat(app, { client: "phone", board: null, looking: false })).status).toBe(204);
-    flock.say(scout, board.id, "and now she should hear about it");
+    flock.say(scout, board.id, "and now she should hear about it", { level: "review" });
     await Bun.sleep(60);
     expect(calls.length).toBe(1);
     expect(calls[0]!.endpoint).toBe("https://push.example/ada-phone");
@@ -970,7 +1146,7 @@ describe("a phone sitting on Home is not buzzed for a board (card 54)", () => {
     // An unknown slug must not be filed as Home, or a forgotten tab would silence every board.
     expect((await beat(app, { client: "stale", board: "a-board-that-was-deleted", looking: true })).status).toBe(204);
 
-    flock.say(scout, board.id, "she is not actually looking at anything");
+    flock.say(scout, board.id, "she is not actually looking at anything", { level: "review" });
     await Bun.sleep(60);
     expect(calls.length).toBe(1);
   });
@@ -990,5 +1166,137 @@ describe("a phone sitting on Home is not buzzed for a board (card 54)", () => {
     await Bun.sleep(60);
     // The whole point of the Home rule is that it silences chatter, not the things you must answer.
     expect(calls.length).toBe(1);
+  });
+});
+
+describe("PushPump settled check-in (ADR 0024, card 79)", () => {
+  test("arms on another actor's event, fires once after the threshold, tagged for the cards tab", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+    flock.putNotifySettings(ada, board.id, { settled: true, settledAfterMs: 5 * 60_000 });
+    const { send, calls } = fakeSend();
+    let t = 1_000_000;
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 20, now: () => t });
+    try {
+      // info is off by default, so this arms the settled timer without itself buzzing anyone.
+      flock.say(scout, board.id, "working on it", { level: "info" });
+      await Bun.sleep(40);
+      expect(calls.length).toBe(0);
+
+      t += 5 * 60_000; // the quiet period elapses
+      await Bun.sleep(60); // the pump's own tick notices, no new event needed
+      expect(calls.length).toBe(1);
+      const payload = JSON.parse(calls[0]!.payload);
+      expect(payload.title).toBe(`${board.title} has settled`);
+      expect(payload.url).toBe(`#/b/${board.slug}/cards`);
+      expect(payload.tag).toBe(`#/b/${board.slug}/cards`);
+      expect(payload.body).toContain("scout");
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("does not fire again without a fresh event, and does not fire on the author's own post", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+    flock.putNotifySettings(ada, board.id, { settled: true, settledAfterMs: 5 * 60_000 });
+    const { send, calls } = fakeSend();
+    let t = 1_000_000;
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 20, now: () => t });
+    try {
+      flock.say(scout, board.id, "working on it", { level: "info" });
+      await Bun.sleep(40);
+
+      t += 5 * 60_000;
+      await Bun.sleep(60);
+      expect(calls.length).toBe(1); // first fire
+
+      t += 5 * 60_000; // stays quiet, no new activity
+      await Bun.sleep(60);
+      expect(calls.length).toBe(1); // no second fire off the same quiet period
+
+      // ada's own post never arms ada's own settled timer.
+      flock.say(ada, board.id, "still here", { level: "info" });
+      t += 5 * 60_000;
+      await Bun.sleep(60);
+      expect(calls.length).toBe(1);
+
+      // A fresh event from someone else re-arms it, and it fires again after the next quiet period.
+      flock.say(scout, board.id, "another update", { level: "info" });
+      await Bun.sleep(40);
+      t += 5 * 60_000;
+      await Bun.sleep(60);
+      expect(calls.length).toBe(2);
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("does not fire while the recipient is looking at the board", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+    flock.putNotifySettings(ada, board.id, { settled: true, settledAfterMs: 5 * 60_000 });
+    const { send, calls } = fakeSend();
+    const presence = new Presence();
+    let t = 1_000_000;
+    presence.report({ client: "c1", actor: "ada", boardId: board.id, looking: true }, t);
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 20, now: () => t, presence });
+    try {
+      flock.say(scout, board.id, "working on it", { level: "info" });
+      await Bun.sleep(40);
+
+      t += 5 * 60_000;
+      presence.report({ client: "c1", actor: "ada", boardId: board.id, looking: true }, t); // still looking
+      await Bun.sleep(60);
+      expect(calls.length).toBe(0); // suppressed while looking, deferred rather than dropped
+
+      presence.report({ client: "c1", actor: "ada", boardId: board.id, looking: false }, t);
+      await Bun.sleep(60);
+      expect(calls.length).toBe(1); // fires as soon as looking stops, no new event needed
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("a follower without the delivery lease never fires a settled check-in", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "flock-settled-lease-"));
+    const path = join(dir, "flock.db");
+    try {
+      const a = new Flock(path);
+      const b = new Flock(path);
+      const board = a.createBoard(ada, { title: "Flock v1" });
+      a.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+      a.putNotifySettings(ada, board.id, { settled: true, settledAfterMs: 5 * 60_000 });
+      const first = fakeSend();
+      const second = fakeSend();
+      let t = 1_000_000;
+      // The max lease TTL is 60s (in the same fake-clock units as `t`). Jump `t` in steps smaller
+      // than that, with a real sleep between each so A's own tick gets to renew before the next
+      // step — a single 5-minute leap would make B's claim see A's lease as expired, which is a
+      // race artefact of sharing one fake clock across two "processes", not a real takeover.
+      const leaseTtlMs = 60_000;
+      const pumpA = startPushPump({ flock: a, keys: KEYS, send: first.send, intervalMs: 20, now: () => t, leaseTtlMs });
+      await Bun.sleep(60); // A claims the lease before B ever starts
+      const pumpB = startPushPump({ flock: b, keys: KEYS, send: second.send, intervalMs: 20, now: () => t, leaseTtlMs });
+      try {
+        a.say(scout, board.id, "working on it", { level: "info" });
+        await Bun.sleep(60);
+
+        for (let i = 0; i < 6; i++) {
+          t += 50_000; // 6 * 50s = 5 minutes, each step under the 60s lease TTL
+          await Bun.sleep(30); // let A's tick renew before the next step
+        }
+        await Bun.sleep(60);
+        expect(first.calls.length).toBe(1); // A, the leaseholder, runs the settled tick and fires
+        expect(second.calls.length).toBe(0); // B never claims the lease, so its tick never runs it
+      } finally {
+        pumpA.stop();
+        pumpB.stop();
+        a.close();
+        b.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

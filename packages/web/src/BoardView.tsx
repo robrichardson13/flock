@@ -250,10 +250,13 @@ function CardsScrollBody({ boardSlug, listRef, children }: { boardSlug: string; 
   return <div className="screen-body" ref={combinedRef}>{children}</div>;
 }
 
-export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, boards = [], needs = [], actor = "", onNewBoard = () => {}, onRename = () => {} }: { boardRef: string; cardNum?: number; actorName?: string; tab: BoardTab; onBoardsChanged: () => void;
+export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, boards = [], needs = [], actor = "", onNewBoard = () => {}, onRename = () => {}, onOpenNotifications }: { boardRef: string; cardNum?: number; actorName?: string; tab: BoardTab; onBoardsChanged: () => void;
   /** Desktop shell (P1.3): the top bar carries the boards switcher and who you are, so the
       board page needs what the sidebar used to be handed. Unused by the mobile branch. */
-  boards?: BoardSummary[]; needs?: NeedsHuman[]; actor?: string; onNewBoard?: () => void; onRename?: () => void }) {
+  boards?: BoardSummary[]; needs?: NeedsHuman[]; actor?: string; onNewBoard?: () => void; onRename?: () => void;
+  /** ADR 0024: opens the notifications panel scoped to this board (the "⋯" menu on desktop,
+   *  the brief sheet on the phone) — the bell itself stays Home-only chrome (#10). */
+  onOpenNotifications?: (board: { slug: string; title: string }) => void }) {
   const mobile = useIsMobile();
   // #7: the bar publishes its resting height so the keyboard can take it back a strip at a
   // time instead of the whole bar in one frame.
@@ -1035,6 +1038,11 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
               </div>
             </>
           )}
+          {onOpenNotifications && (
+            <button className="btn btn-ghost btn-block" onClick={() => { setBriefOpen(false); onOpenNotifications({ slug: b.slug, title: b.title }); }}>
+              {Icons.bell(16)} Notifications
+            </button>
+          )}
           {/* #28: the sheet's only close affordance now that the top-right X is gone. */}
           <button className="btn btn-block btn-ghost" onClick={() => { setBriefOpen(false); setEditingBody(false); }}>Close</button>
           <div className="sheet-divider" />
@@ -1143,6 +1151,12 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
                   {Icons.person(16)}
                   <span>Team</span>
                 </button>
+                {onOpenNotifications && (
+                  <button role="menuitem" className="menu-item" onClick={() => { close(); onOpenNotifications({ slug: b.slug, title: b.title }); }}>
+                    {Icons.bell(16)}
+                    <span>Notifications</span>
+                  </button>
+                )}
                 <button role="menuitem" className="menu-item" onClick={() => { close(); setEditingBody((v) => !v); }}>
                   {Icons.edit(16)}
                   <span>{editingBody ? "Cancel edit" : "Edit brief"}</span>

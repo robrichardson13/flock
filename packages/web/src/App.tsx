@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, getActorName, setActorName, streamPath, type BoardSummary, type NeedsHuman } from "./api.ts";
+import { api, getActorName, setActorName, streamPath, type BoardSummary, type NeedsHuman, type NotifySettings } from "./api.ts";
 import { BoardView, type BoardTab } from "./BoardView.tsx";
 import { BoardRow } from "./BoardRow.tsx";
 import { groupBoardsByActivity } from "./boardActivity.ts";
@@ -495,6 +495,20 @@ function Shell() {
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
   const [pushPanelOpen, setPushPanelOpen] = useState(false);
+  // ADR 0024: which board (if any) the panel was opened for — null/undefined means Home, and
+  // "What buzzes" edits the actor's global row instead of a board override.
+  const [notifyBoard, setNotifyBoard] = useState<{ slug: string; title: string } | null>(null);
+  // The actor's *global* resolved settings, kept only so the bell can tell the truth (ADR
+  // 0024): bellOff, no dot, once push is on but every level toggle is off. Board overrides
+  // never change the bell — the bell is Home-only chrome (#10) and reads the global row.
+  const [globalNotify, setGlobalNotify] = useState<NotifySettings | null>(null);
+  useEffect(() => {
+    if (pushKind !== "on") return;
+    let cancelled = false;
+    api.notifySettings().then((r) => { if (!cancelled) setGlobalNotify(r.resolved); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [pushKind]);
+  const allMuted = !!globalNotify && !globalNotify.needsMe && !globalNotify.review && !globalNotify.info && !globalNotify.settled;
   useEffect(() => {
     let cancelled = false;
     currentSubscription().then((sub) => {
@@ -527,7 +541,11 @@ function Shell() {
       .catch((e) => setPushError((e as Error).message))
       .finally(() => setPushBusy(false));
   }, []);
-  const onOpenNotifications = useCallback(() => setPushPanelOpen(true), []);
+  const onOpenNotifications = useCallback((board?: { slug: string; title: string } | null) => {
+    setNotifyBoard(board ?? null);
+    setPushPanelOpen(true);
+  }, []);
+  const onGlobalNotifyChange = useCallback((resolved: NotifySettings) => setGlobalNotify(resolved), []);
   const pushPanel = (
     <PushPanel
       open={pushPanelOpen}
@@ -537,6 +555,8 @@ function Shell() {
       error={pushError}
       onEnable={onEnablePush}
       onDisable={onDisablePush}
+      board={notifyBoard}
+      onGlobalNotifyChange={onGlobalNotifyChange}
     />
   );
 
@@ -561,21 +581,21 @@ function Shell() {
         {/* The one top bar, above the push stack and above the banners: it is the same DOM
             node on Home, on a board and on a card, so navigating swaps its contents in place
             instead of sliding a second bar past the first, and its y origin never moves. */}
-        <TopBar route={route} actor={actor} boardLabel={boardLabel} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} pushKind={pushKind} />
+        <TopBar route={route} actor={actor} boardLabel={boardLabel} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} pushKind={pushKind} allMuted={allMuted} />
         {streamHint}
         {errorBanner}
         <PushStack
           routeKey={route.board ?? "#home"}
           depth={route.board ? 1 : 0}
-          under={route.board && peek ? <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} onOpenNotifications={onOpenNotifications} /> : null}
+          under={route.board && peek ? <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} allMuted={allMuted} onOpenNotifications={onOpenNotifications} /> : null}
         >
           {route.board ? (
             // Inside a board, every avatar drawn below opens that actor's view (#49).
             <ActorLinks boardRef={route.board}>
-              <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} />
+              <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} onOpenNotifications={onOpenNotifications} />
             </ActorLinks>
           ) : (
-            <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} onOpenNotifications={onOpenNotifications} />
+            <Home boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} allMuted={allMuted} onOpenNotifications={onOpenNotifications} />
           )}
         </PushStack>
         {newBoardDialog}
@@ -593,7 +613,7 @@ function Shell() {
         {streamHint}
         <main className="main">
           {errorBanner}
-          <Home boards={boards} needs={needs} actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} onOpenNotifications={onOpenNotifications} />
+          <Home boards={boards} needs={needs} actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename} onAnswered={refresh} loaded={loaded} seeded={!!seed} pushKind={pushKind} allMuted={allMuted} onOpenNotifications={onOpenNotifications} />
         </main>
         {newBoardDialog}
         {pushPanel}
@@ -608,7 +628,7 @@ function Shell() {
         {errorBanner}
         {/* `route.board` is set: the index returned its own shell above. */}
         <ActorLinks boardRef={route.board}>
-          <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} />
+          <BoardView key={route.board} boardRef={route.board} cardNum={route.card} actorName={route.actor} tab={route.tab} onBoardsChanged={refresh} boards={boards} needs={needs} actor={actor} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} />
         </ActorLinks>
       </main>
       {newBoardDialog}
@@ -620,11 +640,13 @@ function Shell() {
 /** What Home caches between visits: exactly the two payloads its own fetch produces. */
 interface HomeSnapshot { boards: BoardSummary[]; needs: NeedsHuman[] }
 
-function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswered, loaded, seeded, pushKind, onOpenNotifications }: {
+function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswered, loaded, seeded, pushKind, allMuted, onOpenNotifications }: {
   boards: BoardSummary[]; needs: NeedsHuman[]; actor: string; dbPath?: string; onNewBoard: () => void; onRename: () => void; onAnswered: () => void; loaded: boolean; seeded: boolean;
   /** This device's push state and the panel-opening callback for the desktop `AppTopBar`'s
    *  bell — owned by `Shell` (#8) so the same panel is reachable from a board screen too. */
   pushKind: PushState["kind"];
+  /** ADR 0024: push is on, but every level toggle is off. */
+  allMuted?: boolean;
   onOpenNotifications: () => void;
 }) {
   const mobile = useIsMobile();
@@ -655,7 +677,7 @@ function Home({ boards, needs, actor, dbPath = "", onNewBoard, onRename, onAnswe
   return (
     <div className="screen screen-home">
       {!mobile && (
-        <AppTopBar actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} pushKind={pushKind}
+        <AppTopBar actor={actor} dbPath={dbPath} onNewBoard={onNewBoard} onRename={onRename} onOpenNotifications={onOpenNotifications} pushKind={pushKind} allMuted={allMuted}
           action={<button className="btn btn-primary" onClick={onNewBoard}>{Icons.plus(16)} New board</button>} />
       )}
       {/* On a phone the bar is the shell's, mounted once above the push stack: see TopBar.tsx. */}

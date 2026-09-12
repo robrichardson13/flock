@@ -3,16 +3,24 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import webpush from "web-push";
 import {
+  deliversFor,
+  levelFor,
   notificationClass,
   notificationFor,
   notifyTargets,
   recipientsOf,
+  summarize,
   NotificationBatcher,
   Presence,
+  SettledTracker,
   type Dispatch,
   type Event,
   type Flock,
+  type NotificationPayload,
   type NotifyContext,
+  type NotifyLevel,
+  type NotifySettings,
+  type SettledFire,
 } from "@flock/core";
 import { formatPushDecision } from "./presence-log.ts";
 
@@ -138,9 +146,123 @@ export function startPushPump(opts: {
   let inFlight = false;
   let leads = false;
   let batcher = newBatcher();
+  let settled = newSettled();
+  // ADR 0024: bounded record of the last event per board, for the settled notification's body.
+  // Capped like SettledTracker itself so an unbounded number of boards never grows the pump's
+  // memory; oldest-inserted evicted first (good enough for a "last seen" hint, not a queue).
+  const MAX_LAST_EVENT_BOARDS = 200;
+  const lastEventByBoard = new Map<string, { gist: string; seq: number }>();
 
   function newBatcher(): NotificationBatcher {
     return new NotificationBatcher({ isLooking: presence.isLooking.bind(presence) });
+  }
+
+  /** Fresh tracker with no armed state — used on construction, on a lease takeover (never
+   *  double-fire off state from before we lost the lease), and on stop() (a restart-equivalent
+   *  shutdown drops pending state, per the ADR). */
+  function newSettled(): SettledTracker {
+    return new SettledTracker({
+      isLooking: (actor, boardId) => presence.isLooking(actor, boardId, now()),
+      thresholdFor: (actor, boardId) => flock.resolveNotifySettings(actor, boardId).settledAfterMs,
+      clock: now,
+    });
+  }
+
+  /** Distinct actors subscribed to this board (or globally) with `settled` on in their resolved settings. */
+  function settledRecipients(boardId: string): string[] {
+    const subs = flock.pushSubscriptions({ boardId });
+    const seen = new Set<string>();
+    const recipients: string[] = [];
+    for (const sub of subs) {
+      if (seen.has(sub.actor)) continue;
+      seen.add(sub.actor);
+      if (flock.resolveNotifySettings(sub.actor, boardId).settled) recipients.push(sub.actor);
+    }
+    return recipients;
+  }
+
+  /** One-line, human-legible gist of an event for the settled notification's body. */
+  function summarizeEvent(event: Event): string {
+    const body = typeof event.data.body === "string" ? event.data.body : "";
+    if (body.trim().length > 0) return `${event.actor}: ${summarize(body)}`;
+    return `${event.actor} ${event.type}`;
+  }
+
+  function recordLastEvent(event: Event): void {
+    lastEventByBoard.delete(event.boardId); // re-insert to keep insertion order = recency
+    if (lastEventByBoard.size >= MAX_LAST_EVENT_BOARDS) {
+      const oldest = lastEventByBoard.keys().next().value;
+      if (oldest !== undefined) lastEventByBoard.delete(oldest);
+    }
+    lastEventByBoard.set(event.boardId, { gist: summarizeEvent(event), seq: event.seq });
+  }
+
+  /** Feeds the settled tracker every event the pump processes, per the ADR: any event whose
+   *  author is not the recipient arms (or re-arms) that recipient's quiet timer for this board. */
+  function armSettled(event: Event): void {
+    recordLastEvent(event);
+    const recipients = settledRecipients(event.boardId);
+    if (recipients.length === 0) return;
+    settled.onEvent(event, recipients);
+  }
+
+  /** ~"23m" / "2h 5m" / "1d 3h" — bounded, no fractional units. */
+  function formatQuietDuration(ms: number): string {
+    const totalMinutes = Math.max(1, Math.round(ms / 60_000));
+    if (totalMinutes < 60) return `${totalMinutes}m`;
+    const totalHours = Math.floor(totalMinutes / 60);
+    const remMinutes = totalMinutes % 60;
+    if (totalHours < 24) return remMinutes > 0 ? `${totalHours}h ${remMinutes}m` : `${totalHours}h`;
+    const days = Math.floor(totalHours / 24);
+    const remHours = totalHours % 24;
+    return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+  }
+
+  /** Turns one fire into a dispatch: title/body/tag per the ADR, plus the `[push] settled` log line. */
+  function buildSettledDispatch(fire: SettledFire): Dispatch | null {
+    let board: { slug: string; title: string };
+    try {
+      board = flock.board(fire.boardId);
+    } catch {
+      // Board is gone by the time this fired; nothing sensible to notify about.
+      return null;
+    }
+    const quiet = formatQuietDuration(fire.quietMs);
+    console.error(`[push] settled actor=${fire.actor} board=${board.slug} quiet=${quiet}`);
+    const info = lastEventByBoard.get(fire.boardId);
+    const body = info && info.gist.length > 0 ? `Quiet for ${quiet}. Last: ${info.gist}` : `Quiet for ${quiet}.`;
+    const url = `#/b/${board.slug}/cards`;
+    const payload: NotificationPayload = {
+      title: `${board.title} has settled`,
+      body,
+      url,
+      tag: url,
+      seq: info?.seq ?? flock.lastSeq(),
+      renotify: true,
+    };
+    return { actor: fire.actor, boardId: fire.boardId, payload };
+  }
+
+  /** Runs the settled tracker's tick and dispatches whatever fired. Called from the pump's own
+   *  tick, only while this process holds the delivery lease. */
+  async function deliverSettled(): Promise<{ sent: number; pruned: number }> {
+    const fires = settled.tick(now());
+    if (fires.length === 0) return { sent: 0, pruned: 0 };
+    const dispatches = fires.map(buildSettledDispatch).filter((d): d is Dispatch => d !== null);
+    if (dispatches.length === 0) return { sent: 0, pruned: 0 };
+    return sendAll(dispatches);
+  }
+
+  /**
+   * ADR 0024: one keyed settings read per (recipient, board) per event — cheap, since settings are
+   * actor-keyed rather than endpoint-keyed. `deliversFor` rather than `deliversAt` so d15's rule
+   * — a card comment pushes at `review` and at nothing else — is applied in core, not here.
+   * Returns both the decision and the settings it was made from, so `logDecisions` can fold them
+   * into the same line as the presence read (card 80).
+   */
+  function deliversHere(event: Event, actor: string, level: NotifyLevel): { deliver: boolean; settings: NotifySettings } {
+    const settings: NotifySettings = flock.resolveNotifySettings(actor, event.boardId);
+    return { deliver: deliversFor(event, level, settings), settings };
   }
 
   /** send(d) per §4: fan one Dispatch out to that actor's subscriptions for that board, today's prune/touch/log rules. */
@@ -205,11 +327,29 @@ export function startPushPump(opts: {
       return { sent: 0, pruned: 0 };
     }
 
+    // ADR 0024: every processed event arms the settled timer for its board, independent of
+    // whether it produces a notification at all — a settled check-in is about board activity,
+    // not about what got pushed.
+    armSettled(event);
+
     const payload = notificationFor(event, ctx);
     const subs = payload ? flock.pushSubscriptions({ boardId: event.boardId }) : [];
     const targets = payload ? notifyTargets(event, ctx, subs) : [];
-    const recipients = recipientsOf(targets);
-    logDecisions(event, ctx.boardSlug, recipients, subs);
+    const eligible = recipientsOf(targets);
+
+    // ADR 0024: `levelFor` never depends on the recipient, so it is resolved once per event; each
+    // recipient's own settings (global row, then per-board override, then the built-in default —
+    // `Flock.resolveNotifySettings`) then decide whether *they* hear it. Filtering the recipient
+    // list here, before the batcher, means a muted recipient never opens a batch key, is never
+    // counted into a merged "N new in <board>" title, and needs-me still goes through this same
+    // gate — it is "always, unless they turn it off", not a presence bypass.
+    const level = payload ? levelFor(event, ctx) : null;
+    const decisions = new Map<string, { deliver: boolean; settings: NotifySettings | null }>();
+    for (const actor of eligible) {
+      decisions.set(actor, level === null ? { deliver: true, settings: null } : deliversHere(event, actor, level));
+    }
+    logDecisions(event, ctx.boardSlug, eligible, subs, level, decisions);
+    const recipients = eligible.filter((actor) => decisions.get(actor)!.deliver);
 
     // Every event goes through the batcher, even one that notifies nobody, so the author-seen
     // reset (D9) applies uniformly. onEvent returns dispatches that go out now (an urgent bypass,
@@ -219,15 +359,23 @@ export function startPushPump(opts: {
   }
 
   /**
-   * One line per (event, recipient) saying what the pump believed about presence for exactly the
-   * key it looked up (card 54). Costs one map scan per recipient and only runs when an event has
-   * recipients, so it is cheap enough to leave on.
+   * One line per (event, recipient) carrying both what the pump believed about presence (card 54)
+   * and what ADR 0024's level filter decided — a single `[push] decision` line so "why didn't that
+   * buzz" has one place to look rather than two logs to cross-reference (card 80).
    */
-  function logDecisions(event: Event, boardSlug: string, recipients: readonly string[], subs: readonly { actor: string }[]): void {
+  function logDecisions(
+    event: Event,
+    boardSlug: string,
+    recipients: readonly string[],
+    subs: readonly { actor: string }[],
+    level: NotifyLevel | null,
+    decisions: ReadonlyMap<string, { deliver: boolean; settings: NotifySettings | null }>,
+  ): void {
     if (recipients.length === 0) return;
     const at = now();
     for (const actor of recipients) {
       const detail = presence.lookingDetail(actor, event.boardId, at);
+      const decision = decisions.get(actor)!;
       console.error(
         formatPushDecision({
           seq: event.seq,
@@ -241,6 +389,9 @@ export function startPushPump(opts: {
           presenceClients: detail.clients,
           via: detail.via,
           subscriptions: subs.filter((s) => s.actor === actor).length,
+          level,
+          deliver: decision.deliver,
+          settings: decision.settings,
         }),
       );
     }
@@ -284,6 +435,7 @@ export function startPushPump(opts: {
         // takeover never replays a backlog, and drop half-built batches so nothing goes out late.
         since = flock.lastSeq();
         batcher = newBatcher();
+        settled = newSettled();
         return;
       }
       const events = flock.events({ since });
@@ -297,6 +449,12 @@ export function startPushPump(opts: {
         }
       }
       await flush();
+      try {
+        await deliverSettled();
+      } catch (err) {
+        // A settled misfire must never stop the tail either.
+        console.error("[push] error delivering settled check-ins:", err);
+      }
     } catch (err) {
       console.error("[push] tail error:", err);
     } finally {
@@ -327,6 +485,7 @@ export function startPushPump(opts: {
       leads = false;
       // Drop pending state (§2.7): a restart-equivalent shutdown never awaits a flush.
       batcher = newBatcher();
+      settled = newSettled();
     },
   };
 }

@@ -5,6 +5,7 @@ import { ATTACHMENT_MIMES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES, OR
 import { openDatabase, readStamp, SCHEMA_VERSION, type OpenOptions } from "./db.ts";
 import { setTaskChecked, taskItems } from "./tasks.ts";
 import type { PushSubscriptionInput, PushSubscriptionRecord } from "./notify.ts";
+import { assertDeclarableLevel, resolveNotifySettingsFields, clampSettledThreshold, type NotifySettings, type NotifySettingsFields } from "./notify-levels.ts";
 import {
   ACTOR_CARD_ROLES,
   CARD_STATUSES,
@@ -205,6 +206,22 @@ type PushSubscriptionRow = {
   id: string; endpoint: string; p256dh: string; auth: string; actor: string; actor_kind: string;
   board_id: string | null; user_agent: string | null; created_at: string; last_used_at: string | null;
 };
+type NotifySettingsRow = {
+  actor: string; board_id: string; needs_me: number | null; review: number | null; info: number | null;
+  settled: number | null; settled_after_ms: number | null; updated_at: string;
+};
+
+/** SQLite has no boolean type; a stored flag is 0/1/NULL, and NULL always means "inherit". */
+function boolFromCol(v: number | null): boolean | null {
+  return v === null ? null : v === 1;
+}
+function colFromBool(v: boolean | null): number | null {
+  return v === null ? null : v ? 1 : 0;
+}
+/** `undefined` (field absent from a patch) is handled by the caller; this only clamps a real value. */
+function clampedOrNull(v: number | null | undefined): number | null {
+  return v === null || v === undefined ? null : clampSettledThreshold(v);
+}
 
 export interface CardFilter {
   status?: CardStatus | CardStatus[];
@@ -1065,10 +1082,12 @@ export class Flock {
    * the same mechanism a channel message uses (#46), so an image reads the same either side.
    * A comment with an image needs no text.
    */
-  addComment(actor: Actor, boardRef: string, ref: string | number, body: string, kind: CommentKind = "comment", opts?: { attachments?: string[] }): Comment {
+  addComment(actor: Actor, boardRef: string, ref: string | number, body: string, kind: CommentKind = "comment", opts?: { attachments?: string[]; level?: string }): Comment {
     const c = this.card(boardRef, ref);
     const ids = opts?.attachments ?? [];
     if (!body.trim() && ids.length === 0) throw new FlockError("a comment needs a body or an attachment");
+    // Validated up front, alongside the attachment ids, so a bad `level` fails clean too.
+    const level = assertDeclarableLevel(opts?.level);
     // Validate every id up front so a bad reference fails clean, before anything is written.
     this.assertBindable(c.boardId, ids, "comment");
     this.touchActor(actor);
@@ -1093,6 +1112,7 @@ export class Flock {
         body,
         attachments: ids.length,
         attachmentList: attachments.map((a) => ({ id: a.id, mime: a.mime, name: a.name, size: a.size })),
+        ...(level ? { level } : {}),
       });
     }
     return this.rowToComment(this.db.query("SELECT * FROM comments WHERE id = ?").get(id) as CommentRow, c.num, attachments);
@@ -1255,10 +1275,12 @@ export class Flock {
     };
   }
 
-  say(actor: Actor, boardRef: string, body: string, opts?: { attachments?: string[] }): Message {
+  say(actor: Actor, boardRef: string, body: string, opts?: { attachments?: string[]; level?: string }): Message {
     const b = this.board(boardRef);
     const ids = opts?.attachments ?? [];
     if (!body.trim() && ids.length === 0) throw new FlockError("a message needs a body or an attachment");
+    // Validated up front, alongside the attachment ids, so a bad `level` fails clean too.
+    const level = assertDeclarableLevel(opts?.level);
     // Validate every id up front so a bad reference fails clean, before anything is written.
     this.assertBindable(b.id, ids, "message");
     this.touchActor(actor);
@@ -1280,6 +1302,7 @@ export class Flock {
       body,
       attachments: ids.length,
       attachmentList: attachments.map((a) => ({ id: a.id, mime: a.mime, name: a.name, size: a.size })),
+      ...(level ? { level } : {}),
     });
     return { id, boardId: b.id, num, author: actor.name, authorKind: actor.kind, body, createdAt: ts, attachments, reactions: [] };
   }
@@ -1763,6 +1786,68 @@ export class Flock {
   releasePushLease(owner: string): boolean {
     const result = this.db.query("DELETE FROM push_lease WHERE id = 'singleton' AND owner = ?").run(owner);
     return result.changes > 0;
+  }
+
+  // ---------- notification settings (ADR 0024) ----------
+
+  private rowToNotifySettingsFields(r: NotifySettingsRow): NotifySettingsFields {
+    return {
+      needsMe: boolFromCol(r.needs_me),
+      review: boolFromCol(r.review),
+      info: boolFromCol(r.info),
+      settled: boolFromCol(r.settled),
+      settledAfterMs: r.settled_after_ms,
+    };
+  }
+
+  /**
+   * The raw stored override for one (actor, board) row, `null` fields meaning "inherit". `null`
+   * overall when nothing has ever been written there. `boardId` `''` reads that actor's global
+   * row; it never denotes a real board.
+   */
+  notifySettings(actor: string, boardId: string): NotifySettingsFields | null {
+    const row = this.db.query("SELECT * FROM notify_settings WHERE actor = ? AND board_id = ?").get(actor, boardId) as NotifySettingsRow | null;
+    return row ? this.rowToNotifySettingsFields(row) : null;
+  }
+
+  /**
+   * Concrete settings for an actor on a board: the board's own row, else the global (`''`) row,
+   * else `DEFAULT_NOTIFY_SETTINGS`, per field. `boardId` `''` resolves the global row against
+   * just the default, since there is no more specific row to prefer.
+   */
+  resolveNotifySettings(actor: string, boardId: string): NotifySettings {
+    const global = this.notifySettings(actor, "");
+    const board = boardId === "" ? null : this.notifySettings(actor, boardId);
+    return resolveNotifySettingsFields(global, board);
+  }
+
+  /**
+   * Validates and upserts a per-actor override (`boardId` `''` = global). Only the fields present
+   * in `patch` change; a field set to `null` explicitly clears back to "inherit", while an absent
+   * field keeps whatever is already stored. `boardId` must name a real board unless it is `''`.
+   * `settledAfterMs` is clamped, never rejected, per the ADR.
+   */
+  putNotifySettings(actor: Actor, boardId: string, patch: Partial<NotifySettingsFields>): NotifySettingsFields {
+    if (boardId !== "") this.board(boardId); // throws not_found on a bad board id
+    this.touchActor(actor);
+    const current = this.notifySettings(actor.name, boardId) ?? { needsMe: null, review: null, info: null, settled: null, settledAfterMs: null };
+    const next: NotifySettingsFields = {
+      needsMe: "needsMe" in patch ? patch.needsMe ?? null : current.needsMe,
+      review: "review" in patch ? patch.review ?? null : current.review,
+      info: "info" in patch ? patch.info ?? null : current.info,
+      settled: "settled" in patch ? patch.settled ?? null : current.settled,
+      settledAfterMs: "settledAfterMs" in patch ? clampedOrNull(patch.settledAfterMs) : current.settledAfterMs,
+    };
+    this.db
+      .query(
+        `INSERT INTO notify_settings(actor, board_id, needs_me, review, info, settled, settled_after_ms, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(actor, board_id) DO UPDATE SET
+           needs_me = excluded.needs_me, review = excluded.review, info = excluded.info,
+           settled = excluded.settled, settled_after_ms = excluded.settled_after_ms, updated_at = excluded.updated_at`,
+      )
+      .run(actor.name, boardId, colFromBool(next.needsMe), colFromBool(next.review), colFromBool(next.info), colFromBool(next.settled), next.settledAfterMs, now());
+    return next;
   }
 
   // ---------- aggregate ----------

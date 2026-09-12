@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Flock } from "@flock/core";
+import { Flock, deliversFor, levelFor } from "@flock/core";
 import { createApp } from "./index.ts";
 
 function fresh() {
@@ -800,5 +800,176 @@ describe("comment reactions", () => {
       ref: `${card.num}.${comment.num}`,
       commentAuthor: "ada",
     });
+  });
+});
+
+// ADR 0024: notification levels.
+describe("x-flock-notify header (ADR 0024)", () => {
+  const scoutHeaders = (level?: string) => ({
+    "content-type": "application/json",
+    "x-flock-actor": "scout",
+    "x-flock-actor-kind": "agent",
+    ...(level ? { "x-flock-notify": level } : {}),
+  });
+
+  test("POST a message with x-flock-notify: review stores it as the event's level", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Notify Board" });
+    const res = await app.request(`/api/boards/${board.slug}/messages`, {
+      method: "POST",
+      headers: scoutHeaders("review"),
+      body: JSON.stringify({ body: "the PR is up" }),
+    });
+    expect(res.status).toBe(201);
+    const posted = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
+    expect(posted.data.level).toBe("review");
+  });
+
+  test("POST a comment with x-flock-notify: info stores it on comment.posted", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Notify Board 2" });
+    const card = flock.createCard(ada, board.id, { title: "Work" });
+    const res = await app.request(`/api/boards/${board.slug}/cards/${card.num}/comments`, {
+      method: "POST",
+      headers: scoutHeaders("info"),
+      body: JSON.stringify({ body: "status update" }),
+    });
+    expect(res.status).toBe(200);
+    const posted = flock.events({ boardId: board.id }).find((e) => e.type === "comment.posted")!;
+    expect(posted.data.level).toBe("info");
+  });
+
+  // d15: the header is the API's half of "a card comment pushes at review and nowhere else".
+  test("x-flock-notify: review on a comment carries all the way to a delivered notification", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Notify Board 2b" });
+    const card = flock.createCard(ada, board.id, { title: "Fix the bell" });
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+    const res = await app.request(`/api/boards/${board.slug}/cards/${card.num}/comments`, {
+      method: "POST",
+      headers: scoutHeaders("review"),
+      body: JSON.stringify({ body: "ready for a look" }),
+    });
+    expect(res.status).toBe(200);
+    const posted = flock.events({ boardId: board.id }).findLast((e) => e.type === "comment.posted")!;
+    expect(levelFor(posted, { boardSlug: board.slug, boardTitle: board.title, cardTitle: card.title })).toBe("review");
+    expect(deliversFor(posted, "review", flock.resolveNotifySettings("ada", board.id))).toBe(true);
+    expect(deliversFor(posted, "info", { ...flock.resolveNotifySettings("ada", board.id), info: true })).toBe(false);
+  });
+
+  test("no header at all means no declared level, same as the CLI with no --level", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Notify Board 3" });
+    await app.request(`/api/boards/${board.slug}/messages`, {
+      method: "POST",
+      headers: scoutHeaders(),
+      body: JSON.stringify({ body: "plain status line" }),
+    });
+    const posted = flock.events({ boardId: board.id }).find((e) => e.type === "message.posted")!;
+    expect(posted.data.level).toBeUndefined();
+  });
+
+  test("x-flock-notify: needs-me is refused (400), same as --level needs-me on the CLI", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Notify Board 4" });
+    const res = await app.request(`/api/boards/${board.slug}/messages`, {
+      method: "POST",
+      headers: scoutHeaders("needs-me"),
+      body: JSON.stringify({ body: "help" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/flock ask/);
+  });
+
+  test("x-flock-notify: garbage is refused (400)", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Notify Board 5" });
+    const res = await app.request(`/api/boards/${board.slug}/messages`, {
+      method: "POST",
+      headers: scoutHeaders("urgent"),
+      body: JSON.stringify({ body: "hi" }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET/PUT /api/notify/settings (ADR 0024)", () => {
+  const ada = { name: "ada", kind: "human" as const };
+  const adaHeaders = { "content-type": "application/json", "x-flock-actor": "ada", "x-flock-actor-kind": "human" };
+
+  test("GET with no board query reads the actor's global row: null raw, defaults resolved", async () => {
+    const { app } = fresh();
+    const res = await app.request("/api/notify/settings", { headers: adaHeaders });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.boardId).toBe("");
+    expect(body.raw).toBeNull();
+    expect(body.resolved).toEqual({ needsMe: true, review: true, info: false, settled: false, settledAfterMs: 20 * 60_000 });
+  });
+
+  test("PUT with ?board=<slug> writes only that board's override", async () => {
+    const { flock, app } = fresh();
+    const board = flock.createBoard(ada, { title: "Settings Board" });
+    const res = await app.request(`/api/notify/settings?board=${board.slug}`, {
+      method: "PUT",
+      headers: adaHeaders,
+      body: JSON.stringify({ info: true, settledAfterMs: 45 * 60_000 }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.raw).toEqual({ needsMe: null, review: null, info: true, settled: null, settledAfterMs: 45 * 60_000 });
+    expect(body.resolved.info).toBe(true);
+    expect(body.resolved.needsMe).toBe(true); // untouched
+
+    const read = await (await app.request(`/api/notify/settings?board=${board.slug}`, { headers: adaHeaders })).json();
+    expect(read.resolved).toEqual(body.resolved);
+  });
+
+  test("a board override wins over the global row for that field only", async () => {
+    const { flock, app } = fresh();
+    const board = flock.createBoard(ada, { title: "Settings Board 2" });
+    await app.request("/api/notify/settings", { method: "PUT", headers: adaHeaders, body: JSON.stringify({ review: false }) });
+    await app.request(`/api/notify/settings?board=${board.slug}`, {
+      method: "PUT",
+      headers: adaHeaders,
+      body: JSON.stringify({ review: true }),
+    });
+    const boardRead = await (await app.request(`/api/notify/settings?board=${board.slug}`, { headers: adaHeaders })).json();
+    expect(boardRead.resolved.review).toBe(true);
+    const globalRead = await (await app.request("/api/notify/settings", { headers: adaHeaders })).json();
+    expect(globalRead.resolved.review).toBe(false);
+  });
+
+  test("GET with an unknown board slug is 404", async () => {
+    const { app } = fresh();
+    const res = await app.request("/api/notify/settings?board=does-not-exist", { headers: adaHeaders });
+    expect(res.status).toBe(404);
+  });
+
+  test("PUT with a non-boolean value for a boolean field is 400", async () => {
+    const { app } = fresh();
+    const res = await app.request("/api/notify/settings", {
+      method: "PUT",
+      headers: adaHeaders,
+      body: JSON.stringify({ needsMe: "yes" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("PUT with an explicit null clears a field back to inherit", async () => {
+    const { app } = fresh();
+    await app.request("/api/notify/settings", { method: "PUT", headers: adaHeaders, body: JSON.stringify({ needsMe: false }) });
+    const cleared = await (
+      await app.request("/api/notify/settings", { method: "PUT", headers: adaHeaders, body: JSON.stringify({ needsMe: null }) })
+    ).json();
+    expect(cleared.raw.needsMe).toBeNull();
+    expect(cleared.resolved.needsMe).toBe(true); // back to the default
   });
 });

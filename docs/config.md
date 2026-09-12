@@ -84,6 +84,23 @@ than a setting.
 | `FLOCK_VAPID_SUBJECT` | `https://github.com/robrichardson13/flock` | The VAPID JWT's contact subject. Must be an `https:` URL or a `mailto:` URI that resolves for real — APNs rejects a placeholder like `mailto:flock@localhost` with 403 `BadJwtToken`. |
 | `FLOCK_NO_PUSH` | unset | `1` turns off the push pump and VAPID key generation entirely; `GET /api/push/key` then reports `{ enabled: false }`. |
 
+**Which notifications you get is not configured here.** ADR 0024's four switches — needs me,
+review requested, everything else, quiet check-in — plus the check-in threshold are per person,
+not per machine, so they live in the database rather than in `config.json`, with an optional
+override per board. Set them in the app's notifications sheet, or from the CLI:
+
+```sh
+flock notify settings                    # what is in force here, and what is inherited
+flock notify set --everything on         # every channel line buzzes again
+flock notify set --settled on --threshold 30m
+flock notify set my-board --review off   # just this board
+```
+
+There is no server-wide default to set: an actor with no row gets needs-me and review on,
+everything else and the check-in off, and a 20-minute threshold. See
+[ADR 0024](adr/0024-notification-levels.md) and
+[docs/notifications-contract.md](notifications-contract.md) §5.
+
 ## `~/.flock/skill.md`
 
 Optional. This is the one place to put a standing personalization of the `/flock` skill — routing

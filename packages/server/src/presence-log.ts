@@ -1,4 +1,4 @@
-import type { PresenceClientInfo } from "@flock/core";
+import type { NotifyLevel, NotifySettings, PresenceClientInfo } from "@flock/core";
 
 /**
  * One-line, greppable logging for presence and for the push suppression decision (card 54).
@@ -138,12 +138,21 @@ export interface PushDecisionLine {
   via: "board" | "home" | null;
   /** Push subscriptions this actor has for this board. */
   subscriptions: number;
+  /** ADR 0024: the event's resolved level, or null when nothing would notify anyone (no payload). */
+  level: NotifyLevel | null;
+  /** Whether this recipient's settings let this level through. True whenever `level` is null,
+   *  since there is nothing for a level filter to block in that case. */
+  deliver: boolean;
+  /** The settings `deliver` was computed from, or null when `level` is null (no filter ran). */
+  settings: NotifySettings | null;
 }
 
 /**
  * One line per (event, recipient) at push decision time: what the pump believed about presence
- * for exactly the key it looked up. `looking=true` here means chatter is suppressed; an urgent
- * notification still goes out by design (ADR 0021).
+ * (card 54) and what ADR 0024's level filter decided, folded into a single line. `looking=true`
+ * means chatter is suppressed; an urgent notification still goes out by design (ADR 0021).
+ * `deliver=false` means the level filter is why this recipient hears nothing, independent of
+ * presence.
  */
 export function formatPushDecision(d: PushDecisionLine): string {
   return [
@@ -157,6 +166,9 @@ export function formatPushDecision(d: PushDecisionLine): string {
     `looking=${d.looking}${d.via === null ? "" : `(${d.via})`}`,
     `age=${shortDuration(d.presenceAgeMs)}`,
     `clients=${d.presenceClients}`,
+    `level=${val(d.level ?? "-")}`,
+    `deliver=${d.deliver}`,
+    `settings=${d.settings ? JSON.stringify(d.settings) : "-"}`,
     `subs=${d.subscriptions}`,
   ].join(" ");
 }

@@ -214,7 +214,7 @@ export function topBarShape(hasBoard: boolean, hasCard: boolean, cardSlotHeld: b
  * or the title from the cached boards list — so a board opened cold names itself before the
  * snapshot lands, exactly as the skeleton's own bar used to.
  */
-export function TopBar({ route, actor, boardLabel, onNewBoard, onRename, onOpenNotifications, pushKind }: {
+export function TopBar({ route, actor, boardLabel, onNewBoard, onRename, onOpenNotifications, pushKind, allMuted }: {
   route: Route;
   actor: string;
   boardLabel?: string;
@@ -224,16 +224,22 @@ export function TopBar({ route, actor, boardLabel, onNewBoard, onRename, onOpenN
   onOpenNotifications: () => void;
   /** This device's push state, so the bell can swap to `bellOff` and carry its warn dot when `blocked`. */
   pushKind?: PushState["kind"];
+  /** ADR 0024: push is on, but every level toggle is off — the bell renders `bellOff` with no
+   *  dot rather than looking armed for something that can never ring. */
+  allMuted?: boolean;
 }) {
   const { titles, boardTeam, slots } = useContext(ViewCtx);
   const shape = topBarShape(!!route.board, route.card !== undefined, titles.card !== undefined);
   const ref = useTopBarHeight();
 
   // The quiet entrance (#8): the same icon-only bell beside the avatar on Home and on a board,
-  // opening the panel directly rather than through a menu/action sheet.
+  // opening the panel directly rather than through a menu/action sheet. The bell reads
+  // `bellOff` (no dot) when push is on but muted (ADR 0024's "honest bell"), same as `blocked`
+  // minus the dot — never from a raw click event, so the callback stays a plain `() => void`.
+  const bellOff = pushKind === "blocked" || (pushKind === "on" && !!allMuted);
   const notifyBtn = (
-    <button className="icon-btn notify-btn" onClick={onOpenNotifications} aria-label="Notifications" title="Notifications">
-      {pushKind === "blocked" ? Icons.bellOff(20) : Icons.bell(20)}
+    <button className="icon-btn notify-btn" onClick={() => onOpenNotifications()} aria-label="Notifications" title="Notifications">
+      {bellOff ? Icons.bellOff(20) : Icons.bell(20)}
       {pushKind === "blocked" && <span className="notify-dot" />}
     </button>
   );

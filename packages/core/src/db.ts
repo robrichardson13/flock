@@ -11,7 +11,7 @@ import { FlockError } from "./types.ts";
  * whenever `SCHEMA` or `migrate()` below changes, and only ever add columns/tables/indexes:
  * migrations must stay additive so a newer binary can always read an older database.
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /**
  * Thrown by `openDatabase` when the database's stamped `user_version` is higher than this
@@ -225,6 +225,23 @@ CREATE TABLE IF NOT EXISTS comment_reactions (
   PRIMARY KEY (comment_id, actor, emoji)
 );
 CREATE INDEX IF NOT EXISTS comment_reactions_board ON comment_reactions(board_id);
+-- Notification levels (ADR 0024): one row per (actor, board), board_id '' being that actor's
+-- global default. Every flag column is nullable and NULL means "inherit" -- from the global row,
+-- or, on the global row itself, from the built-in default -- which is what makes a per-board
+-- override a real override rather than a copy. board_id is NOT NULL DEFAULT '' rather than
+-- nullable because SQLite treats NULLs in a unique index as distinct, so a nullable board_id in
+-- the primary key would happily store a hundred global rows for one actor.
+CREATE TABLE IF NOT EXISTS notify_settings (
+  actor             TEXT    NOT NULL,
+  board_id          TEXT    NOT NULL DEFAULT '',
+  needs_me          INTEGER,
+  review            INTEGER,
+  info              INTEGER,
+  settled           INTEGER,
+  settled_after_ms  INTEGER,
+  updated_at        TEXT    NOT NULL,
+  PRIMARY KEY (actor, board_id)
+);
 `;
 
 export function openDatabase(path: string, opts: OpenOptions = {}): Database {
