@@ -431,10 +431,13 @@ means guessing.
   line says *why* the client decided what it decided and *which bundle* decided it. `ua` is a short
   device label (`iPhone/18.7/Safari`), never the raw string; `board=slug(unknown)` marks a slug that
   did not resolve.
-- **`[push] decision event=… type=… actor=… board=… boardId=… looking=… age=… clients=… subs=…`** —
+- **`[push] decision event=… type=… class=… actor=… board=… boardId=… looking=… age=… clients=… subs=…`** —
   one line per (event, recipient) at decision time, from `logDecisions` in `push.ts`. `looking` is
   the answer for exactly the `(actor, boardId)` key the pump looked up, `age` the freshest matching
-  beat and `clients` how many live clients matched. Only logged when an event has recipients.
+  beat and `clients` how many live clients matched. `class` is `urgent`/`chatter`/`none`: an
+  urgent event (an ask, an awaiting-human move) bypasses presence entirely by design, so without
+  the class a by-design push reads as a suppression failure. Only logged when an event has
+  recipients.
 - **`GET /api/presence`** dumps the map the pump reads: `{ now, ttlMs, pushLeaseHeld, clients: [{
   client, actor, boardId, board, reportedAt, expiresAt, ageMs, info }] }`. Loopback only, and
   refused outright when `x-forwarded-for` is present — a dev setup proxies `/api` through vite, so a

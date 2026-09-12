@@ -99,6 +99,7 @@ describe("formatPushDecision", () => {
       formatPushDecision({
         seq: 412,
         type: "message.posted",
+        notificationClass: "chatter",
         actor: "robrichardson",
         board: "flock-2",
         boardId: "7129s3kt",
@@ -108,7 +109,7 @@ describe("formatPushDecision", () => {
         subscriptions: 1,
       }),
     ).toBe(
-      "[push] decision event=412 type=message.posted actor=robrichardson board=flock-2 boardId=7129s3kt looking=false age=- clients=0 subs=1",
+      "[push] decision event=412 type=message.posted class=chatter actor=robrichardson board=flock-2 boardId=7129s3kt looking=false age=- clients=0 subs=1",
     );
   });
 
@@ -116,6 +117,7 @@ describe("formatPushDecision", () => {
     const line = formatPushDecision({
       seq: 413,
       type: "message.posted",
+      notificationClass: "chatter",
       actor: "rob",
       board: "flock-2",
       boardId: "b1",
@@ -125,6 +127,25 @@ describe("formatPushDecision", () => {
       subscriptions: 1,
     });
     expect(line).toContain("looking=true age=3.0s clients=2");
+  });
+
+  test("an urgent event says so, since presence never applied to it", () => {
+    const line = formatPushDecision({
+      seq: 414,
+      type: "card.asked",
+      notificationClass: "urgent",
+      actor: "rob",
+      board: "flock-2",
+      boardId: "b1",
+      looking: true,
+      presenceAgeMs: 1_000,
+      presenceClients: 1,
+      subscriptions: 1,
+    });
+    // looking=true and it still goes out: ADR 0021 exempts asks. The class is what says
+    // "by design" rather than "suppression failed".
+    expect(line).toContain("type=card.asked class=urgent");
+    expect(line).toContain("looking=true");
   });
 });
 

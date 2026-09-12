@@ -92,6 +92,9 @@ export function formatPresenceReport(l: PresenceLogLine): string {
 export interface PushDecisionLine {
   seq: number;
   type: string;
+  /** `urgent` bypasses presence entirely (ADR 0021), `chatter` is what presence suppresses,
+   *  `none` notifies nobody. Without it a by-design ask looks like a suppression failure. */
+  notificationClass: "urgent" | "chatter" | "none";
   actor: string;
   /** Board slug, for a human; the id is the key presence is actually stored under. */
   board: string;
@@ -115,6 +118,7 @@ export function formatPushDecision(d: PushDecisionLine): string {
     `[push] decision`,
     `event=${d.seq}`,
     `type=${val(d.type)}`,
+    `class=${d.notificationClass}`,
     `actor=${val(d.actor)}`,
     `board=${val(d.board)}`,
     `boardId=${val(d.boardId)}`,

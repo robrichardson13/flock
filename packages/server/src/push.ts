@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import webpush from "web-push";
 import {
+  notificationClass,
   notificationFor,
   notifyTargets,
   recipientsOf,
@@ -231,6 +232,7 @@ export function startPushPump(opts: {
         formatPushDecision({
           seq: event.seq,
           type: event.type,
+          notificationClass: notificationClass(event) ?? "none",
           actor,
           board: boardSlug,
           boardId: event.boardId,
