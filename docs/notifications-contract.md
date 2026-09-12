@@ -1199,3 +1199,188 @@ truth table; `packages/server/src/push.test.ts` drives the real predicate throug
    seconds → one alert immediately, then one quiet "10 new in …" update roughly a minute later;
    `flock ask` buzzes both devices regardless of presence on either. Use a throwaway board or
    `FLOCK_DB` pointed at the scratchpad, deleted (or discarded) before close-out.
+
+---
+
+## 5. Levels, settled, and settings — ADR 0024
+
+Companion to [ADR 0024](adr/0024-notification-levels.md), the same way §1–4 are to ADR 0017. The
+ADR says why a post carries a level and why the human subscribes to some of them; this section is
+the shapes.
+
+### 5.1 The three levels
+
+`packages/core/src/notify-levels.ts`, split out of `notify.ts` to keep both under 300 lines.
+
+```ts
+export type NotifyLevel = "needs-me" | "review" | "info";
+export type DeclaredNotifyLevel = "review" | "info";
+```
+
+`needs-me > review > info` is a presentation order, not a delivery threshold; the toggles are
+independent (§5.3).
+
+`levelFor(event, ctx): NotifyLevel | null` resolves the level of one event, first match wins:
+
+1. `card.asked`, and `card.moved` → `awaiting-human`, are `needs-me`. Nothing in `data` can
+   downgrade them.
+2. `event.data.level`, when it is `"review"` or `"info"` — what the author declared.
+3. `comment.posted` carrying one or more image attachments → `review`.
+4. Any `message.posted` or `comment.posted` whose body contains `github.com/<owner>/<repo>/pull/<n>`
+   → `review`.
+5. `info`.
+
+`null` for every other event type: reactions, claims, closes and the rest produce no notification
+and never have.
+
+`assertDeclarableLevel(level): DeclaredNotifyLevel | undefined` is what an author's input goes
+through. `undefined` passes; `"review"` and `"info"` pass; `"needs-me"` throws a `FlockError`
+pointing at `flock ask`; anything else throws, so a typo fails loudly instead of landing as `info`.
+
+### 5.2 What delivers
+
+`deliversAt(level, settings): boolean` reads that level's own toggle and nothing else.
+
+`deliversFor(event, level, settings): boolean` is the gate the pump asks. It is `deliversAt` plus
+one event-shaped rule (d15):
+
+```ts
+if (event.type === "comment.posted" && level !== "review") return false;
+return deliversAt(level, settings);
+```
+
+A card comment reaches a device at `review` and at nothing else — a screenshot attached, an
+explicit `--level review`, or `x-flock-notify: review`. An `info` comment never pushes, not even
+with "Everything else" on, so that toggle keeps meaning every line of the *channel*.
+
+Payload shapes, added to §1.3's three:
+
+| Event | title | body | url / tag |
+| --- | --- | --- | --- |
+| `comment.posted` | the card's title, else `#<n>` | `<actor>: <gist>`, plus `📎 N image(s)` | `#/b/<slug>/c/<n>` |
+| settled (synthesized) | `<board> has settled` | `Quiet for <n>. Last: <gist>` | `#/b/<slug>/cards` |
+
+`NotificationPayload` gains an optional `boardTitle`, set on the comment payload only. It is the
+name `mergedNotification` folds on, so a review comment batched with a channel line reads
+`2 new in flock` rather than `2 new in Fix the bell`.
+
+`notificationClass` calls `comment.posted` **chatter**: it batches on the recipient's board key and
+presence suppresses it, exactly like a channel message. Asks stay urgent.
+
+### 5.3 Settings
+
+`SCHEMA_VERSION` goes **7 → 8**. One new table, additive, no backfill — absence of a row *is* the
+default, and nothing is written until the human touches a toggle.
+
+```sql
+CREATE TABLE IF NOT EXISTS notify_settings (
+  actor            TEXT    NOT NULL,
+  board_id         TEXT    NOT NULL DEFAULT '',   -- '' = this actor's global default
+  needs_me         INTEGER,                       -- NULL = inherit
+  review           INTEGER,
+  info             INTEGER,
+  settled          INTEGER,
+  settled_after_ms INTEGER,
+  updated_at       TEXT    NOT NULL,
+  PRIMARY KEY (actor, board_id)
+);
+```
+
+Every flag column is nullable, and that is load-bearing: `NULL` means inherit, which is what makes
+a per-board row an override rather than a copy. A board row with every field `NULL` reads
+identically to no row at all — that is what "Same as all boards" writes.
+
+```ts
+export interface NotifySettings {        // resolved; every field concrete
+  needsMe: boolean; review: boolean; info: boolean; settled: boolean; settledAfterMs: number;
+}
+export interface NotifySettingsFields {  // one stored row; null = inherit
+  needsMe: boolean | null; review: boolean | null; info: boolean | null;
+  settled: boolean | null; settledAfterMs: number | null;
+}
+export const DEFAULT_NOTIFY_SETTINGS: NotifySettings;   // needs-me on, review on, info off,
+                                                        // settled off, 20 minutes
+export const SETTLED_THRESHOLD_MIN_MS = 5 * 60_000;
+export const SETTLED_THRESHOLD_MAX_MS = 24 * 60 * 60_000;
+export function clampSettledThreshold(ms: number): number;
+export function resolveNotifySettingsFields(global, board): NotifySettings;  // pure, per field
+```
+
+On `Flock`:
+
+- `notifySettings(actor, boardId): NotifySettingsFields | null` — one raw row, `''` for global.
+- `resolveNotifySettings(actor, boardId): NotifySettings` — the global row, then the board row,
+  then the built-in default, per field. This is what the pump calls, once per (recipient, board)
+  per event.
+- `putNotifySettings(actor, boardId, patch): NotifySettingsFields` — only the patched fields
+  change, an explicit `null` clears one back to inherit, `settledAfterMs` is clamped, and a
+  `boardId` that is neither `''` nor a real board is refused.
+
+### 5.4 Settled
+
+`packages/core/src/settled.ts`. A `SettledTracker` takes `isLooking` and `thresholdFor` as injected
+functions — the same shape `NotificationBatcher` uses — so it never imports presence.ts and tests
+drive it with a stub clock.
+
+- `onEvent(event, recipients)` arms `(recipient, boardId)` for every recipient except the event's
+  own author, clearing that key's fired flag. A person's own last word is not a board going quiet
+  on them.
+- `tick(now)` returns one `SettledFire { actor, boardId, quietMs }` per armed key whose quiet
+  period has elapsed and whose `isLooking` is false, and marks it fired. A key being looked at
+  stays armed and fires as soon as looking stops; it is deferred, not dropped.
+- Nothing fires twice for one quiet period. The flag is what "never repeated" means here, not a
+  cooldown.
+- Thresholds are clamped to `[5 minutes, 24 hours]`. `SETTLED_MAX_KEYS = 200`, evicting the
+  least recently armed.
+
+The pump runs `tick()` inside its existing 500ms loop, **only while it holds the delivery lease**
+(ADR 0023), and drops and rebuilds the tracker on a takeover and on `stop()` so a restart or a
+handover never double-fires. Settled sits beside the batcher: it never folds into a message batch,
+never resets one, and is never counted into `<n> new in <board>`.
+
+### 5.5 CLI
+
+- `flock say [BOARD] TEXT --level review|info` and `flock comment [BOARD] N TEXT --level review|info`.
+- `flock notify settings [BOARD] [--global] [--json]` → `{ boardId, board, resolved, raw, global }`.
+  `resolved` is the effective `NotifySettings`; `raw` and `global` are stored rows, `null` when
+  never written.
+- `flock notify set [BOARD] [--global] [--needs-me on|off] [--review on|off] [--everything on|off]
+  [--settled on|off] [--threshold 30m|2h|<minutes>]`. Only named flags change. `--everything` is
+  the `info` field. No flags at all is an error, as is a bad `on|off` or a bad threshold.
+
+Exit codes follow the house rules: unknown board 2, everything here else 1.
+
+### 5.6 Routes
+
+- `x-flock-notify: review|info` on `POST /api/boards/:b/messages` and
+  `POST /api/boards/:b/cards/:n/comments`. Validated exactly as `--level` is; `needs-me` and
+  anything unrecognised are a 400 `{ error, code }`.
+- `GET /api/notify/settings[?board=<slug>]` → `{ boardId, raw, resolved }` for the calling actor.
+  Omit `board` for the global row. Unknown slug is 404.
+- `PUT /api/notify/settings[?board=<slug>]` takes a patch of
+  `{ needsMe?, review?, info?, settled?, settledAfterMs? }` — `boolean | null` for the flags,
+  `number | null` for the threshold, anything else a 400 — and returns the same shape after
+  writing.
+
+### 5.7 Web
+
+`packages/web/src/Notifications.tsx` gains a **What buzzes** section between the on/off button and
+Devices, rendered only when push is on. Four switches — Needs me, Review requested, Everything
+else, Quiet check-in — in that order, urgent to chatty, each with one line of explanation. Quiet
+check-in reveals a threshold select when it is on. Saves are optimistic on toggle, reverting with
+an inline error if the `PUT` fails.
+
+Opened from Home (the bell), the section edits the actor's global row. Opened from a board — the
+desktop board menu, or the phone brief sheet — it edits that board's override and gains a
+**Same as all boards** row, disabled while there is no override. The bell stays Home-only chrome.
+
+The bell renders `bellOff` **without** a warn dot when push is on but every level toggle is muted,
+alongside the existing blocked treatment. Subscribed and silent is a state a person can reach by
+accident, and a bell that looks armed while nothing can ring is the one dishonest thing this UI
+could do.
+
+### 5.8 Observability
+
+The `[push] decision` line of §2.3 carries `level=`, `deliver=` and `settings=` alongside the
+presence fields, so "why didn't that buzz" has one line to read rather than two logs to
+cross-reference. A fired check-in logs `[push] settled actor=<a> board=<slug> quiet=<n>`.

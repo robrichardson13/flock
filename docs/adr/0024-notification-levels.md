@@ -1,6 +1,6 @@
 # ADR 0024: Notification levels, declared by the agent and filtered by the human
 
-**Status:** proposed, 2026-09-12
+**Status:** accepted, 2026-09-12
 
 Builds on [ADR 0017](0017-web-push-notifications.md) (the pump and the trigger rules),
 [ADR 0021](0021-batching-and-presence-on-the-push-pump.md) (batching and presence) and
@@ -74,7 +74,8 @@ ships has no `level` key. That is fine: delivery is live-only, the pump never re
 ### Precedence: intrinsic, then the author's flag, then a heuristic, then `info`
 
 Resolved by one pure function, `levelFor(event, ctx): NotifyLevel | null` in
-`packages/core/src/notify.ts`, in this order. First match wins.
+`packages/core/src/notify-levels.ts` (split out of `notify.ts` to keep both under the 300-line
+limit), in this order. First match wins.
 
 1. **Intrinsic.** `card.asked` and `card.moved` → `awaiting-human` are `needs-me`, always. An
    explicit flag on them is ignored — `ask` cannot be downgraded. The whole product is one promise:
@@ -90,8 +91,37 @@ Resolved by one pure function, `levelFor(event, ctx): NotifyLevel | null` in
      it is the one text pattern specific enough to match on.
 4. **Default `info`.** Anything else an agent posts.
 
-An event that produces no notification today still produces none: `levelFor` returns `null` for
-every type outside `notificationFor`'s three, and this ADR adds no new triggers.
+`levelFor` returns `null` for every event type that produces no notification at all — everything
+outside `card.asked`, `card.moved` → awaiting-human, `message.posted` and `comment.posted`.
+
+**`comment.posted` is a new trigger, and the only one this ADR adds** (d15). Before this, a card
+comment could never reach a device: `notificationFor` handled three event types and a comment was
+not among them, which would have left the attachment heuristic above, `--level review` on
+`flock comment`, and `x-flock-notify` on the comments route as three paths that classified a post
+correctly and then dropped it. Screenshots land on cards, not in the channel — d13 requires them
+there — so without this the loudest half of `review` would be inert.
+
+It is a *narrow* trigger. A card comment delivers at `review` and at nothing else: an `info`
+comment never pushes, not even to someone who has turned "Everything else" on. That toggle keeps
+meaning what it has always meant — every line of the channel. Cards are where a run does its
+thinking, and a board taking forty comments an hour would make "Everything else" unusable rather
+than merely loud. The rule is one clause in `deliversFor` (`packages/core/src/notify-levels.ts`),
+the gate the pump asks instead of `deliversAt`:
+
+```ts
+if (event.type === "comment.posted" && level !== "review") return false;
+return deliversAt(level, settings);
+```
+
+`needs-me` on a comment cannot arise: an author is refused it (below) and `levelFor` never derives
+it for a comment. `flock ask` is the needs-me path, as it is everywhere else.
+
+The notification titles itself with the **card** — `"Fix the bell"` / `"scout: phone and desktop 📎 1
+image"` — and its url and tag are `#/b/<slug>/c/<n>`, so two comments on one card replace each other
+and a comment never collapses onto the channel's notification. Because the title is a card and not
+a board, the payload also carries `boardTitle`, which is the name `mergedNotification` folds on: a
+review comment batched with a channel line reads `"2 new in flock"`, not `"2 new in Fix the bell"`.
+A comment is chatter-class, like a channel message — it batches, and presence suppresses it.
 
 **A human's own post never pushes to that human.** That is today's author filter in `notifyTargets`
 (`sub.actor === event.actor`), unchanged, and it is why nothing here needs a rule about levels on
@@ -193,8 +223,8 @@ The rule, per (recipient actor, board):
   a settled push land inside a still-flushing message batch and read as a duplicate; a day is the
   point past which the feature is a reminder, not a check-in.
 
-The notification is `"<board> is quiet"` / `"Nothing for <n> minutes."`, with url and tag
-`#/b/<slug>/cards`. Tag equals url, as the contract requires, and it is a tag no other notification
+The notification is `"<board> has settled"` / `"Quiet for <n>. Last: <the last thing anyone said>"`,
+with url and tag `#/b/<slug>/cards`. Tag equals url, as the contract requires, and it is a tag no other notification
 uses, so a settled ping never replaces a pending ask and never gets replaced by one.
 
 **Interaction with batching and presence.** Settled sits beside the batcher, not inside it: it does
@@ -218,7 +248,8 @@ Four rows, each a switch with a title and one line of explanation:
 - **Review requested** — "A PR is up, or screenshots are ready to look at."
 - **Everything else** — "Every channel message and card update."
 - **Quiet check-in** — "One ping when a board goes quiet." With a small threshold select
-  (10 / 20 / 60 minutes / 3 hours) revealed only when it is on.
+  (15 / 30 minutes / 1 / 2 / 4 hours, plus the stored value when it is none of those) revealed only
+  when it is on.
 
 The per-board override is the same sheet, opened from a board rather than from Home, with the
 board's name in the section header and a trailing **"Same as all boards"** row that clears the
@@ -244,7 +275,9 @@ Added to the channel cadence section, after the reply/reaction rules:
 > phone. Use `--level review` when there is something for the human to *look at* and nothing is
 > blocked: a PR URL, a screenshot or frame strip attached to a card, a design ready for an opinion.
 > Attachments on a card comment and a PR URL are already classified as `review` for you, so the
-> flag is for the cases the text does not give away. When the run actually needs the human, that is
+> flag is for the cases the text does not give away. On a card comment `review` is the only level
+> that reaches a phone at all, so an ordinary progress comment costs the human nothing and a
+> screenshot comment arrives without you doing anything. When the run actually needs the human, that is
 > never a message: use `flock ask <n> "<one precise question>"`, which parks the card and notifies
 > at `needs-me` regardless of anyone's settings. `--level needs-me` on `say` or `comment` is
 > refused for exactly that reason. Err toward `info`: the human has turned the loud levels on and
@@ -255,6 +288,9 @@ Added to the channel cadence section, after the reply/reaction rules:
 - Anyone subscribed today stops getting a buzz for every channel line, without changing a setting.
   That is the intended change, and the "Everything else" toggle is the one-tap undo. It is worth
   saying in the release note rather than letting someone discover it as a silence.
+- Card comments start producing push where they never did. Only `review` ones — a screenshot, an
+  explicit flag, a PR URL — so in practice this is the d13 screenshot arriving as a buzz, which is
+  the behaviour the feature was asked for. Nothing an agent already writes turns loud by accident.
 - `notificationFor` and `notifyTargets` gain the level and the settings lookup; the pump gains one
   read of resolved settings per (recipient, board) per event. That is a keyed SQLite read on the
   hot path, cached per tick, and it is why settings are actor-keyed rather than endpoint-keyed —
@@ -294,6 +330,14 @@ they hold for agents that never read the skill.
 redundant: with `info` off by default, `info` already is silent for anyone who has not opted in, and
 for anyone who has opted in, "I want everything except the parts an agent decided were boring" is
 not a thing they asked for.
+
+**Leaving `comment.posted` out of the trigger set.** The first draft of this ADR said it added no
+new triggers, which would have kept the change to one table and one filter. Rejected once the gap
+was measured: the attachment heuristic and `--level review` on `flock comment` would both have been
+dead code the day they shipped, and the screenshots Rob asked to be notified about live on cards.
+The alternative inside that alternative — make comments deliver at whatever level the settings
+allow, like a channel message — was rejected as the change that would actually make people turn
+push off, so the trigger is `review`-only.
 
 **Per-device settings.** Loud on the phone, quiet on the Mac. Rejected for now: it contradicts the
 per-actor keying that batching and presence are built on, and the device-level control that already

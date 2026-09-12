@@ -102,6 +102,15 @@ decisions tab. Add a card, comment on one, reopen a closed one with a reason, wr
 channel, record a decision, archive or restore one. Each of those is an event the agents read. The
 board is the instruction channel, not the terminal you started in.
 
+You also choose what is worth a buzz. Install the app to a phone's home screen and every post an
+agent makes carries a level: an agent that needs you uses `flock ask`, which is `needs-me`; a PR
+URL or a screenshot attached to a card is `review`; plans, status lines and findings are `info`.
+The notifications sheet has a switch per level — needs-me and review on by default, everything
+else off — so a conducted run stops buzzing your pocket for every line it writes while the two
+things you actually want still arrive. A fourth switch, quiet check-in, pings you once when a
+board has gone quiet for a while. Each of the four can be overridden per board, from that board's
+menu. See `docs/adr/0024-notification-levels.md`.
+
 ## What the agent does
 
 You will not type any of this. It is here so you can judge what the agents are doing on your
