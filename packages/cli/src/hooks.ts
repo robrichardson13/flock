@@ -1,5 +1,5 @@
 /**
- * `flock setup --hooks` / `--no-hooks` / `--remove-hooks` (ADR 0023 §2 "Is mutating
+ * `flock setup --hooks` / `--no-hooks` / `--remove-hooks` (ADR 0026 §2 "Is mutating
  * ~/.claude/settings.json acceptable?"). Writes a marked `SessionEnd` + `SubagentStop` hook entry
  * that invokes `flock telemetry record`, on the same terms `path-setup.ts` already established
  * for the PATH line it writes into a shell rc: never silent, marked, additive, opt-out-able

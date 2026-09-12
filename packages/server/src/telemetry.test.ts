@@ -5,6 +5,18 @@ import type { HarnessReader, LivenessReading, RunHint, RunRef } from "@flock/har
 import { createApp } from "./index.ts";
 import { actorTelemetryTotals, createTelemetryRefresher, gateTranscripts, isLoopbackRequest, sessionFromHeader } from "./telemetry.ts";
 
+/** The slice of a card/actor payload these tests assert on. Narrow by hand rather than `any`:
+ *  the route's own return type is inferred by Hono and not exported, and the point of the
+ *  assertion is exactly that these keys are present in the JSON. */
+type ApiBody = {
+  card: { num: number };
+  name: string;
+  kind: string;
+  telemetry: Array<Record<string, unknown>>;
+  totals: { sessions: number; cards: number; costUsd: number | null; costExact: boolean; toolCalls: number | null };
+  duration: { claimedAt: string | null; closedAt: string | null; ms: number | null };
+};
+
 const scoutSession = "claude-code:8ea8caf2-d288-4e0a-89de-04c45158535c";
 const scout: Actor = { name: "scout", kind: "agent", session: scoutSession };
 const ada: Actor = { name: "ada", kind: "human" };
@@ -232,7 +244,7 @@ describe("GET /api/boards/:b/cards/:n telemetry and duration", () => {
 
     const res = await app.request(`/api/boards/${board.id}/cards/${card.num}`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as any;
+    const body = (await res.json()) as ApiBody;
     expect(body.card.num).toBe(card.num);
     expect(Array.isArray(body.telemetry)).toBe(true);
     expect(body.telemetry[0].toolCalls).toBe(9);
@@ -246,7 +258,7 @@ describe("GET /api/boards/:b/cards/:n telemetry and duration", () => {
     flock.createCard(ada, board.id, { title: "No harness" });
 
     const res = await app.request(`/api/boards/${board.id}/cards/1`);
-    const body = (await res.json()) as any;
+    const body = (await res.json()) as ApiBody;
     expect(body.telemetry).toEqual([]);
   });
 
@@ -256,11 +268,11 @@ describe("GET /api/boards/:b/cards/:n telemetry and duration", () => {
     const card = flock.createCard(scout, board.id, { title: "X" });
 
     const offLoopback = await app.request(`/api/boards/${board.id}/cards/${card.num}`);
-    const offBody = (await offLoopback.json()) as any;
+    const offBody = (await offLoopback.json()) as ApiBody;
     expect(offBody.telemetry[0].transcript).toBeUndefined();
 
     const onLoopback = await app.request(`/api/boards/${board.id}/cards/${card.num}`, {}, { requestIP: () => ({ address: "127.0.0.1" }) });
-    const onBody = (await onLoopback.json()) as any;
+    const onBody = (await onLoopback.json()) as ApiBody;
     expect(onBody.telemetry[0].transcript).toBe("/tmp/fake.jsonl");
   });
 });
@@ -276,7 +288,7 @@ describe("GET /api/boards/:b/actors/:name telemetry and totals", () => {
 
     const res = await app.request(`/api/boards/${board.id}/actors/scout`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as any;
+    const body = (await res.json()) as ApiBody;
     expect(body.name).toBe("scout");
     expect(body.kind).toBe("agent");
     expect(Array.isArray(body.telemetry)).toBe(true);

@@ -158,7 +158,7 @@ TEAM
                                       Harness sessions for card N, or for --as/FLOCK_ACTOR when N
                                       is omitted: cost, context used/max, tool calls, liveness.
                                       Re-reads any session that has not ended yet; --refresh forces
-                                      every session, including ones already ended. See docs/adr/0025.
+                                      every session, including ones already ended. See docs/adr/0026.
 
 SETUP
   init [TITLE] [--body MD | --body-file F] [--local]
@@ -179,7 +179,7 @@ SETUP
                                       --hooks opts in to a marked SessionEnd/SubagentStop entry in
                                       ~/.claude/settings.json that reports harness telemetry
                                       promptly (off by default; FLOCK_NO_HOOKS=1 always refuses
-                                      it); --remove-hooks deletes exactly that entry. See docs/adr/0025.
+                                      it); --remove-hooks deletes exactly that entry. See docs/adr/0026.
   up [--port N] [--host H] [--isolated | --db PATH] [--foreground] [--open]
      [--tailscale | --no-tailscale]
                                       Start the daemon in the background (detached; survives the

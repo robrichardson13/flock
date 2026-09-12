@@ -1,5 +1,5 @@
 /**
- * The Claude Code `HarnessReader` (ADR 0023 §2, §4, §6). Resolves a run key to a transcript
+ * The Claude Code `HarnessReader` (ADR 0026 §2, §4, §6). Resolves a run key to a transcript
  * path, reads it bounded, and computes liveness from pid + mtime. Never throws: a missing or
  * truncated transcript comes back as a `partial` reading with a reason, not an exception.
  */
@@ -65,7 +65,7 @@ export class ClaudeCodeReader implements HarnessReader {
     return this.livenessFrom(ref, scan);
   }
 
-  /** Shared by `read()` (a full reading still wants a fresh liveness, per ADR 0023 §3 "recomputed
+  /** Shared by `read()` (a full reading still wants a fresh liveness, per ADR 0026 §3 "recomputed
    * on every refresh") and `liveness()` (the cheap standalone poll). */
   private async livenessFrom(ref: RunRef, scan: TranscriptScan): Promise<LivenessReading> {
     if (scan.costState) return { liveness: "gone", endedReason: "clean", lastActivityAt: scan.mtime.toISOString() };
@@ -157,7 +157,7 @@ function readingFromScan(ref: RunRef, scan: TranscriptScan, contextMax: number |
   };
 }
 
-/** Sum `cost-state.modelUsage` across every model into one session total (ADR 0023: "session
+/** Sum `cost-state.modelUsage` across every model into one session total (ADR 0026: "session
  * numbers are session numbers" — flock never splits, but it does sum across models it ran). */
 function combinedModelUsage(byModel: Record<string, { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }> | undefined) {
   if (!byModel || Object.keys(byModel).length === 0) return undefined;

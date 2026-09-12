@@ -1,5 +1,5 @@
 /**
- * Server-side half of harness telemetry (ADR 0023 §2 "who triggers a refresh" / §5 "surface"):
+ * Server-side half of harness telemetry (ADR 0026 §2 "who triggers a refresh" / §5 "surface"):
  * refresh-on-read for a card or actor payload, and the shaping (transcript gating, actor totals)
  * those payloads need. Core does the storage and the group-by; `@flock/harness` does the actual
  * transcript read; this file is only the policy that ties a request to both, bounded so a page
@@ -8,7 +8,7 @@
 import type { Flock, HarnessSessionTelemetry } from "@flock/core";
 import type { HarnessRegistry } from "@flock/harness/registry";
 
-/** ADR 0023 §2: a non-ended session is refreshed when its stored reading is older than this. */
+/** ADR 0026 §2: a non-ended session is refreshed when its stored reading is older than this. */
 export const REFRESH_TTL_MS = 15_000;
 /** How many transcript reads may run at once across the whole server. Bounded, not per-request. */
 export const MAX_CONCURRENT_REFRESHES = 4;
@@ -43,7 +43,7 @@ export interface TelemetryRefresher {
 
 /**
  * Builds the refresh-on-read policy over one `Flock` and one harness registry. A session with
- * `endedAt` set is immutable and is never re-read (ADR 0023). A session with no stored row yet
+ * `endedAt` set is immutable and is never re-read (ADR 0026). A session with no stored row yet
  * (`observedAt: ""`) is always a candidate, bounded by the same TTL against the last *attempt*
  * (not just the last successful read) so a reader that keeps failing does not get hammered on
  * every page view. Refreshes for the same run key are single-flight: concurrent requests for the
@@ -126,7 +126,7 @@ async function doRefresh(
   }
 }
 
-/** ADR 0023 §2 "Privacy": the transcript path is a convenience for a human on this machine.
+/** ADR 0026 §2 "Privacy": the transcript path is a convenience for a human on this machine.
  * Since `flock serve` can be fronted onto a tailnet, the HTTP API omits it off loopback. */
 export function gateTranscripts(entries: HarnessSessionTelemetry[], loopback: boolean): HarnessSessionTelemetry[] {
   if (loopback) return entries;

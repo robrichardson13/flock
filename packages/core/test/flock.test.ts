@@ -366,7 +366,7 @@ describe("runtime", () => {
     expect(actor.session).toBeUndefined();
   });
 
-  test("session (ADR 0022) lands on the event and caches onto the actor row, and survives a session-less write", () => {
+  test("session (ADR 0026) lands on the event and caches onto the actor row, and survives a session-less write", () => {
     const { f, board } = fresh();
     const scoutRun1: Actor = { name: "scout", kind: "agent", session: "claude-code:8ea8caf2-…" };
     const c = f.createCard(scoutRun1, board.id, { title: "X" });

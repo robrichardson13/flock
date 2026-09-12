@@ -8,7 +8,7 @@ const MAX_SESSION_LEN = 200;
 /**
  * Trim, lowercase, and cap each field at 64 characters; drop empty strings. Freeform on
  * purpose — harnesses disagree about the effort ladder, and a rejected value is worse than
- * an unfamiliar one. `session` is the exception: it is an opaque lookup key (ADR 0023), so it
+ * an unfamiliar one. `session` is the exception: it is an opaque lookup key (ADR 0026), so it
  * is trimmed and length-capped but never lowercased — a reader matches it byte for byte against
  * a case-sensitive session/agent id.
  */
@@ -54,9 +54,9 @@ export function detectRuntime(env: NodeJS.ProcessEnv = process.env): Runtime {
     out.harness = harness;
     if (env.CLAUDE_EFFORT) out.effort = env.CLAUDE_EFFORT;
 
-    // ADR 0023: the run key is `<family>:<session id>`, family not version, so it survives a
+    // ADR 0026: the run key is `<family>:<session id>`, family not version, so it survives a
     // harness upgrade mid-run. Inside a subagent this is still the *parent's* session id — there
-    // is no per-agent env var — which is a known, documented coarseness (ADR 0023 §2).
+    // is no per-agent env var — which is a known, documented coarseness (ADR 0026 §2).
     const sessionId = env.CLAUDE_CODE_SESSION_ID?.trim();
     if (sessionId) out.session = `claude-code:${sessionId}`;
   }

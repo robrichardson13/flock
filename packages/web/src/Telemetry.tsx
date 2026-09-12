@@ -1,5 +1,5 @@
 /**
- * ADR 0023's web surfaces: the card page's "Run" block (one row per session that worked the
+ * ADR 0026's web surfaces: the card page's "Run" block (one row per session that worked the
  * card) and the actor page's totals strip. Every number here comes straight off the card/
  * actor payload the caller already fetched — no polling of its own beyond the existing
  * SSE-coalesced refetch, except a light 30s tick so the live duration and "last heard" text
@@ -7,18 +7,20 @@
  * unmount; it never fires a network request.
  *
  * `telemetry-format.ts` carries every pure number-to-string function; this file is only the
- * markup around them. Every reading is optional per ADR 0023 (a session an agent never linked
+ * markup around them. Every reading is optional per ADR 0026 (a session an agent never linked
  * writes nulls), so nothing here assumes a field exists.
  */
 import { useEffect, useState } from "react";
 import type { CardDuration, CardStatus, HarnessSessionTelemetry } from "./api.ts";
 import {
+  alsoWorkedAcross,
   contextPercent,
   formatAgo,
   formatContext,
   formatCostUsd,
   formatDurationMs,
   formatToolCalls,
+  hasReadings,
   LIVENESS_LABEL,
   liveDurationMs,
   modelDiffers,
@@ -48,7 +50,7 @@ function useNow(active: boolean): number {
 }
 
 /** The model chip: the observed model when the reader found one, in a tooltip that says so
- *  when it disagrees with what the agent declared (ADR 0023 §1). Renders nothing without
+ *  when it disagrees with what the agent declared (ADR 0026 §1). Renders nothing without
  *  a model either way — a session with neither has nothing this chip can say. */
 function ModelChip({ t }: { t: HarnessSessionTelemetry }) {
   const model = resolvedModel(t);
@@ -57,7 +59,7 @@ function ModelChip({ t }: { t: HarnessSessionTelemetry }) {
   return <span className="run-model" title={title}>{model}</span>;
 }
 
-/** The context bar: a point-in-time reading (ADR 0023 §3 — a compaction resets it), so the
+/** The context bar: a point-in-time reading (ADR 0026 §3 — a compaction resets it), so the
  *  percentage describes the window now, not the run. Renders the dash, no bar at all, when
  *  either half is unknown. */
 function ContextBar({ used, max }: { used: number | undefined; max: number | undefined }) {
@@ -85,23 +87,25 @@ function LivenessDot({ t, nowMs }: { t: HarnessSessionTelemetry; nowMs: number }
   );
 }
 
-/** The tool-call count, with the top-three breakdown as its tooltip (ADR 0023 §5). */
+/** The tool-call count, with the top-three breakdown as its tooltip (ADR 0026 §5). */
 function ToolCount({ t }: { t: HarnessSessionTelemetry }) {
   const top = topTools(t.tools);
   const title = top.length > 0 ? top.map(([name, count]) => `${name}: ${count}`).join(", ") : undefined;
   return <span className="run-tools" title={title}>{formatToolCalls(t.toolCalls)}</span>;
 }
 
-/** "also worked #6, #7" — only when this session touched more than the card it is shown on. */
-function AlsoWorked({ cards }: { cards: number[] }) {
+/** "also worked #6, #7" — on the card page, said once for the whole block over every session
+ *  in it, rather than repeated on each row where two sessions usually name the same other
+ *  cards. The actor page has no "this card" to be *also* relative to, so it says "worked". */
+function AlsoWorked({ cards, label = "also worked" }: { cards: number[]; label?: string }) {
   if (cards.length === 0) return null;
-  return <span className="run-also muted small">also worked {cards.map((n) => `#${n}`).join(", ")}</span>;
+  return <span className="run-also muted small">{label} {cards.map((n) => `#${n}`).join(", ")}</span>;
 }
 
 /** One session's row on the card page: model, cost, context, the card's own wall clock,
  *  tool count and liveness. `cardDurationMs` is flock's claim-to-close clock — the same for
  *  every row on a given card — with the session's own harness-reported duration in the
- *  tooltip, exactly as ADR 0023 §5 draws it. */
+ *  tooltip, exactly as ADR 0026 §5 draws it. */
 function RunRow({ t, cardDurationMs, nowMs }: { t: HarnessSessionTelemetry; cardDurationMs: number | null; nowMs: number }) {
   return (
     <div className="run-row">
@@ -113,7 +117,6 @@ function RunRow({ t, cardDurationMs, nowMs }: { t: HarnessSessionTelemetry; card
       </span>
       <ToolCount t={t} />
       <LivenessDot t={t} nowMs={nowMs} />
-      <AlsoWorked cards={t.alsoWorked} />
     </div>
   );
 }
@@ -121,24 +124,33 @@ function RunRow({ t, cardDurationMs, nowMs }: { t: HarnessSessionTelemetry; card
 /**
  * The card page's Run block: one row per session that worked this card. Renders nothing at
  * all when `telemetry` is empty, so an unlinked board looks exactly as it did before this
- * feature (ADR 0023 §5).
+ * feature (ADR 0026 §5).
  */
 export function RunBlock({ telemetry, duration, status }: { telemetry: HarnessSessionTelemetry[]; duration: CardDuration; status: CardStatus }) {
   const nowMs = useNow(status === "doing");
   if (telemetry.length === 0) return null;
+  // A session flock linked but could not read renders as a line of em dashes. Drop those rows
+  // when a session with real readings is there to show, and keep them when they are all there
+  // is — the block still says "something ran here", it just does not say it twice.
+  const withReadings = telemetry.filter(hasReadings);
+  const rows = withReadings.length > 0 ? withReadings : telemetry;
+  const alsoWorked = alsoWorkedAcross(telemetry);
   const cardDurationMs = liveDurationMs(duration, nowMs);
   return (
     <div className="run-block" role="group" aria-label="Run">
       <h2>Run</h2>
-      {telemetry.map((t) => (
+      {rows.map((t) => (
         <RunRow key={t.key} t={t} cardDurationMs={cardDurationMs} nowMs={nowMs} />
       ))}
+      <AlsoWorked cards={alsoWorked} />
     </div>
   );
 }
 
 /** The actor page's totals strip: cost, tokens, tool calls, session count and total time
- *  across distinct sessions — never re-summing a session that touched several cards. */
+ *  across distinct sessions — never re-summing a session that touched several cards. The
+ *  strip only appears with two or more sessions; with one it would restate the single row
+ *  beneath it, mostly in em dashes. */
 export function ActorTelemetryStrip({
   telemetry,
   totals,
@@ -152,15 +164,17 @@ export function ActorTelemetryStrip({
   const time = totalDurationMs(telemetry);
   return (
     <div className="run-block actor-telemetry" role="group" aria-label="Run totals">
-      <div className="actor-totals">
-        <span title={totals.costExact ? undefined : "at least one session's cost is inexact"}>
-          {formatCostUsd(totals.costUsd ?? undefined)}{!totals.costExact && totals.costUsd !== null ? "+" : ""}
-        </span>
-        <span>{tokens === null ? UNKNOWN : tokens.toLocaleString()} tokens</span>
-        <span>{formatToolCalls(totals.toolCalls ?? undefined)}</span>
-        <span>{totals.sessions} {totals.sessions === 1 ? "session" : "sessions"}</span>
-        <span>{formatDurationMs(time)}</span>
-      </div>
+      {telemetry.length > 1 ? (
+        <div className="actor-totals">
+          <span title={totals.costExact ? undefined : "at least one session's cost is inexact"}>
+            {formatCostUsd(totals.costUsd ?? undefined)}{!totals.costExact && totals.costUsd !== null ? "+" : ""}
+          </span>
+          <span>{tokens === null ? UNKNOWN : tokens.toLocaleString()} tokens</span>
+          <span>{formatToolCalls(totals.toolCalls ?? undefined)}</span>
+          <span>{totals.sessions} {totals.sessions === 1 ? "session" : "sessions"}</span>
+          <span>{formatDurationMs(time)}</span>
+        </div>
+      ) : null}
       {telemetry.map((t) => (
         <div className="run-row actor-run-row" key={t.key}>
           <ModelChip t={t} />
@@ -169,7 +183,7 @@ export function ActorTelemetryStrip({
           <span className="run-duration" title="session duration">{formatDurationMs(t.durationMs ?? null)}</span>
           <ToolCount t={t} />
           <LivenessDot t={t} nowMs={nowMs} />
-          <AlsoWorked cards={t.alsoWorked} />
+          <AlsoWorked cards={t.alsoWorked} label="worked" />
         </div>
       ))}
     </div>

@@ -1,5 +1,5 @@
 /**
- * Bounded line-by-line parsing of one Claude Code transcript (ADR 0023
+ * Bounded line-by-line parsing of one Claude Code transcript (ADR 0026
  * "What the harnesses actually leave on disk" and "Limits"). Every read here is capped by bytes
  * and by line count; a malformed line is skipped and counted, never thrown from.
  */
@@ -38,7 +38,7 @@ export interface TranscriptScan {
   costState?: CostState;
   /** True when the head scan, the tail scan, or the tool histogram hit a bound before finishing. */
   partial: boolean;
-  /** File mtime: the liveness clock (ADR 0023 — "the only per-subagent liveness signal"). */
+  /** File mtime: the liveness clock (ADR 0026 — "the only per-subagent liveness signal"). */
   mtime: Date;
 }
 
@@ -146,7 +146,7 @@ function toolUseNames(assistantLine: Record<string, unknown>): string[] {
 }
 
 /** The last `assistant` line's model and context-usage triple: `input + cache_read +
- * cache_creation`, exactly what Claude Code's own statusline sums (ADR 0023). */
+ * cache_creation`, exactly what Claude Code's own statusline sums (ADR 0026). */
 function lastAssistantOf(lines: string[]): LastAssistant | undefined {
   for (let i = lines.length - 1; i >= 0; i--) {
     const obj = parseLine(lines[i]);

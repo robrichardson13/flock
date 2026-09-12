@@ -1,5 +1,5 @@
 /**
- * Every bound a reader must respect (ADR 0023 §2 "Limits"). Transcripts are attacker-shaped
+ * Every bound a reader must respect (ADR 0026 §2 "Limits"). Transcripts are attacker-shaped
  * input in the sense that matters — unbounded, machine-written, occasionally malformed — so
  * nothing here reads without a cap. Values are conservative defaults a caller may override; none
  * of them are policy, all of them are "how much work is this reader allowed to do".
@@ -35,7 +35,7 @@ export const PROC_START_TOLERANCE_MS = 2_000;
 
 /**
  * How long a transcript can go unmodified before a live pid is read as "idle" rather than
- * "running". ADR 0023 §4 calls this "generous" — a single long tool call is normal — and leaves
+ * "running". ADR 0026 §4 calls this "generous" — a single long tool call is normal — and leaves
  * the final number to card 7's stall detector. This default is a placeholder for that decision.
  */
 export const DEFAULT_FRESH_WINDOW_MS = 15 * 60 * 1000;

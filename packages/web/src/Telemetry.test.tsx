@@ -11,7 +11,7 @@ const session = (over: Partial<HarnessSessionTelemetry> = {}): HarnessSessionTel
   ...over,
 });
 
-describe("RunBlock absence (ADR 0023 §5: an unlinked board looks unchanged)", () => {
+describe("RunBlock absence (ADR 0026 §5: an unlinked board looks unchanged)", () => {
   it("renders nothing at all when telemetry is empty", () => {
     const html = renderToStaticMarkup(
       <RunBlock telemetry={[]} duration={{ claimedAt: null, closedAt: null, ms: null }} status="doing" />,
@@ -93,8 +93,63 @@ describe("ActorTelemetryStrip", () => {
 
   it("marks an inexact total cost", () => {
     const html = renderToStaticMarkup(
-      <ActorTelemetryStrip telemetry={[session()]} totals={{ sessions: 1, costUsd: 4.5, costExact: false, toolCalls: 3 }} />,
+      <ActorTelemetryStrip
+        telemetry={[session(), session({ key: "claude-code:def" })]}
+        totals={{ sessions: 2, costUsd: 4.5, costExact: false, toolCalls: 3 }}
+      />,
     );
     expect(html).toContain("$4.50+");
+  });
+});
+
+describe("card 16 polish (conductor's review of ADR 0026's web half)", () => {
+  const duration = { claimedAt: null, closedAt: null, ms: null };
+
+  it("says 'also worked' once for the block, not once per row", () => {
+    const html = renderToStaticMarkup(
+      <RunBlock
+        telemetry={[
+          session({ key: "claude-code:a", model: "claude-opus-5", alsoWorked: [2] }),
+          session({ key: "claude-code:b", model: "claude-sonnet-5", alsoWorked: [2, 3] }),
+        ]}
+        duration={duration}
+        status="doing"
+      />,
+    );
+    expect(html.match(/also worked/g)?.length).toBe(1);
+    expect(html).toContain("also worked #2, #3");
+  });
+
+  it("drops an all-dashes session row when a readable session is there to show", () => {
+    const html = renderToStaticMarkup(
+      <RunBlock
+        telemetry={[session({ key: "claude-code:empty" }), session({ key: "claude-code:real", model: "claude-opus-5" })]}
+        duration={duration}
+        status="doing"
+      />,
+    );
+    expect(html.match(/class="run-row"/g)?.length).toBe(1);
+    expect(html).toContain("claude-opus-5");
+  });
+
+  it("keeps an all-dashes row when it is the only session", () => {
+    const html = renderToStaticMarkup(
+      <RunBlock telemetry={[session({ key: "claude-code:empty" })]} duration={duration} status="doing" />,
+    );
+    expect(html.match(/class="run-row"/g)?.length).toBe(1);
+  });
+
+  it("hides the actor totals strip for a single session and shows it for two", () => {
+    const one = renderToStaticMarkup(
+      <ActorTelemetryStrip telemetry={[session()]} totals={{ sessions: 1, costUsd: null, costExact: true, toolCalls: null }} />,
+    );
+    expect(one).not.toContain("actor-totals");
+    const two = renderToStaticMarkup(
+      <ActorTelemetryStrip
+        telemetry={[session(), session({ key: "claude-code:def" })]}
+        totals={{ sessions: 2, costUsd: null, costExact: true, toolCalls: null }}
+      />,
+    );
+    expect(two).toContain("actor-totals");
   });
 });

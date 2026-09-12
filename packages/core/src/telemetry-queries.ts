@@ -1,5 +1,5 @@
 /**
- * The read side of harness telemetry (ADR 0022): group-bys over `events`, exactly like
+ * The read side of harness telemetry (ADR 0026): group-bys over `events`, exactly like
  * `boardActors` already does — no join table, no new notion of identity. See `telemetry.ts` for
  * the store this joins against.
  */
@@ -19,7 +19,7 @@ function readRows(db: Database, keys: string[]): Map<string, HarnessSessionRow> 
 type SessionEventGroup = { session: string; actor: string; model: string | null };
 
 /**
- * The events group-by ADR 0022 §1 describes: one row per distinct session key that wrote on
+ * The events group-by ADR 0026 §1 describes: one row per distinct session key that wrote on
  * this card, with the actor and declared model from that session's most recent write here.
  * SQLite takes the bare `actor`/`model` columns from the row that produced `MAX(seq)`, the same
  * trick `boardActors` already relies on.

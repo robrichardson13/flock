@@ -45,7 +45,7 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
   const [seed] = useState(() => readSnapshot<CardSnapshot>(snapKey.card(boardSlug, card.num)));
   const [comments, setComments] = useState<Comment[] | null>(seed?.comments ?? null);
   const [blocks, setBlocks] = useState<number[]>(seed?.blocks ?? []);
-  // ADR 0023: not part of the cached snapshot (unlike comments/blocks above) — a stale
+  // ADR 0026: not part of the cached snapshot (unlike comments/blocks above) — a stale
   // reading of a live number is worse than a blank Run block for the one round trip it
   // takes `reload()` to arrive.
   const [telemetry, setTelemetry] = useState<HarnessSessionTelemetry[]>([]);

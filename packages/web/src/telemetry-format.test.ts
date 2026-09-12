@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+  alsoWorkedAcross,
   contextPercent,
   formatAgo,
   formatCompactNumber,
@@ -7,6 +8,7 @@ import {
   formatCostUsd,
   formatDurationMs,
   formatToolCalls,
+  hasReadings,
   liveDurationMs,
   modelDiffers,
   resolvedModel,
@@ -165,5 +167,33 @@ describe("topTools", () => {
   });
   it("is empty for an absent histogram", () => {
     expect(topTools(undefined)).toEqual([]);
+  });
+});
+
+describe("hasReadings / alsoWorkedAcross (card 16 polish)", () => {
+  const s = (over: Partial<HarnessSessionTelemetry> = {}): HarnessSessionTelemetry => ({
+    key: "claude-code:a",
+    actor: "a",
+    observedAt: "2026-09-12T00:00:00.000Z",
+    alsoWorked: [],
+    ...over,
+  });
+
+  it("calls a session with nothing but a key unreadable", () => {
+    expect(hasReadings(s())).toBe(false);
+    expect(hasReadings(s({ liveness: "unknown" }))).toBe(false);
+  });
+
+  it("calls any single real reading readable", () => {
+    expect(hasReadings(s({ model: "claude-opus-5" }))).toBe(true);
+    expect(hasReadings(s({ costUsd: 0 }))).toBe(true);
+    expect(hasReadings(s({ contextUsed: 1 }))).toBe(true);
+    expect(hasReadings(s({ toolCalls: 0 }))).toBe(true);
+    expect(hasReadings(s({ liveness: "gone" }))).toBe(true);
+  });
+
+  it("unions and sorts alsoWorked across sessions, de-duplicated", () => {
+    expect(alsoWorkedAcross([s({ alsoWorked: [3, 1] }), s({ alsoWorked: [1, 2] })])).toEqual([1, 2, 3]);
+    expect(alsoWorkedAcross([])).toEqual([]);
   });
 });

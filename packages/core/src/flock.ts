@@ -296,7 +296,8 @@ export class Flock {
   }
 
   listActors(): { name: string; kind: Actor["kind"]; lastSeen: string; harness?: string; model?: string; effort?: string; session?: string }[] {
-    return (this.db.query("SELECT name, kind, last_seen, harness, model, effort, session FROM actors ORDER BY last_seen DESC").all() as any[]).map((r) => ({
+    type ActorRow = { name: string; kind: Actor["kind"]; last_seen: string; harness: string | null; model: string | null; effort: string | null; session: string | null };
+    return (this.db.query("SELECT name, kind, last_seen, harness, model, effort, session FROM actors ORDER BY last_seen DESC").all() as ActorRow[]).map((r) => ({
       name: r.name,
       kind: r.kind,
       lastSeen: r.last_seen,
@@ -1868,19 +1869,19 @@ export class Flock {
     return next;
   }
 
-  // ---------- telemetry (ADR 0025) ----------
+  // ---------- telemetry (ADR 0026) ----------
 
   /**
    * Upsert one harness session reading. Core does no filesystem work and never resolves a
    * transcript itself — this is the write path a reader (`packages/harness`) or the telemetry
    * hook calls after doing that work elsewhere. No event is emitted: a refresh is not something
-   * that happened on the board (ADR 0025 §2).
+   * that happened on the board (ADR 0026 §2).
    */
   recordSessionReading(reading: SessionReading): void {
     upsertSessionReading(this.db, reading);
   }
 
-  /** Every harness session that worked one card. See ADR 0025 §1: a group-by over `events`. */
+  /** Every harness session that worked one card. See ADR 0026 §1: a group-by over `events`. */
   sessionsForCard(boardRef: string, cardNum: number): HarnessSessionTelemetry[] {
     const b = this.board(boardRef);
     return querySessionsForCard(this.db, b.id, cardNum);

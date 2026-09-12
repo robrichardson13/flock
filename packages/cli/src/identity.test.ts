@@ -67,7 +67,7 @@ describe("resolveActor runtime precedence: flag > env > detection > nothing", ()
     expect(resolveActor(flags).session).toBeUndefined();
   });
 
-  test("session: detected from CLAUDE_CODE_SESSION_ID (ADR 0023)", () => {
+  test("session: detected from CLAUDE_CODE_SESSION_ID (ADR 0026)", () => {
     process.env.CLAUDECODE = "1";
     process.env.CLAUDE_CODE_SESSION_ID = "8ea8caf2-d288-4e0a-89de-04c45158535c";
     const { flags } = parseArgs(["--as", "scout"]);

@@ -115,7 +115,7 @@ describe("openDatabase / schema_version", () => {
     }
   });
 
-  test("a v6 database gains events.session, actors.session, and the harness_sessions table (ADR 0022)", () => {
+  test("a v6 database gains events.session, actors.session, and the harness_sessions table (ADR 0026)", () => {
     const { dir, path } = freshPath();
     try {
       // Simulate a v6 database: events/actors carry harness/model/effort but no session column,

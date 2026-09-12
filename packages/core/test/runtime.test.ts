@@ -39,7 +39,7 @@ describe("detectRuntime", () => {
     expect(detectRuntime(env).model).toBeUndefined();
   });
 
-  test("learns the run key from CLAUDE_CODE_SESSION_ID (ADR 0023)", () => {
+  test("learns the run key from CLAUDE_CODE_SESSION_ID (ADR 0026)", () => {
     const env = { CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: "8ea8caf2-d288-4e0a-89de-04c45158535c" } as NodeJS.ProcessEnv;
     expect(detectRuntime(env).session).toBe("claude-code:8ea8caf2-d288-4e0a-89de-04c45158535c");
   });

@@ -27,7 +27,7 @@ export interface SetupOptions {
   json: boolean;
   noStart?: boolean;
   skillOnly?: boolean;
-  /** Opt-in install of the harness-telemetry hooks (ADR 0023): off unless explicitly asked. */
+  /** Opt-in install of the harness-telemetry hooks (ADR 0026): off unless explicitly asked. */
   hooks?: boolean;
   noHooks?: boolean;
   removeHooks?: boolean;

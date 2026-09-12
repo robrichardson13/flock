@@ -55,7 +55,7 @@ export interface ServerOptions {
   /** Test seam: the pump's poll interval. Default 500ms; ignored when push is disabled. */
   pushIntervalMs?: number;
   /** Test seam: replaces the default harness registry (a real `ClaudeCodeReader`) that backs
-   * refresh-on-read (ADR 0025) — a fake reader in tests, never the real `~/.claude`. */
+   * refresh-on-read (ADR 0026) — a fake reader in tests, never the real `~/.claude`. */
   harnessRegistry?: HarnessRegistry;
 }
 
@@ -234,7 +234,7 @@ export function createApp({
       model: c.req.header("x-flock-model"),
       effort: c.req.header("x-flock-effort"),
     });
-    // ADR 0025: the run key travels the same way harness/model/effort do, so a write from this
+    // ADR 0026: the run key travels the same way harness/model/effort do, so a write from this
     // API carries the session that made it.
     const session = sessionFromHeader(c.req.header("x-flock-session"));
     if (session) runtime.session = session;
@@ -281,7 +281,7 @@ export function createApp({
     return c.body(null, 204);
   });
   // One actor as this board knows them, for the web's actor sheet: mirrors Flock.actorProfile,
-  // plus ADR 0025's telemetry (refreshed on read) and totals over this actor's distinct sessions.
+  // plus ADR 0026's telemetry (refreshed on read) and totals over this actor's distinct sessions.
   app.get("/api/boards/:b/actors/:name", async (c) => {
     const b = c.req.param("b");
     const name = decodeURIComponent(c.req.param("name"));

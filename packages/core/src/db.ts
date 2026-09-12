@@ -353,7 +353,7 @@ function migrate(db: Database) {
   if (!eventCols.has("harness")) db.exec("ALTER TABLE events ADD COLUMN harness TEXT");
   if (!eventCols.has("model")) db.exec("ALTER TABLE events ADD COLUMN model TEXT");
   if (!eventCols.has("effort")) db.exec("ALTER TABLE events ADD COLUMN effort TEXT");
-  // Harness telemetry (ADR 0025, v8->v9): the opaque run key that links an event to a
+  // Harness telemetry (ADR 0026, v8->v9): the opaque run key that links an event to a
   // harness_sessions row. The table itself is created unconditionally above (SCHEMA runs on
   // every open), so only the new columns on pre-existing tables need a guard here.
   if (!eventCols.has("session")) db.exec("ALTER TABLE events ADD COLUMN session TEXT");

@@ -1,5 +1,5 @@
 /**
- * Liveness primitives for Claude Code (ADR 0023 §4): find the pid behind a session, check it is
+ * Liveness primitives for Claude Code (ADR 0026 §4): find the pid behind a session, check it is
  * alive, and guard against pid reuse by comparing `procStart` — the pid file's is UTC, `ps`'s is
  * local, and both are second-precision human-formatted timestamps, not epoch numbers.
  */
@@ -13,7 +13,7 @@ export interface ClaudeSessionPidFile {
   cwd?: string;
   /** `ps -o lstart=`-style timestamp, written in UTC. */
   procStart?: string;
-  /** The harness's own raw word: busy/idle/shell/… Never a heartbeat — see ADR 0023 §4 rule 1. */
+  /** The harness's own raw word: busy/idle/shell/… Never a heartbeat — see ADR 0026 §4 rule 1. */
   status?: string;
 }
 

@@ -101,6 +101,23 @@ everything else and the check-in off, and a 20-minute threshold. See
 [ADR 0024](adr/0024-notification-levels.md) and
 [docs/notifications-contract.md](notifications-contract.md) §5.
 
+## Harness telemetry
+
+See [ADR 0026](adr/0026-harness-telemetry.md) and
+[docs/harness-telemetry.md](harness-telemetry.md) for the full design. Nothing here needs a config
+key: the card→session link is read from the harness's own environment and needs no install, and the
+one thing that is installed — a `SessionEnd`/`SubagentStop` hook in `~/.claude/settings.json` —
+is asked for by hand with `flock setup --hooks` and removed with `flock setup --remove-hooks`.
+
+| Env var | Default | What it does |
+| --- | --- | --- |
+| `FLOCK_SESSION` | auto-detected | The harness run key this write's events carry, e.g. `claude-code:<session id>`. Detected from `CLAUDE_CODE_SESSION_ID` when flock is running under Claude Code; set this for a harness flock cannot detect. Precedence: `--session`, this var, then detection. |
+| `FLOCK_NO_HOOKS` | unset | `1` (or any non-empty value that is not `0`/`false`) makes `flock setup` skip the telemetry hook install entirely, even with `--hooks`. The same fail-closed rule as `FLOCK_NO_MODIFY_PATH`: an unwanted install costs more than a missed opt-out. |
+
+The hook is opt-in, marked with `"_flock": "harness-telemetry"`, additive, and removable exactly.
+flock reads transcripts on this machine only, stores numbers and paths and never transcript text,
+and the HTTP API omits the stored transcript path unless the request comes from loopback.
+
 ## `~/.flock/skill.md`
 
 Optional. This is the one place to put a standing personalization of the `/flock` skill — routing

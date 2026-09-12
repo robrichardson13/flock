@@ -1,5 +1,5 @@
 /**
- * The seam ADR 0023 §6 describes: every harness reader behind one interface. This package
+ * The seam ADR 0026 §6 describes: every harness reader behind one interface. This package
  * imports types only from `@flock/core` and never touches the database — core exposes
  * `recordSessionReading`/`sessionsForCard`/`sessionsForActor` and never touches the filesystem.
  * Adding a harness is one file plus one registry line; core never names a reader.

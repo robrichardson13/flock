@@ -1,5 +1,5 @@
 /**
- * `flock telemetry` (ADR 0023 §2, §5): the human's terminal surface for harness telemetry, and
+ * `flock telemetry` (ADR 0026 §2, §5): the human's terminal surface for harness telemetry, and
  * the hook-facing `flock telemetry record` that a Claude Code `SessionEnd`/`SubagentStop` hook
  * invokes. Both are thin: core stores and queries (`recordSessionReading`, `sessionsForCard`,
  * `sessionsForActor`, `cardDuration`); `@flock/harness` reads a transcript. This file only wires
@@ -7,7 +7,7 @@
  *
  * `telemetryRecordCommand` must never throw and must never be noisy on success: a telemetry hook
  * that could interrupt somebody's Claude Code session would be worse than no telemetry at all
- * (ADR 0023 §2 "Cheap and quiet"). Every failure is logged to stderr with context and swallowed.
+ * (ADR 0026 §2 "Cheap and quiet"). Every failure is logged to stderr with context and swallowed.
  */
 import type { Flock, HarnessSessionTelemetry } from "@flock/core";
 import { resolveDbPath } from "@flock/core";
@@ -73,7 +73,7 @@ function totalsOf(telemetry: HarnessSessionTelemetry[]): TelemetryActorResult["t
 }
 
 /**
- * Refresh a card's/actor's sessions when asked, or when a session has not ended yet (ADR 0023
+ * Refresh a card's/actor's sessions when asked, or when a session has not ended yet (ADR 0026
  * §2 "Level 1"). Bounded: at most MAX_SESSIONS_TO_REFRESH reads, each with its own timeout, and
  * a reader that cannot resolve a session (no cwd hint) is left as-is rather than failing the call.
  */
@@ -175,7 +175,7 @@ async function readStdinBounded(maxBytes: number): Promise<string> {
 const MAX_HOOK_STRING = 4096;
 
 /** Parses and validates the hook JSON. Returns undefined (logging why) on anything malformed —
- * this is attacker-shaped input in the same sense a transcript is (ADR 0023 §2). */
+ * this is attacker-shaped input in the same sense a transcript is (ADR 0026 §2). */
 export function parseHookPayload(raw: string): HookPayload | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -216,7 +216,7 @@ function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Best-effort read on `done`/`release` (ADR 0023 §2 "The CLI, on done and release")
+// Best-effort read on `done`/`release` (ADR 0026 §2 "The CLI, on done and release")
 // ---------------------------------------------------------------------------------------------
 
 /**

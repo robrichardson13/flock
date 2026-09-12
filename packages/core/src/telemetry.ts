@@ -1,5 +1,5 @@
 /**
- * Harness telemetry (ADR 0022): what a run cost, how full its context got, and whether anyone
+ * Harness telemetry (ADR 0026): what a run cost, how full its context got, and whether anyone
  * is still there. Core stores numbers a reader already computed and never touches the
  * filesystem itself — `packages/harness` reads transcripts, `recordSessionReading` just upserts.
  *

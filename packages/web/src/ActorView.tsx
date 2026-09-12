@@ -21,7 +21,7 @@ import { groupActorCards, rolesCaption, sharedRoles, shortAge } from "./people.t
 import { ActorTelemetryStrip } from "./Telemetry.tsx";
 import { Avatar, EMPTY_TEXT, RuntimeTag, Sheet, SheetBack } from "./ui.tsx";
 
-/** ADR 0023: the two fields `GET /api/boards/:b/actors/:name` adds on top of `ActorProfile`.
+/** ADR 0026: the two fields `GET /api/boards/:b/actors/:name` adds on top of `ActorProfile`.
  *  Optional here (rather than folded into `ActorProfile` itself) so `seedProfile` below —
  *  which answers from the board snapshot alone, before this route has ever been fetched —
  *  never has to fake a telemetry reading it does not have. */

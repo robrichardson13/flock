@@ -76,7 +76,7 @@ export interface ActorInfo {
 }
 
 /**
- * ADR 0023: harness telemetry. Mirrors `@flock/core`'s `HarnessSessionTelemetry`/
+ * ADR 0026: harness telemetry. Mirrors `@flock/core`'s `HarnessSessionTelemetry`/
  * `CardDuration` field-for-field (§5's JSON block) as plain local types rather than an
  * import — web only ever reaches into `@flock/core`'s narrow subpaths (`/types`,
  * `/attachments`, …); its main entry pulls in `Flock`'s `bun:sqlite` dependency, which has
@@ -254,10 +254,10 @@ export const api = {
   deleteBoard: (b: string) => req<void>("DELETE", `/boards/${b}`),
   snapshot: (b: string) => req<Snapshot>("GET", `/boards/${b}`),
   /** One actor as this board knows them, plus every card they touched here. `telemetry`/
-   *  `totals` are ADR 0023's addition: that actor's distinct harness sessions on this board. */
+   *  `totals` are ADR 0026's addition: that actor's distinct harness sessions on this board. */
   actorProfile: (b: string, name: string) =>
     req<ActorProfile & { telemetry: HarnessSessionTelemetry[]; totals: ActorTelemetryTotals }>("GET", `/boards/${b}/actors/${encodeURIComponent(name)}`),
-  /** `duration`/`telemetry` are ADR 0023's addition, additive to the existing shape. */
+  /** `duration`/`telemetry` are ADR 0026's addition, additive to the existing shape. */
   card: (b: string, n: number) =>
     req<{ card: Card; comments: Comment[]; blocks: number[]; duration: CardDuration; telemetry: HarnessSessionTelemetry[] }>("GET", `/boards/${b}/cards/${n}`),
   createCard: (b: string, input: { title: string; body?: string; labels?: string[]; blockedBy?: number[] }) => req<Card>("POST", `/boards/${b}/cards`, input),

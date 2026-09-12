@@ -1,5 +1,5 @@
 /**
- * Path derivation for the Claude Code reader (ADR 0023 §"What the harnesses actually leave on
+ * Path derivation for the Claude Code reader (ADR 0026 §"What the harnesses actually leave on
  * disk"). Every path here is a lookup key, not a round trip: the cwd encoding is lossy
  * (`.atlas` and `-atlas` collide), so a resolved path is a best-effort guess to try, never a
  * guarantee the file exists.
@@ -74,7 +74,7 @@ async function statAll(dir: string, names: string[]): Promise<{ path: string; mt
 }
 
 /** `runtime.max_input_tokens` for `model` out of the newest catalog file, or undefined when the
- * catalog is missing, unparsable, or does not know the model. ADR 0023's consequence: never
+ * catalog is missing, unparsable, or does not know the model. ADR 0026's consequence: never
  * guess a maximum — render the number without a bar rather than a fabricated ceiling. */
 export async function contextMaxForModel(home: string, model: string, limit = DEFAULT_MAX_FILES_GLOBBED): Promise<number | undefined> {
   const files = await findModelCatalogFiles(home, limit);

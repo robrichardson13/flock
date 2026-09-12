@@ -1,10 +1,10 @@
 /**
- * Pure formatting helpers for ADR 0023's web surfaces (card page Run block, actor totals
+ * Pure formatting helpers for ADR 0026's web surfaces (card page Run block, actor totals
  * strip). Kept apart from `Telemetry.tsx` so the numbers can be unit-tested without a DOM.
  *
  * The one rule every function here obeys: a missing reading renders as the em dash `—`,
  * never as a zero or an empty string that could be mistaken for one. `$0.00` for a live
- * session (ADR 0023 §3: cost is unknown while a session runs, not zero) is exactly the bug
+ * session (ADR 0026 §3: cost is unknown while a session runs, not zero) is exactly the bug
  * this file exists to prevent.
  */
 import type { CardDuration, HarnessSessionTelemetry, Liveness } from "./api.ts";
@@ -66,7 +66,7 @@ export function formatDurationMs(ms: number | null | undefined): string {
   return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
 }
 
-/** The card's own wall clock (ADR 0023 §3): closed cards read `duration.ms` verbatim; a
+/** The card's own wall clock (ADR 0026 §3): closed cards read `duration.ms` verbatim; a
  *  `doing` card with a claim timestamp counts up against `nowMs` so the card page can tick
  *  it live. Neither half present (no claim recorded) is the dash, not zero. */
 export function liveDurationMs(duration: CardDuration, nowMs: number): number | null {
@@ -106,14 +106,14 @@ export function resolvedModel(t: HarnessSessionTelemetry): string | undefined {
 }
 
 /** True when the observed model (evidence) disagrees with what the agent declared — the
- *  case ADR 0023 §1 calls out for a tooltip rather than silently preferring one. */
+ *  case ADR 0026 §1 calls out for a tooltip rather than silently preferring one. */
 export function modelDiffers(t: HarnessSessionTelemetry): boolean {
   return !!t.model && !!t.declaredModel && t.model !== t.declaredModel;
 }
 
 /** Total tokens (all four counters) across a set of sessions, or null when none of them has
  *  reported any — the actor totals strip's "tokens" figure, which core does not sum server
- *  side (ADR 0023's `ActorTelemetryTotals` only carries cost/cards/toolCalls/sessions). */
+ *  side (ADR 0026's `ActorTelemetryTotals` only carries cost/cards/toolCalls/sessions). */
 export function totalTokens(sessions: HarnessSessionTelemetry[]): number | null {
   let sum: number | null = null;
   for (const s of sessions) {
@@ -142,4 +142,26 @@ export function topTools(tools: Record<string, number> | undefined, limit = 3): 
   return Object.entries(tools)
     .sort(([an, ac], [bn, bc]) => bc - ac || an.localeCompare(bn))
     .slice(0, limit);
+}
+
+/** True when a session carries no reading at all — no model, no cost, no context, no tool
+ *  count, no liveness beyond `unknown`. The row for one is a line of em dashes; the Run block
+ *  drops it when a session with real readings is there to show instead (and keeps it when it
+ *  is the only one, so a linked-but-unreadable session is never silently hidden). */
+export function hasReadings(t: HarnessSessionTelemetry): boolean {
+  return Boolean(
+    resolvedModel(t) ||
+      typeof t.costUsd === "number" ||
+      typeof t.contextUsed === "number" ||
+      typeof t.toolCalls === "number" ||
+      (t.liveness && t.liveness !== "unknown"),
+  );
+}
+
+/** Every other card the sessions on this card also worked, de-duplicated and sorted, so the
+ *  "also worked" note is said once for the whole block rather than repeated on each row. */
+export function alsoWorkedAcross(sessions: HarnessSessionTelemetry[]): number[] {
+  const seen = new Set<number>();
+  for (const s of sessions) for (const n of s.alsoWorked) seen.add(n);
+  return [...seen].sort((a, b) => a - b);
 }

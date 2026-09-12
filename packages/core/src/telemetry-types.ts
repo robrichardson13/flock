@@ -1,11 +1,11 @@
 /**
- * Types for harness telemetry (ADR 0022): what a run cost, how full its context got, and
+ * Types for harness telemetry (ADR 0026): what a run cost, how full its context got, and
  * whether anyone is still there. Split out from `telemetry.ts` (the store) and
  * `telemetry-queries.ts` (the reads) purely to keep each file under the line budget — both
  * import from here.
  */
 
-/** Liveness as the reader computes it (ADR 0022 §4); deliberately coarse. */
+/** Liveness as the reader computes it (ADR 0026 §4); deliberately coarse. */
 export type Liveness = "running" | "idle" | "gone" | "unknown";
 
 /** How a session reading was collected. */

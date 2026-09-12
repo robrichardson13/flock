@@ -1,6 +1,6 @@
-# ADR 0022: Harness telemetry — what a run cost, how full it got, and whether anyone is still there
+# ADR 0026: Harness telemetry — what a run cost, how full it got, and whether anyone is still there
 
-**Status:** proposed, 2026-09-11
+**Status:** accepted, 2026-09-11
 
 ## Context
 
@@ -226,7 +226,7 @@ rc (`path-setup.ts`):
 - **Opt-out before the fact:** `flock setup --no-hooks`, or `FLOCK_NO_HOOKS=1`, matching
   `FLOCK_NO_MODIFY_PATH`.
 - **Undone after the fact:** `flock setup --remove-hooks` deletes exactly the marked entry and
-  leaves everything else, and the marker is documented in `docs/hooks/harness-telemetry.md` so a
+  leaves everything else, and the marker is documented in `docs/harness-telemetry.md` so a
   human can delete it by hand in five seconds. Removing it degrades flock to level 1; nothing
   breaks.
 - **Cheap and quiet.** The hook runs on `SessionEnd`/`SubagentStop` only — never `PreToolUse`,
@@ -504,6 +504,6 @@ Six cards, in blocker order. Each is sized for one sonnet delegation on the
    End-to-end against an isolated database (`FLOCK_DB` in the scratchpad, never the shared board):
    a real Claude Code session claims and closes a card, numbers land, liveness moves
    `running → gone`, the hook install is idempotent and `--remove-hooks` restores the file byte
-   for byte. `bun test`, `bun run typecheck`, `bun run build` green. `docs/hooks/harness-telemetry.md`
+   for byte. `bun test`, `bun run typecheck`, `bun run build` green. `docs/harness-telemetry.md`
    (what the hook is, what it reads, what it stores, how to remove it by hand), `docs/config.md`
    for `FLOCK_NO_HOOKS`/`FLOCK_SESSION`, README and CLAUDE.md lines, and this ADR marked accepted.

@@ -630,7 +630,7 @@ describe("notify_settings migration from a v7 fixture", () => {
     return { dir, path: join(dir, "flock.db") };
   }
 
-  test("opening a v7 database gains notify_settings and is re-stamped to SCHEMA_VERSION 8", () => {
+  test("opening a v7 database gains notify_settings and is re-stamped to SCHEMA_VERSION 9", () => {
     const { dir, path } = freshPath();
     try {
       const legacy = new Database(path, { create: true });
@@ -644,7 +644,7 @@ describe("notify_settings migration from a v7 fixture", () => {
       legacy.close();
 
       const db = openDatabase(path);
-      expect(SCHEMA_VERSION).toBe(8);
+      expect(SCHEMA_VERSION).toBe(9);
       const tables = new Set((db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((t) => t.name));
       expect(tables.has("notify_settings")).toBe(true);
       expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION);
