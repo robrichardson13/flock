@@ -86,7 +86,7 @@ export interface HarnessSessionTelemetry extends SessionReading {
 /**
  * Bound on re-reading a session that ended without ever getting a cost-state line (killed,
  * interrupted, or simply never resumed): past this age a refresher gives up rather than reading
- * it forever. Named and bounded per ADR 0023's amendment on retroactive cost.
+ * it forever. Named and bounded per ADR 0026's amendment on retroactive cost.
  */
 export const ENDED_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 

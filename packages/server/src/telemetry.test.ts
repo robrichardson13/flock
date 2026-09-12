@@ -241,7 +241,7 @@ describe("cost lands retroactively: a real fixture transcript with no hook invol
       const board = flock.createBoard(ada, { title: "B" });
       const actor: Actor = { name: "scout", kind: "agent", session: key };
       flock.createCard(actor, board.id, { title: "X" });
-      // Seed the row the way this agent's own machine would on `done`/`release` (ADR 0023 §2
+      // Seed the row the way this agent's own machine would on `done`/`release` (ADR 0026 §2
       // "the CLI, on done and release"): cwd known, no telemetry read yet. That is what lets
       // the server later resolve a reader against this session with no cwd of its own.
       flock.recordSessionReading({ key, sessionId, cwd, observedAt: new Date().toISOString() });
