@@ -15,7 +15,7 @@ import { Avatar, Icons, Menu, useIsMobile } from "./ui.tsx";
  * inside the same `--shell-max` box as the page below, so Home and a board share a left
  * edge (F10).
  */
-export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoard, onRename, onOpenNotifications, pushKind, action, trailing }: {
+export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoard, onRename, onOpenNotifications, pushKind, allMuted, action, trailing }: {
   /** Present on a board: the switcher that reaches another board without going Home. */
   boards?: BoardSummary[];
   activeBoard?: string;
@@ -29,6 +29,9 @@ export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoar
   onOpenNotifications?: () => void;
   /** This device's push state, so the bell can swap to `bellOff` and carry its warn dot when `blocked`. */
   pushKind?: PushState["kind"];
+  /** ADR 0024: push is on, but every level toggle is off — the bell renders `bellOff` with no
+   *  dot rather than looking armed for something that can never ring. */
+  allMuted?: boolean;
   /** The route's primary action: New board, or New card. */
   action?: ReactNode;
   /** Anything that belongs after it — on a board, the "⋯" menu. */
@@ -83,11 +86,13 @@ export function AppTopBar({ boards, activeBoard, needs, actor, dbPath, onNewBoar
         {onOpenNotifications && (
           <button
             className="icon-btn notify-btn"
-            onClick={onOpenNotifications}
+            onClick={() => onOpenNotifications()}
             aria-label="Notifications"
             title="Notifications"
           >
-            {pushKind === "blocked" ? Icons.bellOff(16) : Icons.bell(16)}
+            {/* ADR 0024's "honest bell": bellOff, no dot, once push is on but every level
+                toggle is muted — same treatment as `blocked` minus the warn dot. */}
+            {pushKind === "blocked" || (pushKind === "on" && allMuted) ? Icons.bellOff(16) : Icons.bell(16)}
             {pushKind === "blocked" && <span className="notify-dot" />}
           </button>
         )}
