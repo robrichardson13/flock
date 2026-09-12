@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import webpush from "web-push";
 import {
+  notificationClass,
   notificationFor,
   notifyTargets,
   recipientsOf,
@@ -13,6 +14,7 @@ import {
   type Flock,
   type NotifyContext,
 } from "@flock/core";
+import { formatPushDecision } from "./presence-log.ts";
 
 export interface VapidKeys {
   publicKey: string;
@@ -207,12 +209,40 @@ export function startPushPump(opts: {
     const subs = payload ? flock.pushSubscriptions({ boardId: event.boardId }) : [];
     const targets = payload ? notifyTargets(event, ctx, subs) : [];
     const recipients = recipientsOf(targets);
+    logDecisions(event, ctx.boardSlug, recipients, subs);
 
     // Every event goes through the batcher, even one that notifies nobody, so the author-seen
     // reset (D9) applies uniformly. onEvent returns dispatches that go out now (an urgent bypass,
     // or a leading-edge throttle); trailing flushes come from due()/flush(), not from here.
     const dispatches = batcher.onEvent(event, payload, recipients, now());
     return sendAll(dispatches);
+  }
+
+  /**
+   * One line per (event, recipient) saying what the pump believed about presence for exactly the
+   * key it looked up (card 54). Costs one map scan per recipient and only runs when an event has
+   * recipients, so it is cheap enough to leave on.
+   */
+  function logDecisions(event: Event, boardSlug: string, recipients: readonly string[], subs: readonly { actor: string }[]): void {
+    if (recipients.length === 0) return;
+    const at = now();
+    for (const actor of recipients) {
+      const detail = presence.lookingDetail(actor, event.boardId, at);
+      console.error(
+        formatPushDecision({
+          seq: event.seq,
+          type: event.type,
+          notificationClass: notificationClass(event) ?? "none",
+          actor,
+          board: boardSlug,
+          boardId: event.boardId,
+          looking: detail.looking,
+          presenceAgeMs: detail.ageMs,
+          presenceClients: detail.clients,
+          subscriptions: subs.filter((s) => s.actor === actor).length,
+        }),
+      );
+    }
   }
 
   /** Trailing flushes whose window has closed (§2.3's due()). The tick calls it; tests call it. */

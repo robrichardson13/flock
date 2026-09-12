@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { clientIsLooking, foregroundOnlyDevice, HEARTBEAT_MS, IDLE_MS, presenceStep, type PresenceState } from "./presence.ts";
+import { buildId, clientIsLooking, displayMode, foregroundOnlyDevice, HEARTBEAT_MS, IDLE_MS, presenceStep, type PresenceState } from "./presence.ts";
 
 describe("clientIsLooking, as the web wires it", () => {
   const t0 = 1_000_000;
@@ -49,6 +49,44 @@ describe("foregroundOnlyDevice", () => {
   it("follows the touch-primary media query", () => {
     expect(withWindow(stub(true), foregroundOnlyDevice)).toBe(true);
     expect(withWindow(stub(false), foregroundOnlyDevice)).toBe(false);
+  });
+});
+
+describe("buildId and displayMode (card 54 observability)", () => {
+  const withGlobals = <T,>(win: unknown, nav: unknown, fn: () => T): T => {
+    const g = globalThis as { window?: unknown; navigator?: unknown };
+    const hadWin = "window" in globalThis;
+    const hadNav = "navigator" in globalThis;
+    const savedWin = g.window;
+    const savedNav = g.navigator;
+    g.window = win;
+    g.navigator = nav;
+    try {
+      return fn();
+    } finally {
+      if (hadWin) g.window = savedWin;
+      else delete g.window;
+      if (hadNav) g.navigator = savedNav;
+      else delete g.navigator;
+    }
+  };
+  const mm = (matches: boolean) => ({ matchMedia: (media: string) => ({ matches, media }) });
+
+  it("reports \"unknown\" when the vite define is absent, rather than throwing", () => {
+    // The test runner never applies vite's `define`, so this is the real missing-define path —
+    // the same answer a bundle built before card 54 gives, which is the signal we are after.
+    expect(buildId()).toBe("unknown");
+  });
+
+  it("reads navigator.standalone first, then the display-mode query", () => {
+    expect(withGlobals(mm(false), { standalone: true }, displayMode)).toBe("standalone");
+    expect(withGlobals(mm(true), {}, displayMode)).toBe("standalone");
+    expect(withGlobals(mm(false), {}, displayMode)).toBe("browser");
+  });
+
+  it("says browser where window or matchMedia is missing, rather than throwing", () => {
+    expect(withGlobals(undefined, {}, displayMode)).toBe("browser");
+    expect(withGlobals({}, {}, displayMode)).toBe("browser");
   });
 });
 

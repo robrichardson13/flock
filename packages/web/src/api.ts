@@ -108,6 +108,18 @@ async function reqRaw<T>(path: string, blob: Blob, opts: { mime: string; width?:
   return (await res.json()) as T;
 }
 
+  /** The diagnostic block on a presence beat (card 54): which bundle the page is running, how it
+ *  is displayed, and the `clientIsLooking` inputs behind its decision. Never changes a
+ *  suppression decision; it only makes the server log say why. */
+export interface PresenceReportInfo {
+  build: string;
+  mode: "standalone" | "browser";
+  visible: boolean;
+  focused: boolean;
+  lastInputAgeMs: number;
+  foregroundOnly: boolean;
+}
+
 export const api = {
   me: () => req<{ actor: { name: string; kind: string }; dbPath: string }>("GET", "/me"),
   needsMe: () => req<NeedsHuman[]>("GET", "/needs-me"),
@@ -165,7 +177,7 @@ export const api = {
   pushTest: () => req<{ sent: number; pruned: number }>("POST", "/push/test"),
   /** `POST /api/presence`, §3.3: fire from `usePresence`. `keepalive` lets the final
    * `looking: false` beat survive the page going away (blur/hide never needs it; pagehide does). */
-  presence: (body: { client: string; board: string | null; looking: boolean }, opts?: { keepalive?: boolean }) =>
+  presence: (body: { client: string; board: string | null; looking: boolean; info?: PresenceReportInfo }, opts?: { keepalive?: boolean }) =>
     req<void>("POST", "/presence", body, undefined, opts),
 };
 

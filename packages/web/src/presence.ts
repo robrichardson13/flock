@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { clientIsLooking, IDLE_MS, type LookingInputs } from "@flock/core/presence";
-import { api } from "./api.ts";
+import { api, type PresenceReportInfo } from "./api.ts";
 
 /** Three heartbeats; matches `PRESENCE_TTL_MS` in `@flock/core`'s `Presence` (§3.4, D6). */
 export const HEARTBEAT_MS = 15_000;
@@ -17,6 +17,29 @@ export { clientIsLooking, IDLE_MS, type LookingInputs };
 export function foregroundOnlyDevice(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
   return window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+}
+
+/** Vite's `define` (see `vite.config.ts`); absent under the test runner and in any bundle built
+ *  before card 54, which is itself the signal that matters. */
+declare const __FLOCK_BUILD_ID__: string | undefined;
+
+/**
+ * Which bundle this page is running, reported on every presence beat. `unknown` when the define
+ * is missing — a page served from a bundle that predates this field, which on a phone means the
+ * home-screen app is running stale JS.
+ */
+export function buildId(): string {
+  return typeof __FLOCK_BUILD_ID__ === "string" && __FLOCK_BUILD_ID__.length > 0 ? __FLOCK_BUILD_ID__ : "unknown";
+}
+
+/** An installed home-screen app, or a browser tab. Diagnostic only — `foregroundOnlyDevice`, not
+ *  this, is what decides the looking rule (a desktop PWA is standalone but has real focus). */
+export function displayMode(): "standalone" | "browser" {
+  if (typeof window === "undefined") return "browser";
+  const nav = typeof navigator === "undefined" ? undefined : (navigator as Navigator & { standalone?: boolean });
+  if (nav?.standalone === true) return "standalone";
+  if (typeof window.matchMedia !== "function") return "browser";
+  return window.matchMedia("(display-mode: standalone)").matches ? "standalone" : "browser";
 }
 
 export interface PresenceState {
@@ -86,10 +109,10 @@ export function usePresence(actor: string, hash: string): void {
       bumpInput();
     };
 
-    const report = (next: { looking: boolean; board: string | null }, now: number) => {
+    const report = (next: { looking: boolean; board: string | null }, now: number, info: PresenceReportInfo) => {
       const state: PresenceState = { looking: next.looking, board: next.board, lastSentAt: now, failed: false };
       prevRef.current = state;
-      api.presence({ client: CLIENT_ID, board: next.board, looking: next.looking }, { keepalive: !next.looking }).catch((err: unknown) => {
+      api.presence({ client: CLIENT_ID, board: next.board, looking: next.looking, info }, { keepalive: !next.looking }).catch((err: unknown) => {
         // Never swallowed: a dropped beat is one of the ways a foregrounded phone looks absent.
         // Mark it so the next heartbeat retries — bounded by HEARTBEAT_MS, never a tight loop.
         state.failed = true;
@@ -100,16 +123,24 @@ export function usePresence(actor: string, hash: string): void {
     const evaluate = (leaving = false) => {
       if (!actor) return;
       const now = Date.now();
-      const looking = !leaving && clientIsLooking({
+      const inputs = {
         visible: document.visibilityState === "visible",
         focused: document.hasFocus(),
         lastInputAt: lastInputAtRef.current,
         now,
         foregroundOnly: foregroundOnlyDevice(),
-      });
+      };
+      const looking = !leaving && clientIsLooking(inputs);
       const next = { looking, board };
       if (presenceStep(prevRef.current, next, now) === "none") return;
-      report(next, now);
+      report(next, now, {
+        build: buildId(),
+        mode: displayMode(),
+        visible: inputs.visible,
+        focused: inputs.focused,
+        lastInputAgeMs: Math.max(0, now - inputs.lastInputAt),
+        foregroundOnly: inputs.foregroundOnly,
+      });
     };
 
     const onVisibility = () => {
