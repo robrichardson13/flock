@@ -543,6 +543,66 @@ describe("PushPump notify-level filtering (ADR 0024)", () => {
     }
   });
 
+  // d15: a card comment is a push trigger, but only at `review`.
+  test("a card comment with an image attachment delivers as review under the default settings", async () => {
+    const { flock, board } = fixture();
+    const card = flock.createCard(ada, board.id, { title: "Fix the bell" });
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
+    try {
+      const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const att = flock.attach(ada, board.id, { mime: "image/png", bytes: png, name: "phone.png" });
+      flock.addComment(ada, board.id, String(card.num), "phone and desktop", undefined, { attachments: [att.id] });
+      const event = flock.events({ boardId: board.id }).find((e) => e.type === "comment.posted")!;
+      expect((await pump.deliver(event)).sent).toBe(1);
+      const payload = JSON.parse(calls[0]!.payload);
+      expect(payload.title).toBe("Fix the bell");
+      expect(payload.body).toContain("📎 1 image");
+      expect(payload.tag).toBe(`#/b/${board.slug}/c/${card.num}`);
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("an explicit --level review on a comment delivers; a plain comment never does, even with everything on", async () => {
+    const { flock, board } = fixture();
+    const card = flock.createCard(ada, board.id, { title: "Fix the bell" });
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    flock.putNotifySettings(scout, board.id, { info: true }); // "Everything else" on
+    const { send, calls } = fakeSend();
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
+    try {
+      flock.addComment(ada, board.id, String(card.num), "picking this up", undefined, {});
+      const chatter = flock.events({ boardId: board.id }).find((e) => e.type === "comment.posted")!;
+      expect((await pump.deliver(chatter)).sent).toBe(0);
+      expect(calls.length).toBe(0);
+
+      flock.addComment(ada, board.id, String(card.num), "ready for a look", undefined, { level: "review" });
+      const review = flock.events({ boardId: board.id }).findLast((e) => e.type === "comment.posted")!;
+      expect((await pump.deliver(review)).sent).toBe(1);
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("turning review off silences a screenshot comment too", async () => {
+    const { flock, board } = fixture();
+    const card = flock.createCard(ada, board.id, { title: "Fix the bell" });
+    flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    flock.putNotifySettings(scout, board.id, { review: false });
+    const { send, calls } = fakeSend();
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 1_000_000 });
+    try {
+      flock.addComment(ada, board.id, String(card.num), "have a look", undefined, { level: "review" });
+      const event = flock.events({ boardId: board.id }).find((e) => e.type === "comment.posted")!;
+      expect((await pump.deliver(event)).sent).toBe(0);
+      expect(calls.length).toBe(0);
+    } finally {
+      pump.stop();
+    }
+  });
+
   test("a message.posted body with a GitHub PR URL is 'review' and delivers under the default settings", async () => {
     const { flock, board } = fixture();
     flock.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });

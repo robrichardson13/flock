@@ -12,6 +12,7 @@ import {
   summarize,
   levelFor,
   deliversAt,
+  deliversFor,
   assertDeclarableLevel,
   resolveNotifySettingsFields,
   clampSettledThreshold,
@@ -166,7 +167,6 @@ describe("notificationFor", () => {
       "card.held",
       "card.unheld",
       "card.answered",
-      "comment.posted",
       "decision.recorded",
       "decision.archived",
       "decision.restored",
@@ -246,7 +246,39 @@ describe("notificationClass", () => {
   test("card.moved to another status, and every other event type, is null", () => {
     expect(notificationClass(ev({ type: "card.moved", data: { to: "doing" } }))).toBeNull();
     expect(notificationClass(ev({ type: "card.created" }))).toBeNull();
-    expect(notificationClass(ev({ type: "comment.posted" }))).toBeNull();
+  });
+
+  // ADR 0024, d15. A comment batches and is presence-suppressed like a channel line; the level
+  // filter, not the class, is what keeps an `info` one off the device.
+  test("comment.posted is chatter", () => {
+    expect(notificationClass(ev({ type: "comment.posted" }))).toBe("chatter");
+  });
+});
+
+// ADR 0024, d15: a card comment is a notification-producing event. Only `review` ones reach a
+// device, but the payload is shaped here for all of them.
+describe("notificationFor on comment.posted", () => {
+  const cardCtx: NotifyContext = { ...ctx, cardTitle: "Fix the bell" };
+
+  test("titles itself with the card and routes to the card", () => {
+    const n = notificationFor(ev({ type: "comment.posted", actor: "scout", cardNum: 7, data: { body: "screenshots are up" } }), cardCtx);
+    expect(n?.title).toBe("Fix the bell");
+    expect(n?.body).toBe("scout: screenshots are up");
+    expect(n?.url).toBe("#/b/flock/c/7");
+    expect(n?.tag).toBe(n?.url);
+    expect(n?.boardTitle).toBe("flock");
+  });
+
+  test("attachments are counted into the body", () => {
+    const one = notificationFor(ev({ type: "comment.posted", actor: "scout", cardNum: 7, data: { body: "phone and desktop", attachments: 1 } }), cardCtx);
+    expect(one?.body).toBe("scout: phone and desktop 📎 1 image");
+    const two = notificationFor(ev({ type: "comment.posted", actor: "scout", cardNum: 7, data: { body: "", attachments: 2 } }), cardCtx);
+    expect(two?.body).toBe("scout: 📎 2 images");
+  });
+
+  test("falls back to the card number when the card title is unknown", () => {
+    const n = notificationFor(ev({ type: "comment.posted", actor: "scout", cardNum: 7, data: { body: "hi" } }), ctx);
+    expect(n?.title).toBe("#7");
   });
 });
 
@@ -259,6 +291,14 @@ describe("mergedNotification", () => {
     seq: 42,
     renotify: true,
   };
+
+  test("folds on the board name, not a card comment's own title", () => {
+    const commentLatest: NotificationPayload = {
+      title: "Fix the bell", body: "scout: 📎 1 image", url: "#/b/flock/c/7", tag: "#/b/flock/c/7",
+      seq: 43, renotify: true, boardTitle: "flock",
+    };
+    expect(mergedNotification(commentLatest, 2, true).title).toBe("2 new in flock");
+  });
 
   test("title is '<count> new in <board>', body/url/tag/seq come from latest", () => {
     const merged = mergedNotification(latest, 3, true);
@@ -357,6 +397,34 @@ describe("deliversAt", () => {
     expect(deliversAt("needs-me", settings)).toBe(true);
     expect(deliversAt("review", settings)).toBe(false);
     expect(deliversAt("info", settings)).toBe(true);
+  });
+});
+
+// ADR 0024, d15: the one place a level decision looks at the event and not just the toggles.
+describe("deliversFor", () => {
+  const everythingOn = { needsMe: true, review: true, info: true, settled: true, settledAfterMs: 1200_000 };
+  const comment = ev({ type: "comment.posted", cardNum: 7, data: { body: "done" } });
+  const message = ev({ type: "message.posted", data: { body: "done" } });
+
+  test("a review comment delivers when review is on", () => {
+    expect(deliversFor(comment, "review", everythingOn)).toBe(true);
+    expect(deliversFor(comment, "review", { ...everythingOn, review: false })).toBe(false);
+  });
+
+  test("an info comment never delivers, even with everything on", () => {
+    expect(deliversFor(comment, "info", everythingOn)).toBe(false);
+  });
+
+  test("an info channel message still delivers with everything on", () => {
+    expect(deliversFor(message, "info", everythingOn)).toBe(true);
+  });
+
+  test("outside comment.posted it is exactly deliversAt", () => {
+    for (const settings of [everythingOn, DEFAULT_NOTIFY_SETTINGS]) {
+      for (const level of ["needs-me", "review", "info"] as const) {
+        expect(deliversFor(message, level, settings)).toBe(deliversAt(level, settings));
+      }
+    }
   });
 });
 

@@ -102,6 +102,23 @@ export function deliversAt(level: NotifyLevel, settings: NotifySettings): boolea
 }
 
 /**
+ * The delivery gate the pump actually asks: `deliversAt`, plus d15's one event-shaped rule.
+ *
+ * A card comment reaches a device only at `review` — a screenshot attached, an explicit
+ * `--level review`, or `x-flock-notify: review`. An `info` comment never pushes, not even for
+ * someone who has turned "Everything else" on, so that toggle keeps meaning what it has always
+ * meant: every line of the channel. Cards are where a run does its thinking, and a board with
+ * forty comments an hour would make "Everything else" unusable rather than loud.
+ *
+ * `needs-me` on a comment cannot arise: `assertDeclarableLevel` refuses to let an author declare
+ * it and `levelFor` never derives it for a `comment.posted`. `flock ask` is the needs-me path.
+ */
+export function deliversFor(event: Event, level: NotifyLevel, settings: NotifySettings): boolean {
+  if (event.type === "comment.posted" && level !== "review") return false;
+  return deliversAt(level, settings);
+}
+
+/**
  * Validates a level an author is declaring on `say`/`comment`. `undefined` (nothing declared)
  * passes through as `undefined`. `"needs-me"` is refused: it is a claim that the board has
  * something the human can act on and close, which only `flock ask` can make. Anything else

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Flock } from "@flock/core";
+import { Flock, deliversFor, levelFor } from "@flock/core";
 import { createApp } from "./index.ts";
 
 function fresh() {
@@ -839,6 +839,25 @@ describe("x-flock-notify header (ADR 0024)", () => {
     expect(res.status).toBe(200);
     const posted = flock.events({ boardId: board.id }).find((e) => e.type === "comment.posted")!;
     expect(posted.data.level).toBe("info");
+  });
+
+  // d15: the header is the API's half of "a card comment pushes at review and nowhere else".
+  test("x-flock-notify: review on a comment carries all the way to a delivered notification", async () => {
+    const { flock, app } = fresh();
+    const ada = { name: "ada", kind: "human" as const };
+    const board = flock.createBoard(ada, { title: "Notify Board 2b" });
+    const card = flock.createCard(ada, board.id, { title: "Fix the bell" });
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+    const res = await app.request(`/api/boards/${board.slug}/cards/${card.num}/comments`, {
+      method: "POST",
+      headers: scoutHeaders("review"),
+      body: JSON.stringify({ body: "ready for a look" }),
+    });
+    expect(res.status).toBe(200);
+    const posted = flock.events({ boardId: board.id }).findLast((e) => e.type === "comment.posted")!;
+    expect(levelFor(posted, { boardSlug: board.slug, boardTitle: board.title, cardTitle: card.title })).toBe("review");
+    expect(deliversFor(posted, "review", flock.resolveNotifySettings("ada", board.id))).toBe(true);
+    expect(deliversFor(posted, "info", { ...flock.resolveNotifySettings("ada", board.id), info: true })).toBe(false);
   });
 
   test("no header at all means no declared level, same as the CLI with no --level", async () => {

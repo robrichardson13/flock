@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import webpush from "web-push";
 import {
-  deliversAt,
+  deliversFor,
   levelFor,
   notificationClass,
   notificationFor,
@@ -255,12 +255,14 @@ export function startPushPump(opts: {
 
   /**
    * ADR 0024: one keyed settings read per (recipient, board) per event — cheap, since settings are
-   * actor-keyed rather than endpoint-keyed. Returns both the decision and the settings it was made
-   * from, so `logDecisions` can fold them into the same line as the presence read (card 80).
+   * actor-keyed rather than endpoint-keyed. `deliversFor` rather than `deliversAt` so d15's rule
+   * — a card comment pushes at `review` and at nothing else — is applied in core, not here.
+   * Returns both the decision and the settings it was made from, so `logDecisions` can fold them
+   * into the same line as the presence read (card 80).
    */
-  function deliversHere(actor: string, boardId: string, level: NotifyLevel): { deliver: boolean; settings: NotifySettings } {
-    const settings: NotifySettings = flock.resolveNotifySettings(actor, boardId);
-    return { deliver: deliversAt(level, settings), settings };
+  function deliversHere(event: Event, actor: string, level: NotifyLevel): { deliver: boolean; settings: NotifySettings } {
+    const settings: NotifySettings = flock.resolveNotifySettings(actor, event.boardId);
+    return { deliver: deliversFor(event, level, settings), settings };
   }
 
   /** send(d) per §4: fan one Dispatch out to that actor's subscriptions for that board, today's prune/touch/log rules. */
@@ -344,7 +346,7 @@ export function startPushPump(opts: {
     const level = payload ? levelFor(event, ctx) : null;
     const decisions = new Map<string, { deliver: boolean; settings: NotifySettings | null }>();
     for (const actor of eligible) {
-      decisions.set(actor, level === null ? { deliver: true, settings: null } : deliversHere(actor, event.boardId, level));
+      decisions.set(actor, level === null ? { deliver: true, settings: null } : deliversHere(event, actor, level));
     }
     logDecisions(event, ctx.boardSlug, eligible, subs, level, decisions);
     const recipients = eligible.filter((actor) => decisions.get(actor)!.deliver);

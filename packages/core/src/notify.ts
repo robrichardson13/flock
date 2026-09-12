@@ -39,6 +39,13 @@ export interface NotificationPayload {
   /** The event that produced it. For dedupe and for debugging a delivery. */
   seq: number;
   /**
+   * The board this came from, when `title` is not already the board's name — a card comment
+   * titles itself with the card (ADR 0024, d15). `mergedNotification` folds on the board, so it
+   * needs the board's name even when the newest payload in the batch is about one card.
+   * Absent on the notifications whose `title` *is* the board title.
+   */
+  boardTitle?: string;
+  /**
    * `true` on a leading edge and on every ask/awaiting-human notification: a same-tag
    * replacement should alert (Chrome/Edge default to a silent replacement otherwise).
    * `false` on a trailing batch flush, where the count updates quietly in place.
@@ -98,6 +105,27 @@ export function notificationFor(event: Event, ctx: NotifyContext): NotificationP
     };
   }
 
+  // ADR 0024 (d15): a card comment is a notification-producing event, but only ever reaches a
+  // device at level `review` — `deliversFor` in notify-levels.ts is the gate. The payload is
+  // built here for every comment regardless; nothing downstream sees it for an `info` one.
+  if (event.type === "comment.posted") {
+    const body = typeof event.data.body === "string" ? event.data.body : "";
+    const attachments = typeof event.data.attachments === "number" ? event.data.attachments : 0;
+    const url = `#/b/${ctx.boardSlug}/c/${event.cardNum}`;
+    const gist = summarize(body);
+    const images = attachments > 0 ? `📎 ${attachments} image${attachments === 1 ? "" : "s"}` : "";
+    const parts = [`${event.actor}:`, gist, images].filter((part) => part.length > 0);
+    return {
+      title: ctx.cardTitle ?? `#${event.cardNum}`,
+      body: parts.join(" "),
+      url,
+      tag: url,
+      seq: event.seq,
+      renotify: true,
+      boardTitle: ctx.boardTitle,
+    };
+  }
+
   if (event.type === "card.moved" && event.data.to === "awaiting-human") {
     const url = `#/b/${ctx.boardSlug}/c/${event.cardNum}`;
     return {
@@ -115,19 +143,22 @@ export function notificationFor(event: Event, ctx: NotifyContext): NotificationP
 
 /**
  * "urgent" = card.asked, card.moved -> awaiting-human (bypasses batching and presence).
- * "chatter" = message.posted (the only class that batches or is suppressed by presence).
+ * "chatter" = message.posted and comment.posted (the classes that batch and are suppressed by
+ * presence). A comment only ever gets this far at level `review`; see `deliversFor`.
  * Everything else is null: it never produces a notification.
  */
 export function notificationClass(event: Event): "urgent" | "chatter" | null {
   if (event.type === "card.asked") return "urgent";
   if (event.type === "card.moved" && event.data.to === "awaiting-human") return "urgent";
   if (event.type === "message.posted") return "chatter";
+  if (event.type === "comment.posted") return "chatter";
   return null;
 }
 
 /**
  * Merges a batch of `count` folded messages into one notification: title becomes
- * "<count> new in <board>" (the board title is `latest.title` for message.posted), body/url/tag/seq
+ * "<count> new in <board>" (the board name is `latest.boardTitle` when the newest payload titles
+ * itself with something else — a card comment does — and `latest.title` otherwise), body/url/tag/seq
  * come from the latest folded message so the notification reflects the current state of the
  * conversation, and `renotify` is passed through explicitly (`true` on a leading-edge burst,
  * `false` on a trailing flush).
@@ -138,7 +169,7 @@ export function mergedNotification(
   renotify: boolean,
 ): NotificationPayload {
   return {
-    title: `${count} new in ${latest.title}`,
+    title: `${count} new in ${latest.boardTitle ?? latest.title}`,
     body: latest.body,
     url: latest.url,
     tag: latest.tag,
