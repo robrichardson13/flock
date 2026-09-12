@@ -23,8 +23,8 @@ self.addEventListener("push", (event) => {
       // field is fine, renotify is an enhancement only (§2.6).
       renotify: p.renotify === true && !!(p.tag || p.url),
       data: { url: p.url },
-      icon: "/icon-192.png",
-      badge: "/icon-192.png",
+      icon: "/icon-v2-192.png",
+      badge: "/badge-v2-96.png",
     }),
   );
 });

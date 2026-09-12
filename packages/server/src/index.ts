@@ -74,6 +74,17 @@ const MIME: Record<string, string> = {
 };
 
 /**
+ * `sw.js` must always revalidate (it is the thing that decides whether a client picks up new
+ * code at all), and `manifest.webmanifest` is the index that points at every icon — pointing it
+ * at new filenames does nothing if the manifest itself is still served from a year-old cache
+ * entry. Everything else is fine to cache forever since a changed asset ships under a new name.
+ */
+function staticCacheControl(path: string): string {
+  if (path === "/sw.js" || path.endsWith(".webmanifest")) return "no-cache";
+  return "public, max-age=31536000, immutable";
+}
+
+/**
  * Read a request body while enforcing a byte cap without buffering past it. A declared
  * `content-length` over the cap is rejected immediately; otherwise the body is read chunk
  * by chunk (since `content-length` can be absent, non-numeric, chunked, or simply wrong)
@@ -530,7 +541,7 @@ export function createApp({
       if (embedded && extname(path)) {
         return c.body(await Bun.file(embedded).arrayBuffer(), 200, {
           "content-type": MIME[extname(path)] ?? "application/octet-stream",
-          "cache-control": path === "/sw.js" ? "no-cache" : "public, max-age=31536000, immutable",
+          "cache-control": staticCacheControl(path),
         });
       }
       return c.html(await Bun.file(shell).text());
@@ -542,7 +553,7 @@ export function createApp({
       if (path !== "/" && !path.includes("..") && existsSync(file) && extname(file)) {
         return c.body(readFileSync(file), 200, {
           "content-type": MIME[extname(file)] ?? "application/octet-stream",
-          "cache-control": path === "/sw.js" ? "no-cache" : "public, max-age=31536000, immutable",
+          "cache-control": staticCacheControl(path),
         });
       }
       return c.html(readFileSync(join(staticDir, "index.html"), "utf8"));

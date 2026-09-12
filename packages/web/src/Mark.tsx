@@ -7,7 +7,9 @@
  * favicons and app icons were rendered from — one source, every size, no drift.
  *
  * Everything draws in `currentColor`, so a mark inherits the colour of whatever it sits in:
- * the topbar's ink on a board screen, the accent on Home, white on the app-icon tile.
+ * the topbar's ink on a board screen, the accent on Home. The favicon/app-icon files
+ * (`scripts/gen-icons.ts`) are a separate, fixed-colour rendering of this same geometry —
+ * card #2 shipped the accent mark on the app's own chrome surface (`#191919`/`#33d0b0`).
  */
 
 
