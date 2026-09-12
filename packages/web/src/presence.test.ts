@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { clientIsLooking, foregroundOnlyDevice, HEARTBEAT_MS, IDLE_MS, presenceStep, type PresenceState } from "./presence.ts";
+import { becameLooking, clientIsLooking, foregroundOnlyDevice, HEARTBEAT_MS, IDLE_MS, presenceStep, type PresenceState } from "./presence.ts";
 
 describe("clientIsLooking, as the web wires it", () => {
   const t0 = 1_000_000;
@@ -94,5 +94,35 @@ describe("presenceStep retries a failed report", () => {
     const prev: PresenceState = { looking: false, board: "b", lastSentAt: t0, failed: true };
     expect(presenceStep(prev, { looking: false, board: "b" }, t0 + HEARTBEAT_MS - 1)).toBe("none");
     expect(presenceStep(prev, { looking: false, board: "b" }, t0 + HEARTBEAT_MS)).toBe("beat");
+  });
+});
+
+describe("becameLooking", () => {
+  it("is true on the very first evaluation, when it is already looking", () => {
+    expect(becameLooking(null, { looking: true })).toBe(true);
+  });
+
+  it("is false on the very first evaluation, when not looking", () => {
+    expect(becameLooking(null, { looking: false })).toBe(false);
+  });
+
+  it("is true on the transition from not-looking to looking", () => {
+    const prev: PresenceState = { looking: false, board: "b", lastSentAt: 0, failed: false };
+    expect(becameLooking(prev, { looking: true })).toBe(true);
+  });
+
+  it("is false while still looking on a later heartbeat re-evaluation", () => {
+    const prev: PresenceState = { looking: true, board: "b", lastSentAt: 0, failed: false };
+    expect(becameLooking(prev, { looking: true })).toBe(false);
+  });
+
+  it("is false on the leave transition", () => {
+    const prev: PresenceState = { looking: true, board: "b", lastSentAt: 0, failed: false };
+    expect(becameLooking(prev, { looking: false })).toBe(false);
+  });
+
+  it("is false while staying not-looking", () => {
+    const prev: PresenceState = { looking: false, board: "b", lastSentAt: 0, failed: false };
+    expect(becameLooking(prev, { looking: false })).toBe(false);
   });
 });

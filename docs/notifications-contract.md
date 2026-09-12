@@ -580,10 +580,11 @@ self.addEventListener("push", (event) => {
 });
 
 self.addEventListener("notificationclick", (event) => {
-  event.notification.close();
   const n = event.notification;
+  n.close();
   const url = (n.data && n.data.url) || n.tag || "#/";
   event.waitUntil((async () => {
+    await closeSiblingNotifications(n.tag);
     const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     for (const c of all) {
       if (new URL(c.url).origin !== self.location.origin) continue;
@@ -599,6 +600,26 @@ self.addEventListener("notificationclick", (event) => {
   })());
 });
 ```
+
+**Dismissal on tap (card 44).** `notificationclick` closes the tapped notification first, then
+closes every other open notification for the same board — a board is the prefix of the route in
+`tag` (`"#/b/<slug>/"`, since `tag` is always the route per §1.3) — via
+`self.registration.getNotifications()`, bounded to 50. `boardPrefixOf`/`closeSiblingNotifications`
+implement this; the regex is duplicated by hand in `packages/web/src/notifGroups.ts` (the copy
+`bun test` actually covers), since `sw.js` is plain JS copied verbatim with no imports and cannot
+share the module. Only *this* device's notifications are ever touched — dismissal never reaches
+another device's tray.
+
+**Dismissal on foreground (card 44).** Independently, `packages/web/src/push.ts`'s
+`closeBoardNotifications(boardSlug, limit = 50)` closes this device's open notifications for the
+current board (or every board, when there is none) the moment the page becomes "looking" — reusing
+`clientIsLooking`/`Presence` from ADR 0021 rather than a second definition of "foregrounded", so
+what suppresses a send and what dismisses one never drift apart. `presence.ts`'s `usePresence` grew
+a `becameLooking` transition and an optional `onBecameLooking(board)` callback, fired once per
+transition into looking (not on every heartbeat); `App.tsx` wires it straight to
+`closeBoardNotifications`. `closeBoardNotifications` never throws — every failure is logged with
+context and treated as "closed nothing" — and is a no-op wherever notifications or service workers
+are unsupported.
 
 **There is no `fetch` handler and there must not be one.** flock's assets are content-hashed and
 served immutable; offline is out of scope. A caching worker would be a brand-new and entirely
