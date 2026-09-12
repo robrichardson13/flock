@@ -877,6 +877,57 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
   border-radius: var(--r-full); background: var(--attn-fill); color: var(--on-attn-fill); font-size: var(--t-cap); font-weight: 700;
   display: inline-flex; align-items: center; justify-content: center;
 }
+
+/* ---------- Card 50: the cards search composer ---------- */
+
+/* --search-bar-h is a constant rather than a measured height (unlike --composer-h): the field
+   never grows past one line, so there is nothing to observe. Used by both shells' own
+   reservation rules below. */
+:root { --search-bar-h: var(--tap); }
+
+.search-bar {
+  display: flex; align-items: center; gap: var(--s2);
+  min-height: var(--search-bar-h); padding: 0 var(--s2) 0 var(--s3);
+  border: 1px solid var(--line); border-radius: var(--r-full);
+  background: var(--bg); color: var(--text);
+}
+.search-bar-icon { display: inline-flex; flex: none; color: var(--muted); }
+.search-bar-input {
+  flex: 1; min-width: 0; border: none; background: none; color: inherit;
+  font-size: var(--t-body); padding: 0;
+}
+.search-bar-input:focus { outline: none; }
+.search-bar-count { flex: none; white-space: nowrap; }
+.search-bar-clear, .search-bar-close { flex: none; }
+.search-bar-cancel { flex: none; padding: 0 var(--s1); }
+
+/* The phone composer chin: fixed above the tab bar, on the same --pillbar-x inset and the
+   same translucent chrome as every other bottom surface, so it reads as this app's composer
+   and not a bolted-on search widget. `.search-open` is set on `.screen` only while the Cards
+   pane itself is showing (BoardView.tsx), so the reservation never fires on another tab. */
+.screen.search-open:has(.tabbar) .screen-body {
+  --bottom-reserve: calc(var(--s3) + var(--pillbar-space) + var(--search-bar-h) + var(--s2));
+}
+.screen:has(.tabbar) .search-bar-mobile {
+  position: absolute; z-index: 15;
+  left: var(--pillbar-x); right: var(--pillbar-x);
+  bottom: var(--pillbar-space);
+  box-shadow: var(--elev-2);
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .search-bar-mobile {
+    background: color-mix(in srgb, var(--bg-chrome) 86%, transparent);
+    -webkit-backdrop-filter: saturate(180%) blur(24px);
+    backdrop-filter: saturate(180%) blur(24px);
+  }
+}
+
+/* Desktop: an ordinary row in `.board-main`'s own flex flow, the same width as the brief and
+   the kanban beside it rather than a floating overlay — there is no keyboard chin to match. */
+@media (min-width: 900px) {
+  .search-bar-desktop { max-width: 420px; }
+}
+
 /* What the pill costs the boxes underneath it. A scroller pays it as trailing padding, so
    its last row scrolls clear of the pill instead of stopping under it. `:has(.tabbar)` is the
    scope and the guard in one: the card page and Home have no tab bar and are untouched, and so

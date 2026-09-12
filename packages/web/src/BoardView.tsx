@@ -8,6 +8,7 @@ import {
   type CSSProperties,
   type FormEvent,
   type ReactNode,
+  type RefObject,
   type UIEvent,
 } from "react";
 import { createPortal } from "react-dom";
@@ -57,6 +58,7 @@ import { ActorSheet } from "./ActorView.tsx";
 import { clearSnapshot, readSnapshot, snapKey, writeSnapshot } from "./snapshot.ts";
 import { forgetView, readScroll, rememberedTab, rememberScroll, rememberTab } from "./viewstate.ts";
 import { useTopBarSlot } from "./TopBar.tsx";
+import { filterCards, searchMatchCount, useDebouncedValue } from "./cardSearch.ts";
 import { Avatar, D_BASE, D_SLOW, EMPTY_TEXT, Icons, prefersReducedMotion, RuntimeTag, Sheet, setEdgeSwipePeek, skipNextPushAnimation, STATUS_LABEL, StatusPill, TeamSheet, TeamStack, useAnyOverlayOpen, useEdgeSwipeBack, useHasFinePointer, useIsMobile, Menu } from "./ui.tsx";
 
 export type BoardTab = "cards" | "channel" | "activity" | "decisions";
@@ -97,6 +99,10 @@ export function tabHref(boardSlug: string, current: BoardTab, target: BoardTab):
 }
 
 const COLUMNS: CardStatus[] = ["todo", "doing", "awaiting-human", "done"];
+
+/** Card 50: what an emptied-by-search column or section says, instead of the board's ordinary
+ *  {@link EMPTY_TEXT} — "nothing matches" reads very differently from "nothing here yet". */
+const NO_MATCH_TEXT = "No matches";
 
 /**
  * The phone's Cards tab, top to bottom. What is stuck on you comes first, then what is
@@ -171,6 +177,51 @@ export function stickyActorName(actorName: string | undefined, lastActorName: st
  * `listRef` is the existing anchor/FLIP callback ref this container already wore; merged
  * here rather than replaced, so a card landing above the reader still holds their place.
  */
+/**
+ * Card 50: the cards search composer. One field wears the same idea on both shells — a
+ * magnifier, a live "N of M" readout, a clear × once there is something to clear, and a way
+ * out — but the phone's takes the bottom composer slot (`variant="mobile"`, a `Cancel` label
+ * to match every other sheet's own dismissal) while desktop's sits inline above the kanban
+ * (`variant="desktop"`, a plain × since there is no keyboard chin to match there).
+ */
+function SearchBar({ inputRef, value, onChange, onClose, count, variant = "mobile" }: {
+  inputRef: RefObject<HTMLInputElement>;
+  value: string;
+  onChange: (v: string) => void;
+  onClose: () => void;
+  /** Null while the query is empty — there is nothing to count yet. */
+  count: { matched: number; total: number } | null;
+  variant?: "mobile" | "desktop";
+}) {
+  return (
+    <div className={`search-bar search-bar-${variant}`} role="search">
+      <span className="search-bar-icon" aria-hidden>{Icons.search(16)}</span>
+      <input
+        ref={inputRef}
+        className="search-bar-input"
+        type="text"
+        inputMode="search"
+        enterKeyHint="search"
+        placeholder="Search cards"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="Search cards"
+      />
+      {count && <span className="search-bar-count muted tiny">{count.matched} of {count.total}</span>}
+      {value !== "" && (
+        <button type="button" className="icon-btn search-bar-clear" onClick={() => onChange("")} aria-label="Clear search">
+          {Icons.close(14)}
+        </button>
+      )}
+      {variant === "mobile" ? (
+        <button type="button" className="linkish search-bar-cancel" onClick={onClose}>Cancel</button>
+      ) : (
+        <button type="button" className="icon-btn search-bar-close" onClick={onClose} aria-label="Close search">{Icons.close(16)}</button>
+      )}
+    </div>
+  );
+}
+
 function CardsScrollBody({ boardSlug, listRef, children }: { boardSlug: string; listRef: (el: HTMLElement | null) => void; children: ReactNode }) {
   // Read once per board, not once per render: only the mount effect inside the hook ever
   // uses it, and a coalesced refetch re-renders this pane freely.
@@ -206,6 +257,43 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
   const [editingBody, setEditingBody] = useState(false);
   const [showWontfix, setShowWontfix] = useState(false);
   const [newCard, setNewCard] = useState(false);
+  // Card 50: the Cards-tab search. `searchQuery` is what the field holds; the filter itself
+  // reads the debounced value so a burst of keystrokes narrows the columns once, not per key.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearch = useDebouncedValue(searchQuery);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const openSearch = useCallback(() => setSearchOpen(true), []);
+  // Closing always clears the filter (the brief's own rule), so a reopened composer never
+  // silently starts from a stale query.
+  const closeSearch = useCallback(() => { setSearchOpen(false); setSearchQuery(""); }, []);
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus();
+  }, [searchOpen]);
+  // Esc closes from anywhere while the composer is open, matching every other sheet/overlay
+  // in the app.
+  useEffect(() => {
+    if (!searchOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeSearch(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [searchOpen, closeSearch]);
+  // Desktop only: Cmd/Ctrl+K opens search from anywhere on the board that isn't itself a text
+  // field. `/` already means "focus the channel composer" everywhere in the app (documented,
+  // tested in shortcuts.test.ts) and cards has no composer of its own, so this is a second,
+  // additive binding rather than a change to what `/` does.
+  useEffect(() => {
+    if (mobile) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "k") return;
+      const target = e.target as HTMLElement | null;
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) ) return;
+      e.preventDefault();
+      openSearch();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mobile, openSearch]);
   // The roster and the actor view are two depths of one thing (#31): whether the list is
   // showing, and where it was scrolled to when it was stepped out of, live in one reducer.
   const [roster, dispatchRoster] = useReducer(rosterNav, ROSTER_NAV_INITIAL);
@@ -680,6 +768,8 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
     team: snap?.team,
     teamCards: snap?.cards,
     onOpenTeam: () => dispatchRoster({ type: "open" }),
+    // Cards-tab-only chrome (card 50): the icon appears and disappears with the tab.
+    onOpenSearch: tab === "cards" ? openSearch : undefined,
   } : null);
 
   // Which way the tab bar moved, kept in a ref: derived fresh each render it would flip
@@ -708,8 +798,14 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
   // `displayCards` only ever differs from `snap.cards` for the mobile Cards pane mid-beat
   // (see above); `openCard` deliberately reads `snap.cards` regardless, so a card opened
   // during a replay always shows its real, current status rather than the pre-absence one.
-  const waiting = displayCards.filter((c) => c.status === "awaiting-human");
-  const wontfix = displayCards.filter((c) => c.status === "wontfix");
+  // Card 50: the search narrows what the columns/sections show, never `displayCards` itself —
+  // entrance/placement tracking above stays keyed off the real set so nothing mis-animates
+  // once the filter clears.
+  const searchActive = searchOpen && debouncedSearch.trim() !== "";
+  const cardsToShow = searchActive ? filterCards(displayCards, debouncedSearch) : displayCards;
+  const searchCount = searchActive ? searchMatchCount(displayCards, debouncedSearch) : null;
+  const waiting = cardsToShow.filter((c) => c.status === "awaiting-human");
+  const wontfix = cardsToShow.filter((c) => c.status === "wontfix");
   const openCard = cardNum ? snap.cards.find((c) => c.num === cardNum) ?? null : null;
   const goTab = (t: BoardTab) => (window.location.hash = tabHref(b.slug, tab, t));
   /** Leaving the card page goes *to* a tab, so it takes the plain route and not the tab bar's
@@ -802,7 +898,7 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
     />
   );
 
-  const sectionCards = (status: CardStatus) => displayCards.filter((c) => c.status === status);
+  const sectionCards = (status: CardStatus) => cardsToShow.filter((c) => c.status === status);
 
   if (mobile) {
     // A card open over the board pushes the board back: the same parallax and scrim a
@@ -818,7 +914,7 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
     const displayTab: BoardTab = displayTabWhileClosing(tab, cardClosing, lastTab.current, actorOnScreen);
     const paneClass = tabDir.current ? `tab-pane tab-in-${tabDir.current}` : "tab-pane";
     return (
-      <div className={`screen${pushed ? " screen--pushed" : ""}`} ref={screenRef}>
+      <div className={`screen${pushed ? " screen--pushed" : ""}${searchOpen && displayTab === "cards" ? " search-open" : ""}`} ref={screenRef}>
         <div className={paneClass} key={tab}>
           {displayTab === "cards" && (
             <>
@@ -849,6 +945,8 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
                       count={all.length}
                       onNew={() => setNewCard(true)}
                       nudge={status === "awaiting-human" && all.some((c) => newCards.has(c.id) || movedCards.has(c.id))}
+                      keepEmpty={searchActive}
+                      emptyText={searchActive ? NO_MATCH_TEXT : undefined}
                     >
                       {status === "awaiting-human" ? (
                         <div className="inbox">
@@ -863,6 +961,15 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
                   );
                 })}
               </CardsScrollBody>
+              {searchOpen && (
+                <SearchBar
+                  inputRef={searchInputRef}
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                  onClose={closeSearch}
+                  count={searchCount}
+                />
+              )}
             </>
           )}
           {displayTab === "channel" && <Channel boardId={b.id} snap={snap} onSent={refresh} />}
@@ -991,7 +1098,19 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
         actor={actor}
         onNewBoard={onNewBoard}
         onRename={onRename}
-        action={<button className="btn btn-primary" onClick={() => setNewCard(true)}>{Icons.plus(16)} New card</button>}
+        action={(
+          <>
+            {/* Card 50: the kanban is always on screen on desktop (there is no separate
+                "Cards tab" the way the phone has one), so the toggle is always live here
+                rather than gated on `tab`. */}
+            {!searchOpen && (
+              <button className="icon-btn" onClick={openSearch} aria-label="Search cards" title="Search cards (⌘K)">
+                {Icons.search(18)}
+              </button>
+            )}
+            <button className="btn btn-primary" onClick={() => setNewCard(true)}>{Icons.plus(16)} New card</button>
+          </>
+        )}
         trailing={(
           <Menu label="Board menu" trigger={Icons.more()}>
             {(close) => (
@@ -1061,6 +1180,17 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
             )}
           </section>
 
+          {searchOpen && (
+            <SearchBar
+              inputRef={searchInputRef}
+              value={searchQuery}
+              onChange={setSearchQuery}
+              onClose={closeSearch}
+              count={searchCount}
+              variant="desktop"
+            />
+          )}
+
           <section className="board-block">
             {/* Mirrors the phone's Section: an empty column is not drawn at all, except To
                 do, which keeps its head and gains the same "+" the phone section head has —
@@ -1073,7 +1203,9 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
                 // and the wontfix list beside it both surface the most recent work first.
                 const all = status === "done" ? closedOrder(sectionCards(status)) : sectionCards(status);
                 const hasWontfix = status === "done" && wontfix.length > 0;
-                if (all.length === 0 && !hasWontfix && status !== "todo") return null;
+                // Card 50: while a search is active, every column stays even when it has
+                // nothing left, and says so, rather than looking like the status vanished.
+                if (all.length === 0 && !hasWontfix && status !== "todo" && !searchActive) return null;
                 // Columns are as tall as their contents now, so an unfolded Done sets the
                 // height of the whole board. The kanban keeps its fold (a column is read by
                 // scanning across, not scrolling down): the most recent few stay visible, the
@@ -1099,7 +1231,7 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
                     </div>
                     <div className="column-cards">
                       {all.length === 0 && !hasWontfix && (
-                        <p className={`section-empty muted${enterClass(justEmptied.has(status))}`}>{EMPTY_TEXT}</p>
+                        <p className={`section-empty muted${enterClass(justEmptied.has(status))}`}>{searchActive ? NO_MATCH_TEXT : EMPTY_TEXT}</p>
                       )}
                       {cards.map((c) => <CardTile key={c.id} card={c} boardSlug={b.slug} actors={actors} isNew={newCards.has(c.id)} moved={movedCards.has(c.id)} style={enterDelay(orders.get(c.id))} />)}
                       {foldable && (
@@ -1404,6 +1536,8 @@ export function Section({
   onToggleFold,
   onNew,
   nudge,
+  keepEmpty,
+  emptyText,
   children,
 }: {
   status: CardStatus;
@@ -1414,9 +1548,15 @@ export function Section({
   onNew: () => void;
   /** Something just landed in this section: the heading gives one spring nudge to say so. */
   nudge?: boolean;
+  /** Card 50: while a search is narrowing the board, every section stays — an empty one says
+   *  so rather than vanishing, which would otherwise read as "this status doesn't exist"
+   *  instead of "nothing here matches". */
+  keepEmpty?: boolean;
+  /** The empty state's own text; defaults to the board's ordinary {@link EMPTY_TEXT}. */
+  emptyText?: string;
   children: ReactNode;
 }) {
-  if (count === 0 && status !== "todo") return null;
+  if (count === 0 && status !== "todo" && !keepEmpty) return null;
   const headClass = [status === "awaiting-human" && count > 0 ? "warn" : "", nudge ? "nudge" : ""].filter(Boolean).join(" ");
   return (
     <section className={`section section-${status}`}>
@@ -1430,7 +1570,7 @@ export function Section({
           <button className="section-add icon-btn" onClick={onNew} aria-label="New card">{Icons.plus(18)}</button>
         )}
       </div>
-      {count === 0 ? <p className="section-empty muted">{EMPTY_TEXT}</p> : children}
+      {count === 0 ? <p className="section-empty muted">{emptyText ?? EMPTY_TEXT}</p> : children}
     </section>
   );
 }
