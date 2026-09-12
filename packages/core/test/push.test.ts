@@ -149,3 +149,48 @@ describe("SCHEMA_VERSION", () => {
     expect(tables.length).toBe(1);
   });
 });
+
+describe("the push delivery lease (ADR 0023)", () => {
+  test("the first claimant wins and a second process on the same database does not", () => {
+    const { f } = fresh();
+    expect(f.acquirePushLease({ owner: "server-a", ttlMs: 5_000, at: 1_000 })).toBe(true);
+    expect(f.acquirePushLease({ owner: "server-b", ttlMs: 5_000, at: 1_100 })).toBe(false);
+    expect(f.pushLeaseOwner()).toBe("server-a");
+  });
+
+  test("the holder renews without losing it, and the renewal pushes the expiry out", () => {
+    const { f } = fresh();
+    f.acquirePushLease({ owner: "server-a", ttlMs: 5_000, at: 1_000 });
+    expect(f.acquirePushLease({ owner: "server-a", ttlMs: 5_000, at: 4_000 })).toBe(true);
+    // 7_000 would have been past the original expiry of 6_000; the renewal moved it to 9_000.
+    expect(f.acquirePushLease({ owner: "server-b", ttlMs: 5_000, at: 7_000 })).toBe(false);
+    expect(f.acquirePushLease({ owner: "server-b", ttlMs: 5_000, at: 9_001 })).toBe(true);
+  });
+
+  test("an expired lease is taken over, and the old holder does not take it back", () => {
+    const { f } = fresh();
+    f.acquirePushLease({ owner: "server-a", ttlMs: 5_000, at: 1_000 });
+    expect(f.acquirePushLease({ owner: "server-b", ttlMs: 5_000, at: 6_001 })).toBe(true);
+    expect(f.acquirePushLease({ owner: "server-a", ttlMs: 5_000, at: 6_100 })).toBe(false);
+    expect(f.pushLeaseOwner()).toBe("server-b");
+  });
+
+  test("release hands it straight over, and only the holder may release", () => {
+    const { f } = fresh();
+    f.acquirePushLease({ owner: "server-a", ttlMs: 5_000, at: 1_000 });
+    expect(f.releasePushLease("server-b")).toBe(false);
+    expect(f.acquirePushLease({ owner: "server-b", ttlMs: 5_000, at: 1_100 })).toBe(false);
+    expect(f.releasePushLease("server-a")).toBe(true);
+    expect(f.pushLeaseOwner()).toBe(null);
+    expect(f.acquirePushLease({ owner: "server-b", ttlMs: 5_000, at: 1_200 })).toBe(true);
+  });
+
+  test("an empty owner or an out-of-range ttl is rejected rather than silently muting push", () => {
+    const { f } = fresh();
+    expect(() => f.acquirePushLease({ owner: "  ", ttlMs: 5_000, at: 1 })).toThrow(FlockError);
+    expect(() => f.acquirePushLease({ owner: "a", ttlMs: 0, at: 1 })).toThrow(FlockError);
+    expect(() => f.acquirePushLease({ owner: "a", ttlMs: 60_001, at: 1 })).toThrow(FlockError);
+    expect(() => f.acquirePushLease({ owner: "a", ttlMs: 5_000, at: Number.NaN })).toThrow(FlockError);
+    expect(f.pushLeaseOwner()).toBe(null);
+  });
+});

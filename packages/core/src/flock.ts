@@ -104,6 +104,10 @@ export function normalizeEmoji(raw: string): string {
 /** Longest message gist carried on a reaction event, in characters. */
 const GIST_LENGTH = 120;
 
+/** Ceiling on a push lease ttl (ADR 0023). A stale lease this long would mute push for a minute;
+ *  nothing legitimate asks for more, and a typo must not silence notifications for hours. */
+const MAX_PUSH_LEASE_TTL_MS = 60_000;
+
 /**
  * A one-line precis of a message, for event consumers: whitespace collapsed, truncated, and
  * standing in for the body when the message is nothing but images.
@@ -1669,6 +1673,57 @@ export class Flock {
   /** Stamp `last_used_at` after a successful send. Silent no-op on an unknown endpoint. */
   touchPushSubscription(endpoint: string): void {
     this.db.query("UPDATE push_subscriptions SET last_used_at = ? WHERE endpoint = ?").run(now(), endpoint);
+  }
+
+  /**
+   * Take or renew the single-writer lease on push delivery for this database (ADR 0023).
+   *
+   * Several `flock serve` processes routinely share `~/.flock/flock.db`, and each one runs its own
+   * push pump over the same events table. Whoever holds this lease delivers; everyone else stays
+   * quiet, so one event is one notification per device however many servers are up.
+   *
+   * The claim is a single upserting statement, so it is atomic under SQLite's write lock: the
+   * `WHERE` only lets a writer through when it already owns the lease (a renewal) or when the
+   * incumbent's lease has expired (a takeover after a crash or a `kill -9`). Returns whether the
+   * caller holds it afterwards. `at` and `ttlMs` are epoch/duration milliseconds on the caller's
+   * clock, which is the pump's injected clock.
+   */
+  acquirePushLease(input: { owner: string; ttlMs: number; at: number; pid?: number }): boolean {
+    const owner = input.owner?.trim();
+    if (!owner) throw new FlockError("A push lease needs an owner", "invalid");
+    if (!Number.isFinite(input.at)) throw new FlockError("A push lease needs a finite `at`", "invalid");
+    if (!Number.isFinite(input.ttlMs) || input.ttlMs <= 0 || input.ttlMs > MAX_PUSH_LEASE_TTL_MS) {
+      throw new FlockError(`A push lease ttl must be between 1 and ${MAX_PUSH_LEASE_TTL_MS} ms`, "invalid");
+    }
+    this.db
+      .query(
+        `INSERT INTO push_lease(id, owner, pid, acquired_at, expires_at)
+         VALUES ('singleton', ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           owner = excluded.owner,
+           pid = excluded.pid,
+           acquired_at = CASE WHEN push_lease.owner = excluded.owner THEN push_lease.acquired_at ELSE excluded.acquired_at END,
+           expires_at = excluded.expires_at
+         WHERE push_lease.owner = excluded.owner OR push_lease.expires_at <= ?`,
+      )
+      .run(owner, input.pid ?? null, now(), Math.floor(input.at + input.ttlMs), Math.floor(input.at));
+    return this.pushLeaseOwner() === owner;
+  }
+
+  /** Who holds the push lease right now, expiry ignored, or null when nobody ever has. */
+  pushLeaseOwner(): string | null {
+    const row = this.db.query("SELECT owner FROM push_lease WHERE id = 'singleton'").get() as { owner: string } | null;
+    return row?.owner ?? null;
+  }
+
+  /**
+   * Give the lease up, so the next process to tick takes over immediately instead of waiting out
+   * the ttl. A no-op unless `owner` is the current holder: a process that already lost the lease
+   * must never evict whoever took it. Called from the pump's shutdown path.
+   */
+  releasePushLease(owner: string): boolean {
+    const result = this.db.query("DELETE FROM push_lease WHERE id = 'singleton' AND owner = ?").run(owner);
+    return result.changes > 0;
   }
 
   // ---------- aggregate ----------
