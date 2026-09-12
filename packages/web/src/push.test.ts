@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { pushState, urlBase64ToUint8Array, withServerKey, type PushEnv, type PushState } from "./push.ts";
+import { closeBoardNotifications, pushState, urlBase64ToUint8Array, withServerKey, type PushEnv, type PushState } from "./push.ts";
 
 const base = (): PushEnv => ({
   hasServiceWorker: true,
@@ -109,5 +109,63 @@ describe("withServerKey", () => {
 
   it("never turns on into server-off: a subscribed device stays on even if the key later goes away", () => {
     expect(withServerKey({ kind: "on" }, disabledKey)).toEqual({ kind: "on" });
+  });
+});
+
+/** A minimal fake of what `closeBoardNotifications` touches: `navigator.serviceWorker`,
+ *  `Notification` (only checked for existence) and a registration's `getNotifications()`. Swapped
+ *  in for the duration of one test and always restored, even on failure. */
+function withFakeNotificationEnv<T>(
+  opts: { registration: { getNotifications: () => Promise<Array<{ tag: string; close: () => void }>> } | null },
+  fn: () => Promise<T>,
+): Promise<T> {
+  const savedNav = (globalThis as { navigator?: unknown }).navigator;
+  const savedNotification = (globalThis as { Notification?: unknown }).Notification;
+  (globalThis as { navigator?: unknown }).navigator = {
+    serviceWorker: { getRegistration: async () => opts.registration },
+  };
+  (globalThis as { Notification?: unknown }).Notification = class {};
+  return fn().finally(() => {
+    (globalThis as { navigator?: unknown }).navigator = savedNav;
+    (globalThis as { Notification?: unknown }).Notification = savedNotification;
+  });
+}
+
+describe("closeBoardNotifications", () => {
+  it("closes only the tapped board's notifications, bounded, and reports the count", async () => {
+    const closed: string[] = [];
+    const open = [
+      { tag: "#/b/flock/channel", close: () => closed.push("#/b/flock/channel") },
+      { tag: "#/b/flock/c/1", close: () => closed.push("#/b/flock/c/1") },
+      { tag: "#/b/other/channel", close: () => closed.push("#/b/other/channel") },
+    ];
+    const n = await withFakeNotificationEnv({ registration: { getNotifications: async () => open } }, () =>
+      closeBoardNotifications("flock", 50),
+    );
+    expect(n).toBe(2);
+    expect(closed.sort()).toEqual(["#/b/flock/c/1", "#/b/flock/channel"]);
+  });
+
+  it("closes nothing and returns 0 when there is no registration", async () => {
+    const n = await withFakeNotificationEnv({ registration: null }, () => closeBoardNotifications("flock", 50));
+    expect(n).toBe(0);
+  });
+
+  it("closes nothing and returns 0 when serviceWorker/Notification are unsupported", async () => {
+    const savedNav = (globalThis as { navigator?: unknown }).navigator;
+    (globalThis as { navigator?: unknown }).navigator = {};
+    try {
+      expect(await closeBoardNotifications("flock", 50)).toBe(0);
+    } finally {
+      (globalThis as { navigator?: unknown }).navigator = savedNav;
+    }
+  });
+
+  it("never throws when getNotifications rejects", async () => {
+    const n = await withFakeNotificationEnv(
+      { registration: { getNotifications: async () => { throw new Error("boom"); } } },
+      () => closeBoardNotifications("flock", 50),
+    );
+    expect(n).toBe(0);
   });
 });

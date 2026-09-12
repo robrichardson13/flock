@@ -30,10 +30,11 @@ self.addEventListener("push", (event) => {
 });
 
 self.addEventListener("notificationclick", (event) => {
-  event.notification.close();
   const n = event.notification;
+  n.close();
   const url = (n.data && n.data.url) || n.tag || "#/";
   event.waitUntil((async () => {
+    await closeSiblingNotifications(n.tag);
     const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     for (const c of all) {
       if (new URL(c.url).origin !== self.location.origin) continue;
@@ -48,3 +49,30 @@ self.addEventListener("notificationclick", (event) => {
     await self.clients.openWindow(new URL(url, self.location.origin).href);
   })());
 });
+
+// The board segment of a route tag (NotificationPayload's `tag` is always the route, e.g.
+// "#/b/<slug>/channel" or "#/b/<slug>/c/12"), or null when `tag` isn't a board route. Kept in sync
+// by hand with `boardPrefixOf` in packages/web/src/notifGroups.ts — that copy is the one covered
+// by `bun test`; this file is plain JS with no imports, so it can't share the module directly.
+function boardPrefixOf(tag) {
+  const m = typeof tag === "string" && tag.match(/^#\/b\/[^/]+\//);
+  return m ? m[0] : null;
+}
+
+// Tapping one notification for a board clears the rest of that board's stack too, rather than
+// leaving stale banners behind for cards the person is about to see anyway. Bounded to 50: a
+// board with a runaway number of open notifications must never turn one tap into an unbounded
+// loop. A tag outside the board-route shape (e.g. none set) closes nothing beyond the tapped one.
+async function closeSiblingNotifications(tappedTag) {
+  const prefix = boardPrefixOf(tappedTag);
+  if (!prefix) return;
+  const open = await self.registration.getNotifications();
+  let closed = 0;
+  for (const other of open) {
+    if (closed >= 50) break;
+    if (other.tag === tappedTag) continue;
+    if (boardPrefixOf(other.tag) !== prefix) continue;
+    other.close();
+    closed++;
+  }
+}

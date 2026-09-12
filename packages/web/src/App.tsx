@@ -17,7 +17,7 @@ import { keyboardShrunk, readoutRequested, shellHeight } from "./vv.ts";
 import { VVReadout } from "./VVReadout.tsx";
 import { ActorLinks, Avatar, Icons, OverlayProvider, PromptProvider, PushStack, useEdgeSwipePeek, useIsMobile, usePrompt } from "./ui.tsx";
 import { PushPanel } from "./Notifications.tsx";
-import { currentSubscription, disablePush, enablePush, primePushKey, pushKeyNow, pushState, readPushEnv, withServerKey, type PushState } from "./push.ts";
+import { closeBoardNotifications, currentSubscription, disablePush, enablePush, primePushKey, pushKeyNow, pushState, readPushEnv, withServerKey, type PushState } from "./push.ts";
 import { usePresence } from "./presence.ts";
 
 /**
@@ -394,7 +394,10 @@ function Shell() {
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
-  usePresence(actor, hash);
+  // Clears this device's own stale push notifications for the current board the moment the app
+  // is foregrounded (per card 44), reusing presence's "looking" transition so the definitions of
+  // "foregrounded" stay in sync between what suppresses a send and what dismisses one.
+  usePresence(actor, hash, closeBoardNotifications);
 
   const load = useCallback(async () => {
     try {

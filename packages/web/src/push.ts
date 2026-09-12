@@ -1,4 +1,5 @@
 import { api } from "./api.ts";
+import { notificationsToClose } from "./notifGroups.ts";
 
 /** Everything the decision depends on, read off the environment by the caller. */
 export interface PushEnv {
@@ -144,6 +145,35 @@ export async function enablePush(publicKey: string): Promise<PushState> {
   const json = sub.toJSON() as { endpoint: string; keys: { p256dh: string; auth: string } };
   await api.pushSubscribe({ endpoint: json.endpoint, keys: json.keys, userAgent: navigator.userAgent });
   return { kind: "on" };
+}
+
+/**
+ * Closes this device's own visible push notifications for `boardSlug` (every notification, when
+ * `boardSlug` is null), bounded to 50. Called when the app becomes "looking" (see
+ * `usePresence`/`becameLooking` in `presence.ts`) so a foregrounded phone doesn't keep a stale
+ * banner in the tray after the person has already seen the update in-app. Never throws — every
+ * failure is logged with context and treated as "closed nothing" — and is a no-op wherever
+ * notifications or service workers aren't supported (`server-off`, `unsupported`, `insecure`, a
+ * page that never registered a worker).
+ */
+export async function closeBoardNotifications(boardSlug: string | null, limit = 50): Promise<number> {
+  if (!("serviceWorker" in navigator) || typeof Notification === "undefined") return 0;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration("/");
+    if (!reg) return 0;
+    const open = await reg.getNotifications();
+    const closeTags = new Set(notificationsToClose(open.map((n) => n.tag), boardSlug, limit));
+    let closed = 0;
+    for (const n of open) {
+      if (!closeTags.has(n.tag)) continue;
+      n.close();
+      closed++;
+    }
+    return closed;
+  } catch (err) {
+    console.warn(`[push] closeBoardNotifications(${boardSlug ?? "-"}) failed`, err);
+    return 0;
+  }
 }
 
 /**
