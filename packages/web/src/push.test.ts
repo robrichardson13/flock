@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { closeBoardNotifications, pushState, urlBase64ToUint8Array, withServerKey, type PushEnv, type PushState } from "./push.ts";
+import { askWorkerToCloseAll, closeBoardNotifications, CLOSE_ALL_MESSAGE, dismissAllNotifications, pushState, urlBase64ToUint8Array, withServerKey, type PushEnv, type PushState } from "./push.ts";
 
 const base = (): PushEnv => ({
   hasServiceWorker: true,
@@ -112,17 +112,26 @@ describe("withServerKey", () => {
   });
 });
 
-/** A minimal fake of what `closeBoardNotifications` touches: `navigator.serviceWorker`,
- *  `Notification` (only checked for existence) and a registration's `getNotifications()`. Swapped
- *  in for the duration of one test and always restored, even on failure. */
+type FakeNotification = { tag: string; close: () => void };
+type FakeRegistration = { getNotifications: () => Promise<FakeNotification[]>; active?: { postMessage: (m: unknown) => void } | null };
+
+/** A minimal fake of what the close/sweep helpers touch: `navigator.serviceWorker` (`ready`,
+ *  `getRegistration`, `controller`), `Notification` (only checked for existence) and a
+ *  registration's `getNotifications()`/`active`. Swapped in for the duration of one test and
+ *  always restored, even on failure. `ready` rejects when there is no registration so the
+ *  fallback path is taken immediately rather than waiting out the real timeout. */
 function withFakeNotificationEnv<T>(
-  opts: { registration: { getNotifications: () => Promise<Array<{ tag: string; close: () => void }>> } | null },
+  opts: { registration: FakeRegistration | null; controller?: { postMessage: (m: unknown) => void } | null },
   fn: () => Promise<T>,
 ): Promise<T> {
   const savedNav = (globalThis as { navigator?: unknown }).navigator;
   const savedNotification = (globalThis as { Notification?: unknown }).Notification;
   (globalThis as { navigator?: unknown }).navigator = {
-    serviceWorker: { getRegistration: async () => opts.registration },
+    serviceWorker: {
+      ready: opts.registration ? Promise.resolve(opts.registration) : Promise.reject(new Error("no worker")),
+      getRegistration: async () => opts.registration,
+      controller: opts.controller ?? null,
+    },
   };
   (globalThis as { Notification?: unknown }).Notification = class {};
   return fn().finally(() => {
@@ -167,5 +176,74 @@ describe("closeBoardNotifications", () => {
       () => closeBoardNotifications("flock", 50),
     );
     expect(n).toBe(0);
+  });
+});
+
+describe("closeBoardNotifications, unfiltered", () => {
+  it("closes every board's notifications when the slug is null", async () => {
+    const closed: string[] = [];
+    const open = [
+      { tag: "#/b/flock/channel", close: () => closed.push("a") },
+      { tag: "#/b/other/c/9", close: () => closed.push("b") },
+    ];
+    const n = await withFakeNotificationEnv({ registration: { getNotifications: async () => open } }, () =>
+      closeBoardNotifications(null),
+    );
+    expect(n).toBe(2);
+    expect(closed).toEqual(["a", "b"]);
+  });
+
+  it("never closes more than the limit, however many are open", async () => {
+    let closed = 0;
+    const open = Array.from({ length: 250 }, (_, i) => ({ tag: `#/b/flock/c/${i}`, close: () => closed++ }));
+    const n = await withFakeNotificationEnv({ registration: { getNotifications: async () => open } }, () =>
+      closeBoardNotifications(null),
+    );
+    expect(n).toBe(100);
+    expect(closed).toBe(100);
+  });
+});
+
+describe("askWorkerToCloseAll", () => {
+  it("posts the close-all message to the active worker", async () => {
+    const posted: unknown[] = [];
+    const reg: FakeRegistration = { getNotifications: async () => [], active: { postMessage: (m) => posted.push(m) } };
+    const ok = await withFakeNotificationEnv({ registration: reg }, () => askWorkerToCloseAll());
+    expect(ok).toBe(true);
+    expect(posted).toEqual([{ type: CLOSE_ALL_MESSAGE, limit: 100 }]);
+  });
+
+  it("falls back to the controller when the registration has no active worker", async () => {
+    const posted: unknown[] = [];
+    const reg: FakeRegistration = { getNotifications: async () => [], active: null };
+    const ok = await withFakeNotificationEnv(
+      { registration: reg, controller: { postMessage: (m) => posted.push(m) } },
+      () => askWorkerToCloseAll(),
+    );
+    expect(ok).toBe(true);
+    expect(posted).toHaveLength(1);
+  });
+
+  it("returns false rather than throwing when there is no worker at all", async () => {
+    expect(await withFakeNotificationEnv({ registration: null }, () => askWorkerToCloseAll())).toBe(false);
+  });
+});
+
+describe("dismissAllNotifications", () => {
+  it("runs both routes: the worker message and the page-side close", async () => {
+    const posted: unknown[] = [];
+    const closed: string[] = [];
+    const reg: FakeRegistration = {
+      getNotifications: async () => [{ tag: "#/b/flock/channel", close: () => closed.push("x") }],
+      active: { postMessage: (m) => posted.push(m) },
+    };
+    await withFakeNotificationEnv({ registration: reg }, () => dismissAllNotifications());
+    expect(posted).toHaveLength(1);
+    expect(closed).toEqual(["x"]);
+  });
+
+  it("resolves without throwing when both routes fail", async () => {
+    const reg: FakeRegistration = { getNotifications: async () => { throw new Error("boom"); }, active: null };
+    await withFakeNotificationEnv({ registration: reg }, () => dismissAllNotifications());
   });
 });

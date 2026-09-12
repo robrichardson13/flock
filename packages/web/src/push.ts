@@ -147,24 +147,54 @@ export async function enablePush(publicKey: string): Promise<PushState> {
   return { kind: "on" };
 }
 
+/** Hard ceiling on one sweep. A tray that somehow holds more than this is a bug elsewhere; it
+ *  must never turn a foregrounding into an unbounded loop. */
+export const CLOSE_LIMIT = 100;
+
+/** How long to wait on `navigator.serviceWorker.ready` before giving up on it. `ready` never
+ *  rejects and never resolves when no worker was ever registered, so it needs its own bound. */
+const READY_TIMEOUT_MS = 3_000;
+
 /**
- * Closes this device's own visible push notifications for `boardSlug` (every notification, when
- * `boardSlug` is null), bounded to 50. Called when the app becomes "looking" (see
- * `usePresence`/`becameLooking` in `presence.ts`) so a foregrounded phone doesn't keep a stale
- * banner in the tray after the person has already seen the update in-app. Never throws — every
- * failure is logged with context and treated as "closed nothing" — and is a no-op wherever
- * notifications or service workers aren't supported (`server-off`, `unsupported`, `insecure`, a
- * page that never registered a worker).
+ * The registration whose worker is *active*, which is the one that owns the shown notifications.
+ * `navigator.serviceWorker.ready` is the correct source (PR 48 used `getRegistration`, which can
+ * hand back a registration whose new worker is still installing on the first load after a
+ * sw.js update), but it is unbounded, so it races a timeout and falls back to `getRegistration`.
  */
-export async function closeBoardNotifications(boardSlug: string | null, limit = 50): Promise<number> {
+async function activeRegistration(): Promise<ServiceWorkerRegistration | null> {
+  const sw = navigator.serviceWorker;
+  const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), READY_TIMEOUT_MS));
+  const ready = await Promise.race([sw.ready.catch(() => null), timeout]);
+  if (ready) return ready;
+  return (await sw.getRegistration("/")) ?? null;
+}
+
+/**
+ * Closes this device's own visible push notifications for `boardSlug` — every one of them when
+ * `boardSlug` is null — bounded to `limit`. Never throws: every failure is logged with context
+ * and treated as "closed nothing", and it is a no-op wherever notifications or service workers
+ * aren't supported (`server-off`, `unsupported`, `insecure`, a page that never registered a
+ * worker).
+ *
+ * An *empty* result is logged too, deliberately. On WebKit this is the case that silently ate
+ * the whole feature in PR 48: the page asking a registration for its notifications can come back
+ * with nothing even while the worker itself can see them, and a bare `return 0` left no trace of
+ * that at all. `askWorkerToCloseAll` is the answer to it; this log is how anyone knows it fired.
+ */
+export async function closeBoardNotifications(boardSlug: string | null, limit = CLOSE_LIMIT): Promise<number> {
   if (!("serviceWorker" in navigator) || typeof Notification === "undefined") return 0;
   try {
-    const reg = await navigator.serviceWorker.getRegistration("/");
+    const reg = await activeRegistration();
     if (!reg) return 0;
     const open = await reg.getNotifications();
+    if (open.length === 0) {
+      console.info("[push] page-side getNotifications() saw none open (expected on WebKit; the worker sweeps too)");
+      return 0;
+    }
     const closeTags = new Set(notificationsToClose(open.map((n) => n.tag), boardSlug, limit));
     let closed = 0;
     for (const n of open) {
+      if (closed >= limit) break;
       if (!closeTags.has(n.tag)) continue;
       n.close();
       closed++;
@@ -174,6 +204,43 @@ export async function closeBoardNotifications(boardSlug: string | null, limit = 
     console.warn(`[push] closeBoardNotifications(${boardSlug ?? "-"}) failed`, err);
     return 0;
   }
+}
+
+/** The message the page sends the worker to have it sweep its own notifications. The worker
+ *  answers to this string in `packages/web/public/sw.js`; keep the two spellings in step. */
+export const CLOSE_ALL_MESSAGE = "flock:close-all";
+
+/**
+ * Asks the active service worker to close every notification it has shown, from inside the
+ * worker. This is the route that actually works on iOS: a worker enumerating its own
+ * notifications is reliable (PR 48's tap-to-clear-siblings proves it — same call, worker
+ * context), while the page asking the registration for the same list is not.
+ *
+ * Fire-and-forget by design — there is no reply channel and nothing to await — and it never
+ * throws.
+ */
+export async function askWorkerToCloseAll(): Promise<boolean> {
+  if (!("serviceWorker" in navigator)) return false;
+  try {
+    const reg = await activeRegistration();
+    const worker = reg?.active ?? navigator.serviceWorker.controller ?? null;
+    if (!worker) return false;
+    worker.postMessage({ type: CLOSE_ALL_MESSAGE, limit: CLOSE_LIMIT });
+    return true;
+  } catch (err) {
+    console.warn("[push] askWorkerToCloseAll failed", err);
+    return false;
+  }
+}
+
+/**
+ * The whole foreground sweep, belt and braces: ask the worker to clear its own notifications
+ * *and* try from the page. Both are bounded, neither throws, and running both is deliberate —
+ * either one alone has a browser where it comes back empty. Unfiltered by board: this app is one
+ * origin, the person is now looking at it, and everything in the tray is stale.
+ */
+export async function dismissAllNotifications(): Promise<void> {
+  await Promise.all([askWorkerToCloseAll(), closeBoardNotifications(null, CLOSE_LIMIT)]);
 }
 
 /**
