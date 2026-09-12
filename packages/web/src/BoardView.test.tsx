@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { displayTabWhileClosing, paneHref, Section, tabHref } from "./BoardView.tsx";
+import { displayTabWhileClosing, paneHref, Section, stickyActorName, tabHref } from "./BoardView.tsx";
 
 /**
  * #32: mobile's Done section is a plain vertical list now — every finished card renders, with
@@ -82,6 +82,26 @@ describe("displayTabWhileClosing with an open actor (#3)", () => {
 
   it("defers to the route's tab once the actor is gone", () => {
     expect(displayTabWhileClosing("channel", false, "activity", false)).toBe("channel");
+  });
+});
+
+/**
+ * Card #22: `actorName` clears the instant the route does, before the actor sheet has had a
+ * chance to play its own fade-out — `stickyActorName` is what lets the sheet keep naming the
+ * actor (and hence keep fetching/rendering their real content) through that closing beat
+ * instead of either unmounting outright or rendering blank.
+ */
+describe("stickyActorName (#22)", () => {
+  it("passes the current name straight through while the sheet is open", () => {
+    expect(stickyActorName("mira", "corvid")).toBe("mira");
+  });
+
+  it("falls back to the last real name once the route has cleared", () => {
+    expect(stickyActorName(undefined, "corvid")).toBe("corvid");
+  });
+
+  it("is undefined when the sheet has never named anyone", () => {
+    expect(stickyActorName(undefined, undefined)).toBeUndefined();
   });
 });
 
