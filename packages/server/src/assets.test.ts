@@ -16,11 +16,13 @@ function fakeDist() {
   writeFileSync(join(dir, "assets", "index-abc123.js"), "console.log('app')");
   writeFileSync(join(dir, "assets", "index-def456.css"), "body{color:red}");
   writeFileSync(join(dir, "sw.js"), "self.addEventListener('push', () => {});");
+  writeFileSync(join(dir, "manifest.webmanifest"), "{}");
   return {
     "/index.html": join(dir, "index.html"),
     "/assets/index-abc123.js": join(dir, "assets", "index-abc123.js"),
     "/assets/index-def456.css": join(dir, "assets", "index-def456.css"),
     "/sw.js": join(dir, "sw.js"),
+    "/manifest.webmanifest": join(dir, "manifest.webmanifest"),
   };
 }
 
@@ -75,11 +77,20 @@ describe("embedded asset map", () => {
     writeFileSync(join(dir, "index.html"), "<!doctype html><title>on disk</title>");
     writeFileSync(join(dir, "sw.js"), "self.addEventListener('push', () => {});");
     writeFileSync(join(dir, "app.js"), "console.log('app')");
+    writeFileSync(join(dir, "manifest.webmanifest"), "{}");
     const app = appWith({ staticDir: dir });
     const sw = await app.request("/sw.js");
     expect(sw.headers.get("cache-control")).toBe("no-cache");
+    const manifest = await app.request("/manifest.webmanifest");
+    expect(manifest.headers.get("cache-control")).toBe("no-cache");
     const js = await app.request("/app.js");
     expect(js.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+  });
+
+  test("manifest.webmanifest is carved out of the immutable cache-control too — it points at the icons", async () => {
+    const app = appWith({ assets: fakeDist() });
+    const manifest = await app.request("/manifest.webmanifest");
+    expect(manifest.headers.get("cache-control")).toBe("no-cache");
   });
 
   test("an empty map is ignored rather than serving a UI-less 200", async () => {
