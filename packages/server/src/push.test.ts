@@ -907,3 +907,88 @@ describe("PushPump delivery lease across processes on one database", () => {
     }
   });
 });
+
+/**
+ * Card 54, from the log of the real phone. `[presence]` showed a foregrounded iOS home-screen app
+ * beating `board=-` — Home — for long stretches, because that is where `start_url: "/"` lands it,
+ * and Home is where the bell lives. Presence keyed strictly by board suppressed nothing there, so
+ * the next channel message buzzed a phone the owner was holding and reading.
+ */
+describe("a phone sitting on Home is not buzzed for a board (card 54)", () => {
+  let home: string;
+  beforeEach(() => {
+    home = tempHome();
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const beat = (app: ReturnType<typeof createApp>, body: { client: string; board: string | null; looking: boolean }) =>
+    app.request("/api/presence", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-flock-actor": "ada", "x-flock-actor-kind": "human" },
+      body: JSON.stringify(body),
+    });
+
+  test("on Home, a channel message on any board is suppressed; leaving the app lets it through", async () => {
+    const flock = new Flock(":memory:");
+    const board = flock.createBoard(ada, { title: "Flock v1" });
+    const other = flock.createBoard(ada, { title: "Another Project" });
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada-phone", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    const t = 1_000_000;
+    const app = createApp({ flock, dbPath: ":memory:", flockHome: home, pushSend: send, now: () => t, pushIntervalMs: 20 });
+
+    // The app is open on Home: `board: null`, looking. This is what the phone actually reported.
+    expect((await beat(app, { client: "phone", board: null, looking: true })).status).toBe(204);
+
+    flock.say(scout, board.id, "a line on the board she is not scoped to");
+    await Bun.sleep(60);
+    expect(calls.length).toBe(0);
+
+    // Every board, not just the one she last visited.
+    flock.say(scout, other.id, "a line on a different board entirely");
+    await Bun.sleep(60);
+    expect(calls.length).toBe(0);
+
+    // She puts the phone down: the leave beat lands and the next message reaches her.
+    expect((await beat(app, { client: "phone", board: null, looking: false })).status).toBe(204);
+    flock.say(scout, board.id, "and now she should hear about it");
+    await Bun.sleep(60);
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.endpoint).toBe("https://push.example/ada-phone");
+  });
+
+  test("a stale tab on a deleted board suppresses nothing, Home rule or not", async () => {
+    const flock = new Flock(":memory:");
+    const board = flock.createBoard(ada, { title: "Flock v1" });
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada-phone", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    const t = 1_000_000;
+    const app = createApp({ flock, dbPath: ":memory:", flockHome: home, pushSend: send, now: () => t, pushIntervalMs: 20 });
+
+    // An unknown slug must not be filed as Home, or a forgotten tab would silence every board.
+    expect((await beat(app, { client: "stale", board: "a-board-that-was-deleted", looking: true })).status).toBe(204);
+
+    flock.say(scout, board.id, "she is not actually looking at anything");
+    await Bun.sleep(60);
+    expect(calls.length).toBe(1);
+  });
+
+  test("an ask still arrives on Home: urgent never consults presence", async () => {
+    const flock = new Flock(":memory:");
+    const board = flock.createBoard(ada, { title: "Flock v1" });
+    const card = flock.createCard(scout, board.id, { title: "Needs a human" });
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada-phone", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    const t = 1_000_000;
+    const app = createApp({ flock, dbPath: ":memory:", flockHome: home, pushSend: send, now: () => t, pushIntervalMs: 20 });
+
+    expect((await beat(app, { client: "phone", board: null, looking: true })).status).toBe(204);
+
+    flock.askHuman(scout, board.id, card.num, "Which way?");
+    await Bun.sleep(60);
+    // The whole point of the Home rule is that it silences chatter, not the things you must answer.
+    expect(calls.length).toBe(1);
+  });
+});

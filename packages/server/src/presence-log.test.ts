@@ -106,6 +106,7 @@ describe("formatPushDecision", () => {
         looking: false,
         presenceAgeMs: null,
         presenceClients: 0,
+        via: null,
         subscriptions: 1,
       }),
     ).toBe(
@@ -124,9 +125,27 @@ describe("formatPushDecision", () => {
       looking: true,
       presenceAgeMs: 3_000,
       presenceClients: 2,
+      via: "board",
       subscriptions: 1,
     });
-    expect(line).toContain("looking=true age=3.0s clients=2");
+    expect(line).toContain("looking=true(board) age=3.0s clients=2");
+  });
+
+  test("a Home client's suppression is labelled, so the log distinguishes the two rules", () => {
+    const line = formatPushDecision({
+      seq: 415,
+      type: "message.posted",
+      notificationClass: "chatter",
+      actor: "rob",
+      board: "flock-2",
+      boardId: "b1",
+      looking: true,
+      presenceAgeMs: 2_000,
+      presenceClients: 1,
+      via: "home",
+      subscriptions: 1,
+    });
+    expect(line).toContain("looking=true(home)");
   });
 
   test("an urgent event says so, since presence never applied to it", () => {
@@ -140,6 +159,7 @@ describe("formatPushDecision", () => {
       looking: true,
       presenceAgeMs: 1_000,
       presenceClients: 1,
+      via: "board",
       subscriptions: 1,
     });
     // looking=true and it still goes out: ADR 0021 exempts asks. The class is what says

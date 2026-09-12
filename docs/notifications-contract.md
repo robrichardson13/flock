@@ -271,9 +271,14 @@ export class Presence {
   /** `looking: true` upserts `{ actor, boardId, expiresAt: now + ttlMs }` keyed by `client`;
    *  `looking: false` deletes that client's entry. */
   report(r: PresenceReport, now: number): void;
-  /** True iff some (unexpired) entry has this exact actor and this exact boardId. `boardId: null`
-   *  (Home) never matches, since `isLooking`'s `boardId` parameter is always a non-null string. */
+  /** True iff some unexpired entry has this actor and either this exact boardId, or `null` —
+   *  Home, which counts as looking at every board (card 54; ADR 0021 amendment). An unresolved
+   *  slug is stored as `unresolvedScope(slug)` precisely so it is not `null` and matches nothing. */
   isLooking(actor: string, boardId: string, now: number): boolean;
+  /** Why: `{ looking, ageMs, clients, via: "board" | "home" | null }`. Diagnostic. */
+  lookingDetail(actor: string, boardId: string | null, now: number): LookingDetail;
+  /** Every live client, freshest first, for the loopback dump. */
+  snapshot(now: number): PresenceSnapshotEntry[];
   /** Live entry count after pruning stale ones. For tests. */
   size(now: number): number;
 }
@@ -997,7 +1002,10 @@ presence into one (§1.4).
 
 **Board.** Parsed from the hash directly (`#/b/<slug>/...` → `<slug>`; anything else, Home
 included, → `null`) by a small local matcher that mirrors `App.tsx`'s route parsing without
-importing it, so `presence.ts` has no dependency on the shell that mounts it.
+importing it, so `presence.ts` has no dependency on the shell that mounts it. `null` is not "no
+presence": since card 54 it means *this device is in the app*, and it suppresses chatter on every
+board. An iOS home-screen app launches at `start_url: "/"`, so this is the state a phone spends the
+first stretch of every session in.
 
 **When it sends**, all driven by one `useEffect` in `usePresence`:
 

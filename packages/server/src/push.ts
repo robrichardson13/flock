@@ -239,6 +239,7 @@ export function startPushPump(opts: {
           looking: detail.looking,
           presenceAgeMs: detail.ageMs,
           presenceClients: detail.clients,
+          via: detail.via,
           subscriptions: subs.filter((s) => s.actor === actor).length,
         }),
       );

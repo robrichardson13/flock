@@ -104,6 +104,8 @@ export interface PushDecisionLine {
   presenceAgeMs: number | null;
   /** How many live presence clients match (actor, board). */
   presenceClients: number;
+  /** Which rule matched: the client is on this board, or on Home (card 54). */
+  via: "board" | "home" | null;
   /** Push subscriptions this actor has for this board. */
   subscriptions: number;
 }
@@ -122,7 +124,7 @@ export function formatPushDecision(d: PushDecisionLine): string {
     `actor=${val(d.actor)}`,
     `board=${val(d.board)}`,
     `boardId=${val(d.boardId)}`,
-    `looking=${d.looking}`,
+    `looking=${d.looking}${d.via === null ? "" : `(${d.via})`}`,
     `age=${shortDuration(d.presenceAgeMs)}`,
     `clients=${d.presenceClients}`,
     `subs=${d.subscriptions}`,

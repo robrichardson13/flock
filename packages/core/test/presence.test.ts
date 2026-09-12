@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { clientIsLooking, IDLE_MS, MAX_PRESENCE_CLIENTS, PRESENCE_TTL_MS, Presence } from "../src/index.ts";
+import { clientIsLooking, IDLE_MS, MAX_PRESENCE_CLIENTS, PRESENCE_TTL_MS, Presence, unresolvedScope } from "../src/index.ts";
 
 describe("Presence", () => {
   test("report looking makes isLooking true for that actor+board only", () => {
@@ -11,13 +11,15 @@ describe("Presence", () => {
     expect(presence.isLooking("ada", "board-2", 1000)).toBe(false); // other board
   });
 
-  test("Home (boardId: null) never matches isLooking", () => {
+  test("Home (boardId: null) matches every board (card 54)", () => {
     const presence = new Presence();
     presence.report({ client: "c1", actor: "ada", boardId: null, looking: true }, 1000);
 
-    // isLooking always takes a string boardId, so a null-board report can
-    // never satisfy any isLooking(actor, boardId, now) query.
-    expect(presence.isLooking("ada", "board-1", 1000)).toBe(false);
+    // Was: a null-board report satisfied no isLooking query at all. Measured on the phone, that
+    // meant an app sitting on its own launch route suppressed nothing. See the card 54 block below.
+    expect(presence.isLooking("ada", "board-1", 1000)).toBe(true);
+    expect(presence.isLooking("ada", "board-2", 1000)).toBe(true);
+    expect(presence.isLooking("scout", "board-1", 1000)).toBe(false);
   });
 
   test("TTL boundary", () => {
@@ -104,10 +106,10 @@ describe("Presence observability (card 54)", () => {
     p.report({ client: "b", actor: "rob", boardId: "b1", looking: true }, t0 + 4_000);
 
     const hit = p.lookingDetail("rob", "b1", t0 + 5_000);
-    expect(hit).toEqual({ looking: true, ageMs: 1_000, clients: 2 });
+    expect(hit).toEqual({ looking: true, ageMs: 1_000, clients: 2, via: "board" });
 
-    expect(p.lookingDetail("rob", "b2", t0 + 5_000)).toEqual({ looking: false, ageMs: null, clients: 0 });
-    expect(p.lookingDetail("ada", "b1", t0 + 5_000)).toEqual({ looking: false, ageMs: null, clients: 0 });
+    expect(p.lookingDetail("rob", "b2", t0 + 5_000)).toEqual({ looking: false, ageMs: null, clients: 0, via: null });
+    expect(p.lookingDetail("ada", "b1", t0 + 5_000)).toEqual({ looking: false, ageMs: null, clients: 0, via: null });
     // Home is its own key, not a wildcard.
     expect(p.lookingDetail("rob", null, t0 + 5_000).looking).toBe(false);
   });
@@ -119,7 +121,7 @@ describe("Presence observability (card 54)", () => {
     expect(p.lookingDetail("rob", "b1", justInside).looking).toBe(p.isLooking("rob", "b1", justInside));
     expect(p.lookingDetail("rob", "b1", justInside).ageMs).toBe(PRESENCE_TTL_MS - 1);
     const expired = t0 + PRESENCE_TTL_MS;
-    expect(p.lookingDetail("rob", "b1", expired)).toEqual({ looking: false, ageMs: null, clients: 0 });
+    expect(p.lookingDetail("rob", "b1", expired)).toEqual({ looking: false, ageMs: null, clients: 0, via: null });
   });
 
   test("snapshot dumps live clients freshest first, with their info block", () => {
@@ -156,5 +158,63 @@ describe("Presence observability (card 54)", () => {
     // Re-reporting an existing client never evicts anyone.
     p.report({ client: "newcomer", actor: "rob", boardId: "b1", looking: true }, t0 + MAX_PRESENCE_CLIENTS + 1);
     expect(p.size(t0)).toBe(MAX_PRESENCE_CLIENTS);
+  });
+});
+
+/**
+ * Card 54, measured on the real phone: an iOS home-screen app launches at `start_url: "/"`, which
+ * is Home, and the log showed it beating `board=-` for long stretches while plainly foregrounded.
+ * Keyed strictly by board, Home suppressed nothing on any board — so the app buzzed the phone in
+ * the user's hand through the whole first stretch of every session.
+ */
+describe("a client on Home is looking at every board (card 54)", () => {
+  const t0 = 1_000_000;
+
+  test("Home suppresses any board, and says so", () => {
+    const p = new Presence();
+    p.report({ client: "phone", actor: "rob", boardId: null, looking: true }, t0);
+
+    expect(p.isLooking("rob", "b1", t0 + 1_000)).toBe(true);
+    expect(p.isLooking("rob", "b2", t0 + 1_000)).toBe(true);
+    expect(p.lookingDetail("rob", "b1", t0 + 1_000)).toEqual({ looking: true, ageMs: 1_000, clients: 1, via: "home" });
+
+    // Still only this actor's own presence.
+    expect(p.isLooking("ada", "b1", t0 + 1_000)).toBe(false);
+    // And still bounded by the TTL: a Home client that stops beating stops suppressing.
+    expect(p.isLooking("rob", "b1", t0 + PRESENCE_TTL_MS)).toBe(false);
+  });
+
+  test("a client on one board still suppresses only that board", () => {
+    const p = new Presence();
+    p.report({ client: "phone", actor: "rob", boardId: "b1", looking: true }, t0);
+    expect(p.isLooking("rob", "b1", t0)).toBe(true);
+    expect(p.isLooking("rob", "b2", t0)).toBe(false);
+    expect(p.lookingDetail("rob", "b1", t0).via).toBe("board");
+    expect(p.lookingDetail("rob", "b2", t0).via).toBe(null);
+  });
+
+  test("a board match is reported over a Home match when both are live", () => {
+    const p = new Presence();
+    p.report({ client: "home", actor: "rob", boardId: null, looking: true }, t0 + 1_000);
+    p.report({ client: "board", actor: "rob", boardId: "b1", looking: true }, t0);
+    const detail = p.lookingDetail("rob", "b1", t0 + 2_000);
+    expect(detail).toEqual({ looking: true, ageMs: 1_000, clients: 2, via: "board" });
+  });
+
+  test("an unresolved board scope is not Home and suppresses nothing", () => {
+    // A tab left open on a deleted board must not silence every board it can no longer name.
+    const p = new Presence();
+    p.report({ client: "stale", actor: "rob", boardId: unresolvedScope("deleted-board"), looking: true }, t0);
+    expect(p.isLooking("rob", "b1", t0)).toBe(false);
+    expect(p.lookingDetail("rob", "b1", t0)).toEqual({ looking: false, ageMs: null, clients: 0, via: null });
+    // It is still in the dump, so the log can show what that client thinks it is on.
+    expect(p.snapshot(t0)).toHaveLength(1);
+  });
+
+  test("leaving Home stops the suppression at once, not on the TTL", () => {
+    const p = new Presence();
+    p.report({ client: "phone", actor: "rob", boardId: null, looking: true }, t0);
+    p.report({ client: "phone", actor: "rob", boardId: null, looking: false }, t0 + 1_000);
+    expect(p.isLooking("rob", "b1", t0 + 1_000)).toBe(false);
   });
 });
