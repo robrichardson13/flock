@@ -88,10 +88,11 @@ export function formatPresenceReport(l: PresenceLogLine): string {
     `focused=${flag(i.focused)}`,
     `input=${shortDuration(i.lastInputAgeMs)}`,
     `fg=${flag(i.foregroundOnly)}`,
-    `ua=${val(shortUserAgent(i.userAgent))}`,
-    `client=${val(l.client.slice(0, 8))}`,
-    ...dismissParts(i),
   ];
+  // Only on a late beat, so grepping `gap=` finds every stretch the client went silent and
+  // nothing else (card 91). An ordinary on-cadence beat carries no gap keys at all.
+  if (i.gapReason !== undefined) parts.push(`gap=${val(i.gapReason)}/${shortDuration(i.gapMs)}`);
+  parts.push(`ua=${val(shortUserAgent(i.userAgent))}`, `client=${val(l.client.slice(0, 8))}`, ...dismissParts(i));
   return parts.join(" ");
 }
 
@@ -199,6 +200,12 @@ export function normalizeClientInfo(raw: unknown, userAgent: string | undefined)
     info.lastInputAgeMs = Math.max(0, Math.min(o.lastInputAgeMs, 24 * 60 * 60 * 1000));
   }
   if (typeof o.foregroundOnly === "boolean") info.foregroundOnly = o.foregroundOnly;
+  // A gap is only meaningful with both halves, and the reason is a short client-chosen token, so
+  // it is clamped like every other free string here.
+  if (typeof o.gapReason === "string" && o.gapReason.length > 0 && typeof o.gapMs === "number" && Number.isFinite(o.gapMs)) {
+    info.gapReason = o.gapReason.slice(0, 32);
+    info.gapMs = Math.max(0, Math.min(o.gapMs, 24 * 60 * 60 * 1000));
+  }
   if (userAgent) info.userAgent = userAgent.slice(0, MAX_USER_AGENT);
 
   // The dismissal read-out (card 70). Every field is optional, clamped, and never read by any

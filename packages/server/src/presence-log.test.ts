@@ -82,6 +82,24 @@ describe("formatPresenceReport", () => {
     expect(line).toContain("mode=- build=- visible=- focused=- input=- fg=- ua=?");
   });
 
+  test("an ordinary beat carries no gap keys at all, so grepping gap= finds only silences", () => {
+    const line = formatPresenceReport({
+      at, client: "c1", actor: "rob", actorKind: "human", board: "flock-2", resolved: true, looking: true,
+      info: { mode: "standalone", visible: true, focused: true, lastInputAgeMs: 10 },
+    });
+    expect(line).not.toContain("gap=");
+  });
+
+  test("a late beat names the signal that woke it and how long it was silent (card 91)", () => {
+    const line = formatPresenceReport({
+      at, client: "c1", actor: "rob", actorKind: "human", board: "flock-2", resolved: true, looking: true,
+      info: { mode: "standalone", visible: true, focused: true, lastInputAgeMs: 10, foregroundOnly: true, gapReason: "live-up", gapMs: 80_000 },
+    });
+    expect(line).toContain("gap=live-up/80.0s");
+    // Still before the ua/client tail, so the line's shape does not change for anything parsing it.
+    expect(line.indexOf("gap=")).toBeLessThan(line.indexOf("ua="));
+  });
+
   test("Home reports no board", () => {
     const line = formatPresenceReport({ at, client: "c1", actor: "rob", actorKind: "human", board: null, resolved: false, looking: true });
     expect(line).toContain(" board=- ");
@@ -217,6 +235,15 @@ describe("normalizeClientInfo", () => {
   test("drops junk rather than trusting it", () => {
     const info = normalizeClientInfo({ mode: "kiosk", visible: "yes", lastInputAgeMs: Number.NaN, build: 7 }, undefined);
     expect(info).toBeUndefined();
+  });
+
+  test("takes a gap only with both halves, and clamps them (card 91)", () => {
+    const ok = normalizeClientInfo({ gapReason: "r".repeat(200), gapMs: 1e12 }, undefined)!;
+    expect(ok.gapReason!.length).toBe(32);
+    expect(ok.gapMs).toBe(24 * 60 * 60 * 1000);
+    // Half a gap is not a gap: a reason with no duration, or a duration with no reason, is junk.
+    expect(normalizeClientInfo({ gapReason: "visible" }, undefined)).toBeUndefined();
+    expect(normalizeClientInfo({ gapMs: 80_000 }, undefined)).toBeUndefined();
   });
 
   test("a body with no info block still records the user agent", () => {

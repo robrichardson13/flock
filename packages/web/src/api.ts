@@ -162,6 +162,9 @@ export interface PresenceReportInfo {
   activateSeen?: number;
   activateClosed?: number;
   dismissErr?: string;
+  /** Only on a late beat (card 91): why it fired, and how long the client was silent first. */
+  gapReason?: string;
+  gapMs?: number;
 }
 
 export const api = {

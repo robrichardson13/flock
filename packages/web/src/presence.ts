@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import { clientIsLooking, IDLE_MS, type LookingInputs } from "@flock/core/presence";
 import { api, type PresenceReportInfo } from "./api.ts";
 import { dismissBeatFields, dismissRecorder } from "./dismissLog.ts";
+import { createBeatScheduler, type BeatContext } from "./beat.ts";
+import { LIVE_UP_EVENT } from "./live.ts";
 
 /** Three heartbeats; matches `PRESENCE_TTL_MS` in `@flock/core`'s `Presence` (§3.4, D6). */
 export const HEARTBEAT_MS = 15_000;
@@ -60,9 +62,21 @@ export type PresenceAction = "send" | "beat" | "none";
  * fires once `HEARTBEAT_MS` has elapsed since the last attempt, while still looking **or** while
  * that attempt failed — a dropped `looking: false` leave beat would otherwise never be retried and
  * the server would hold a stale "looking" for the whole TTL. Otherwise "none".
+ *
+ * `forced` is the card 91 escape hatch: a resume signal, a detected timer gap or a retry beats
+ * even when nothing changed and the cadence has not elapsed. Without it, a client that reported
+ * `looking: false` once fell permanently silent — correct on the server's own terms, and the
+ * reason a foregrounded phone read as absent for 80s. The scheduler dedupes resume storms before
+ * this is ever reached, so "forced" cannot become a tight loop.
  */
-export function presenceStep(prev: PresenceState | null, next: { looking: boolean; board: string | null }, now: number): PresenceAction {
+export function presenceStep(
+  prev: PresenceState | null,
+  next: { looking: boolean; board: string | null },
+  now: number,
+  forced = false,
+): PresenceAction {
   if (!prev || prev.looking !== next.looking || prev.board !== next.board) return "send";
+  if (forced) return "beat";
   if (now - prev.lastSentAt < HEARTBEAT_MS) return "none";
   return next.looking || prev.failed ? "beat" : "none";
 }
@@ -88,6 +102,22 @@ const CLIENT_ID = typeof crypto !== "undefined" && typeof crypto.randomUUID === 
  * { keepalive: true })`) the moment looking stops — including on `pagehide`. Sends nothing while
  * the actor name is empty (first load, before `/api/me` resolves).
  *
+ * **Card 91.** The cadence is a `setTimeout` chain in `beat.ts`, not a `setInterval`, and it is
+ * not the only thing that can fire a beat. The log that produced this rewrite showed a phone on
+ * `mode=standalone` beating every 15.0s while visible, reporting `looking=false` the instant iOS
+ * fired `visibilitychange` -> hidden (a notification banner, Control Centre, an app-switcher
+ * peek — none of which the person experiences as leaving the app), and then going **completely
+ * silent for 80s**: the old code sent nothing more while not looking, and the `setInterval` that
+ * would have re-read `document.visibilityState` was frozen with the page. The server's 45s TTL
+ * expired, `clients=0`, and the next chatter message buzzed a phone that was being stared at.
+ * The banner then fired hidden again, so a buzz begat the state that permitted the next buzz.
+ *
+ * So every signal that could mean "the app is in front of someone again" — `visibilitychange` to
+ * visible, `pageshow`, `focus`, `online`, a reconnected event stream (`LIVE_UP_EVENT`), and any
+ * touch, key, scroll or pointer — fires a beat immediately and re-arms the chain, deduped by the
+ * scheduler. A late tick is reported with `gapReason`/`gapMs` so the server line carries `gap=`
+ * and the next silent stretch is visible rather than inferred.
+ *
  * Presence deliberately does *not* drive notification dismissal (it did between PR 48 and card
  * 53). The transition into looking is only as trustworthy as the leave evaluate that preceded
  * it, and an iOS home-screen app can be suspended without one ever running. Presence itself
@@ -110,18 +140,20 @@ export function usePresence(actor: string, hash: string): void {
       bumpInput();
     };
 
-    const report = (next: { looking: boolean; board: string | null }, now: number, info: PresenceReportInfo) => {
+    /** Resolves when the POST settles, rejects when it fails, so the scheduler can back off. */
+    const report = (next: { looking: boolean; board: string | null }, now: number, info: PresenceReportInfo): Promise<void> => {
       const state: PresenceState = { looking: next.looking, board: next.board, lastSentAt: now, failed: false };
       prevRef.current = state;
-      api.presence({ client: CLIENT_ID, board: next.board, looking: next.looking, info }, { keepalive: !next.looking }).catch((err: unknown) => {
-        // Never swallowed: a dropped beat is one of the ways a foregrounded phone looks absent.
-        // Mark it so the next heartbeat retries — bounded by HEARTBEAT_MS, never a tight loop.
+      return api.presence({ client: CLIENT_ID, board: next.board, looking: next.looking, info }, { keepalive: !next.looking }).catch((err: unknown) => {
+        // Never swallowed and never absorbed: the mark keeps `presenceStep` retrying on cadence,
+        // and the re-throw is what puts the scheduler on its bounded backoff. Neither can end the
+        // loop — a dropped beat is one of the ways a foregrounded phone looks absent.
         state.failed = true;
-        console.warn(`[presence] report failed (looking=${next.looking}, board=${next.board ?? "-"}); retrying on the next beat`, err);
+        throw err;
       });
     };
 
-    const evaluate = (leaving = false) => {
+    const evaluate = (opts: { leaving?: boolean; forced?: boolean; gap?: { reason: string; ms: number } } = {}): Promise<void> | void => {
       if (!actor) return;
       const now = Date.now();
       const inputs = {
@@ -131,10 +163,10 @@ export function usePresence(actor: string, hash: string): void {
         now,
         foregroundOnly: foregroundOnlyDevice(),
       };
-      const looking = !leaving && clientIsLooking(inputs);
+      const looking = !opts.leaving && clientIsLooking(inputs);
       const next = { looking, board };
-      if (presenceStep(prevRef.current, next, now) === "none") return;
-      report(next, now, {
+      if (presenceStep(prevRef.current, next, now, opts.forced ?? false) === "none") return;
+      return report(next, now, {
         build: buildId(),
         mode: displayMode(),
         visible: inputs.visible,
@@ -144,25 +176,50 @@ export function usePresence(actor: string, hash: string): void {
         // The dismissal read-out rides along (card 70). Presence never reads it; it is here
         // because a beat is the only channel out of a home-screen app that reaches a terminal.
         ...dismissBeatFields(dismissRecorder.read()),
+        ...(opts.gap ? { gapReason: opts.gap.reason, gapMs: opts.gap.ms } : {}),
       });
     };
 
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") bumpInput();
-      evaluate();
+    const scheduler = createBeatScheduler({
+      cadenceMs: HEARTBEAT_MS,
+      beat: (ctx: BeatContext) =>
+        evaluate({
+          forced: ctx.forced,
+          gap: ctx.gapMs === null ? undefined : { reason: ctx.reason, ms: ctx.gapMs },
+        }),
+    });
+
+    /** A resume signal: beat now (the scheduler dedupes) and re-arm the chain from here. */
+    const resume = (reason: string, bump = true) => {
+      if (bump) bumpInput();
+      scheduler.resume(reason);
     };
-    const onFocus = () => { bumpInput(); evaluate(); };
-    const onBlur = () => evaluate();
-    const onPageshow = () => { bumpInput(); evaluate(); };
-    const onPagehide = () => evaluate(true);
-    const onInput = () => { bumpInput(); evaluate(); };
-    const onMove = () => { bumpMove(); evaluate(); };
+
+    const onVisibility = () => {
+      // The hidden direction must not wait for the dedupe window: a locked phone has to stop
+      // being "looking" on this very event, or it stays looking for the whole server TTL.
+      if (document.visibilityState !== "visible") {
+        void evaluate();
+        return;
+      }
+      resume("visible");
+    };
+    const onFocus = () => resume("focus");
+    const onBlur = () => { void evaluate(); };
+    const onPageshow = () => resume("pageshow");
+    const onPagehide = () => { void evaluate({ leaving: true }); };
+    const onOnline = () => resume("online", false);
+    const onLiveUp = () => resume("live-up", false);
+    const onInput = () => resume("input");
+    const onMove = () => { bumpMove(); scheduler.resume("move"); };
 
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("focus", onFocus);
     window.addEventListener("blur", onBlur);
     window.addEventListener("pageshow", onPageshow);
     window.addEventListener("pagehide", onPagehide);
+    window.addEventListener("online", onOnline);
+    window.addEventListener(LIVE_UP_EVENT, onLiveUp);
     window.addEventListener("pointerdown", onInput);
     window.addEventListener("keydown", onInput);
     window.addEventListener("wheel", onInput);
@@ -170,11 +227,7 @@ export function usePresence(actor: string, hash: string): void {
     document.addEventListener("scroll", onInput, true);
     window.addEventListener("pointermove", onMove);
 
-    // Re-evaluate periodically so the idle transition (no event of its own) and the heartbeat
-    // are picked up even during a quiet stretch.
-    const interval = window.setInterval(() => evaluate(), 5_000);
-
-    evaluate();
+    scheduler.start();
 
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
@@ -182,13 +235,15 @@ export function usePresence(actor: string, hash: string): void {
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("pageshow", onPageshow);
       window.removeEventListener("pagehide", onPagehide);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener(LIVE_UP_EVENT, onLiveUp);
       window.removeEventListener("pointerdown", onInput);
       window.removeEventListener("keydown", onInput);
       window.removeEventListener("wheel", onInput);
       window.removeEventListener("touchstart", onInput);
       document.removeEventListener("scroll", onInput, true);
       window.removeEventListener("pointermove", onMove);
-      window.clearInterval(interval);
+      scheduler.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actor, board]);
