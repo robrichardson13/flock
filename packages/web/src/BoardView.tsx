@@ -50,7 +50,7 @@ import {
 import { groupMessages, splitByDay } from "./grouping.ts";
 import { matchShortcut, SHORTCUT_HINT, type Shortcut } from "./shortcuts.ts";
 import { failPending, hasReaction, LineComposer, mergeThread, MessageReactions, nextTempId, resolvePending, ThreadGroup, type PendingSend } from "./thread.tsx";
-import { AddToChatTip, quoteBlock, useAddToChat } from "./addToChat.tsx";
+import { AddToChatTip, quoteBlock, replyQuote, useAddToChat } from "./addToChat.tsx";
 import { draftKey, requestInsert } from "./compose.ts";
 import { ActivitySkeleton, BoardSideSkeleton, CardPageSkeleton, CardsSkeleton, KanbanSkeleton, Line } from "./Skeleton.tsx";
 import { ActorSheet } from "./ActorView.tsx";
@@ -1674,6 +1674,11 @@ function Channel({ boardId, snap, onSent }: { boardId: string; snap: Snapshot; o
                 isMine: (m, emoji) => hasReaction(m.reactions, me, emoji),
                 onPick: (m, emoji, mine) => toggleReaction(m.num, emoji, mine),
               }}
+              // Reply (#26): the sheet's Reply row quotes a one-line gist of the message —
+              // `m<n>`, its author, and its gist — into the channel composer through the same
+              // `requestInsert`/`joinDraft` hand-off "Add to chat" already uses, so a half-typed
+              // draft and the mirror's highlight both keep working unchanged.
+              onReply={(m) => requestInsert(draftKey({ board: boardId, pane: "channel" }), replyQuote(`m${m.num}`, m.author, m.body))}
               entryFooter={(m) =>
                 // num 0 is the not-yet-confirmed optimistic placeholder (see onSubmit below);
                 // there is nothing to react to until the server has assigned a real one.

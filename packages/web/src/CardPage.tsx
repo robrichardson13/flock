@@ -7,6 +7,8 @@ import { agoText, timeAgo } from "./App.tsx";
 import { enterClass, useNewIds } from "./live.ts";
 import { threadChunks } from "./grouping.ts";
 import { ClampedBody, failPending, hasReaction, LineComposer, mergeThread, MessageReactions, nextTempId, resolvePending, ThreadGroup, type PendingSend } from "./thread.tsx";
+import { replyQuote } from "./addToChat.tsx";
+import { draftKey, requestInsert } from "./compose.ts";
 import { buildDetailRows, type DetailRow } from "./details.ts";
 import { autoFocusField, useDialogFocus } from "./focus.ts";
 import { readSnapshot, snapKey, writeSnapshot } from "./snapshot.ts";
@@ -456,6 +458,10 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
               isMine: (c, emoji) => hasReaction(c.reactions, me, emoji),
               onPick: (c, emoji, mine) => toggleCommentReaction(c.num, emoji, mine),
             }}
+            // Reply (#26): the same sheet the channel uses, so a comment gets the same Reply
+            // row — its ref is `<card>.<n>` (`flock card show`'s own spelling) rather than
+            // `m<n>`, quoted the same one-line way into this card's own composer draft.
+            onReply={(c) => requestInsert(draftKey({ board: boardId, pane: "card", card: card.num }), replyQuote(`${card.num}.${c.num}`, c.author, c.body))}
             entryFooter={(c) =>
               // num 0 is the not-yet-confirmed optimistic placeholder (see onSubmit below);
               // there is nothing to react to until the server has assigned a real one.

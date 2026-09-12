@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { joinDraft, quoteBlock, tipPlacement } from "./addToChat.tsx";
+import { gist, joinDraft, quoteBlock, replyQuote, tipPlacement } from "./addToChat.tsx";
 
 describe("quoteBlock", () => {
   test("prefixes each line with `> ` and ends with a blank line", () => {
@@ -73,6 +73,68 @@ describe("joinDraft", () => {
     const once = joinDraft("", "> x\n\n");
     const twice = joinDraft(once, "> x\n\n");
     expect(twice).toBe("> x\n\n> x\n\n");
+  });
+});
+
+describe("gist", () => {
+  test("is the first line, trimmed", () => {
+    expect(gist("hello there\nsecond line")).toBe("hello there");
+  });
+
+  test("skips leading blank lines to find the first non-blank one", () => {
+    expect(gist("\n\n  \nreal content\nmore")).toBe("real content");
+  });
+
+  test("collapses interior whitespace to single spaces", () => {
+    expect(gist("a   b\tc")).toBe("a b c");
+  });
+
+  test("CRLF and lone CR normalise to LF before splitting", () => {
+    expect(gist("first\r\nsecond")).toBe("first");
+  });
+
+  test("all-blank text gists to an empty string", () => {
+    expect(gist("   \n\t\n  ")).toBe("");
+  });
+
+  test("under the limit, nothing truncates", () => {
+    expect(gist("short line", 80)).toBe("short line");
+  });
+
+  test("cuts at the limit with an ellipsis, not mid-word past it", () => {
+    const text = "a".repeat(85);
+    const result = gist(text, 80);
+    expect(result).toBe(`${"a".repeat(80)}…`);
+    expect(result.length).toBe(81);
+  });
+
+  test("trims trailing whitespace left by the cut before the ellipsis", () => {
+    const text = `${"a".repeat(79)} b b b`;
+    const result = gist(text, 80);
+    expect(result).toBe(`${"a".repeat(79)}…`);
+  });
+});
+
+describe("replyQuote", () => {
+  test("one line: ref, author, gist, then a blank line", () => {
+    expect(replyQuote("m60", "conductor", "PR 43 is Claude Code only.")).toBe(
+      "> m60 conductor: PR 43 is Claude Code only.\n\n",
+    );
+  });
+
+  test("a card comment's ref is <card>.<n>", () => {
+    expect(replyQuote("4.2", "rob", "hello")).toBe("> 4.2 rob: hello\n\n");
+  });
+
+  test("a long body gists rather than quoting the whole thing", () => {
+    const body = "a".repeat(200);
+    const result = replyQuote("m1", "agent", body);
+    expect(result).toBe(`> m1 agent: ${"a".repeat(80)}…\n\n`);
+  });
+
+  test("joinDraft treats it exactly like quoteBlock's output", () => {
+    const quote = replyQuote("m1", "agent", "hi");
+    expect(joinDraft("half a thought", quote)).toBe(`half a thought\n\n${quote}`);
   });
 });
 

@@ -1214,4 +1214,7 @@ export const Icons = {
   bell: (s?: number) => <I size={s} d="M6.5 9.5a5.5 5.5 0 0 1 11 0c0 3.4 1 4.9 1.7 5.8H4.8c.7-.9 1.7-2.4 1.7-5.8M9.9 18.6a2.3 2.3 0 0 0 4.2 0" />,
   /** Notifications that cannot ring: the same bell, struck through. */
   bellOff: (s?: number) => <I size={s} d="M6.5 9.5a5.5 5.5 0 0 1 11 0c0 3.4 1 4.9 1.7 5.8H4.8c.7-.9 1.7-2.4 1.7-5.8M9.9 18.6a2.3 2.3 0 0 0 4.2 0M4 4l16 16" />,
+  /** Reply, on the mobile reaction sheet's Reply row: a corner arrow turning back up and
+   *  left, the same glyph family (stroke, no fill) as the rest of the set. */
+  reply: (s?: number) => <I size={s} d="M9 8L3 13l6 5M3 13h11a6 6 0 0 1 6 6v1" />,
 };
