@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { PRESENCE_TTL_MS, Presence } from "../src/index.ts";
+import { clientIsLooking, IDLE_MS, PRESENCE_TTL_MS, Presence } from "../src/index.ts";
 
 describe("Presence", () => {
   test("report looking makes isLooking true for that actor+board only", () => {
@@ -66,5 +66,31 @@ describe("Presence", () => {
 
     expect(presence.size(1000)).toBe(2);
     expect(presence.size(1000 + PRESENCE_TTL_MS)).toBe(0);
+  });
+});
+
+describe("clientIsLooking", () => {
+  const t0 = 1_000_000;
+  const desktop = (over: Partial<Parameters<typeof clientIsLooking>[0]> = {}) =>
+    clientIsLooking({ visible: true, focused: true, lastInputAt: t0, now: t0 + 1000, foregroundOnly: false, ...over });
+  const phone = (over: Partial<Parameters<typeof clientIsLooking>[0]> = {}) =>
+    clientIsLooking({ visible: true, focused: true, lastInputAt: t0, now: t0 + 1000, foregroundOnly: true, ...over });
+
+  test("hidden is never looking, on either kind of device", () => {
+    expect(desktop({ visible: false })).toBe(false);
+    expect(phone({ visible: false })).toBe(false);
+  });
+
+  test("desktop still needs focus and input inside IDLE_MS", () => {
+    expect(desktop()).toBe(true);
+    expect(desktop({ focused: false })).toBe(false);
+    expect(desktop({ now: t0 + IDLE_MS - 1 })).toBe(true);
+    expect(desktop({ now: t0 + IDLE_MS })).toBe(false);
+  });
+
+  test("a foreground-only device is looking whenever it is visible", () => {
+    // Card 20: iOS standalone reports no focus and goes minutes between taps while being read.
+    expect(phone({ focused: false })).toBe(true);
+    expect(phone({ focused: false, now: t0 + IDLE_MS * 10 })).toBe(true);
   });
 });

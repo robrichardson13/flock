@@ -221,3 +221,82 @@ user's point of view, one conversation they have or have not seen.
 alternative above, for the same reason ADR 0017 already accepts losing pending push state on
 restart: the feature's whole value is timeliness, and a restart is rare enough that losing at most
 one pending count is an acceptable trade against the complexity of persisting transient state.
+
+## Amendment, 2026-09-11: "looking" is platform-aware, and the rule moves to core
+
+The presence machinery above shipped and a foregrounded iPhone kept getting buzzed anyway (card
+20). The server side was not at fault: the route, the TTL, the actor keying, the shared clock and
+the `isLooking` re-check on every `due()` tick all behave as specified. The defect was the client's
+definition of "looking", which was written for a desktop and applied everywhere:
+
+```
+visible && document.hasFocus() && now - lastInputAt < IDLE_MS
+```
+
+Two of those three are wrong on a phone.
+
+**`document.hasFocus()`.** The original rationale — a focused terminal beside a board merely
+visible on a second monitor is "might glance", not "looking" — describes a window manager. An iOS
+standalone web app has no second window to lose focus to, and WebKit does not reliably hand the
+document focus back after an app switch or an unlock. `visibilityState === "visible"` on iOS
+already means "this is the foreground app, on screen, in the user's hand". Requiring focus on top
+of that adds no information and produces a false absent.
+
+**`IDLE_MS = 180_000`.** The rationale — a board left open on screen while its owner walks away
+should not suppress anything — assumes a screen that stays on. A phone is not left open; the OS
+locks it, `visibilitychange` fires, and the heartbeat stops. Meanwhile the single most common way
+the app is used on a phone is reading a channel for minutes without tapping, which the idle rule
+classifies as absence. Three minutes of reading, then a buzz for the line you are looking at.
+
+### The rule
+
+`clientIsLooking(inputs)` takes one more input, `foregroundOnly`, true on a device with one
+foreground app and no per-window focus. Then:
+
+- `foregroundOnly`: `visible` is the whole rule.
+- otherwise: unchanged — `visible && focused && now - lastInputAt < IDLE_MS`.
+
+The web decides `foregroundOnly` from `(hover: none) and (pointer: coarse)`, the standard
+touch-primary query. A desktop browser reports a fine pointer and hover even with a touchscreen
+attached, so a Mac keeps the old rule; a desktop PWA window, which genuinely can sit behind
+another window, also keeps it. The `display-mode: standalone` query was deliberately **not** used:
+it is true for an installed desktop PWA, where focus still means something.
+
+Dropping the idle rule on a phone is bounded, not unbounded. When the screen locks the page goes
+hidden and the beat stops, and `PRESENCE_TTL_MS` retires the entry 45 seconds later — the same 45
+second tail of stale "looking" this ADR already accepted, for the same reason: the cost is one
+channel message not buzzed that is still sitting in the channel, and presence never suppresses an
+ask. The only case with no natural bound is a phone with auto-lock disabled and the app left on
+screen, which is a deliberate act and costs exactly the notification the user is staring at.
+
+### The rule lives in core
+
+`clientIsLooking` moved from `packages/web/src/presence.ts` into `packages/core/src/presence.ts`,
+beside `Presence` and `PRESENCE_TTL_MS`, exported through a new browser-safe `@flock/core/presence`
+entry point. It is a domain rule — the definition of presence — so core is where it belongs by this
+repo's own convention, and putting it there is what lets `packages/server`'s test drive the real
+predicate through the real `POST /api/presence` into the real pump and assert the end-to-end
+symptom, rather than restating the server's behaviour back to itself. The web keeps only the
+wiring: the DOM inputs, `foregroundOnlyDevice()`, the heartbeat, and `presenceStep`.
+
+### A failed presence report is retried, and never swallowed
+
+`usePresence` recorded the state as sent before the `POST` resolved and dropped the rejection with
+a bare `.catch(() => {})`. A failed beat then waited for a state change that might never come. Two
+fixes: the rejection is logged with its `(looking, board)` context, and `PresenceState` carries
+`failed`, which makes `presenceStep` return `"beat"` on the next heartbeat even when not looking —
+so a dropped `looking: false` leave beat is retried instead of leaving the server holding a stale
+"looking" for the full TTL. The retry rides the existing `HEARTBEAT_MS` cadence, so a server that
+is down costs one request every 15 seconds, not a tight loop.
+
+### Not changed
+
+Two other paths make a foregrounded phone buzz, both deliberate and both left alone here:
+
+- **Asks bypass presence entirely.** `card.asked` and `card.moved` → `awaiting-human` are never
+  suppressed, so looking at the very card that asks still buzzes. The reasoning above still holds
+  — a redundant ask costs a glance, a missed one stalls an agent — but during a conducted run this
+  is a real share of the noise.
+- **Presence is keyed `(actor, boardId)` and `board` is `null` on Home.** Sitting on the boards
+  list suppresses nothing on any board. That is correct as far as it goes — Home shows no channel —
+  but it is worth knowing that "the app is open" is not the same as "presence is on".

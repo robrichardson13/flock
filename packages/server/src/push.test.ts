@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Flock, Presence, type Actor } from "@flock/core";
+import { Flock, Presence, clientIsLooking, IDLE_MS, type Actor } from "@flock/core";
 import { loadOrCreateVapidKeys, startPushPump, type PushSend } from "./push.ts";
 import { createApp } from "./index.ts";
 
@@ -687,6 +687,105 @@ describe("POST /api/presence end to end through the pump", () => {
     await Bun.sleep(60);
     expect(calls.length).toBe(1);
     expect(calls[0]!.endpoint).toBe("https://push.example/ada");
+  });
+});
+
+/**
+ * Card 20: a phone with the app on screen kept getting pushed. The chain is reproduced here with
+ * the real predicate driving the real route into the real pump, so the failure can only come from
+ * the definition of "looking" itself.
+ */
+describe("a foregrounded phone is never pushed channel chatter", () => {
+  let home: string;
+  beforeEach(() => {
+    home = tempHome();
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  /** What iOS reports for a standalone web app in the foreground that has not been tapped for
+   *  `idleFor`: visible, `document.hasFocus()` unreliable (no second window to focus), coarse
+   *  pointer, no hover. */
+  const iosForeground = (now: number, idleFor: number, focused = false) => ({
+    visible: true,
+    focused,
+    lastInputAt: now - idleFor,
+    now,
+    foregroundOnly: true,
+  });
+
+  async function sayAndSettle(app: ReturnType<typeof createApp>, flock: Flock, boardId: string, body: string) {
+    flock.say(scout, boardId, body);
+    await Bun.sleep(60);
+    return app;
+  }
+
+  test("unfocused and untapped for well past IDLE_MS, the phone still suppresses the channel push", async () => {
+    const flock = new Flock(":memory:");
+    const board = flock.createBoard(ada, { title: "Flock v1" });
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada-phone", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    let t = 1_000_000;
+    const app = createApp({ flock, dbPath: ":memory:", flockHome: home, pushSend: send, now: () => t, pushIntervalMs: 20 });
+
+    // ada opens the board on her phone and taps; the heartbeat reports her present.
+    const beat = async (idleFor: number, focused = false) => {
+      const looking = clientIsLooking(iosForeground(t, idleFor, focused));
+      const res = await app.request("/api/presence", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-flock-actor": "ada", "x-flock-actor-kind": "human" },
+        body: JSON.stringify({ client: "phone", board: board.slug, looking }),
+      });
+      expect(res.status).toBe(204);
+      return looking;
+    };
+
+    // The tap itself: focused and fresh, so this beat says "looking" under any rule.
+    expect(await beat(2_000, true)).toBe(true);
+    await sayAndSettle(app, flock, board.id, "first line");
+    expect(calls.length).toBe(0);
+
+    // She reads without tapping for five minutes — well past IDLE_MS — the app never leaving the
+    // foreground. Heartbeats keep the presence entry inside PRESENCE_TTL_MS the whole way.
+    for (let elapsed = 15_000; elapsed <= IDLE_MS + 120_000; elapsed += 15_000) {
+      t += 15_000;
+      await beat(elapsed);
+    }
+
+    await sayAndSettle(app, flock, board.id, "status line while she is reading it");
+    expect(calls.length).toBe(0);
+    // ...because every one of those beats reported her present, unfocused and idle though she was.
+    expect(clientIsLooking(iosForeground(t, IDLE_MS + 120_000))).toBe(true);
+  });
+
+  test("the same sequence on a desktop still goes idle and pushes", async () => {
+    const flock = new Flock(":memory:");
+    const board = flock.createBoard(ada, { title: "Flock v1" });
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada-mac", keys: { p256dh: "p", auth: "a" } });
+    const { send, calls } = fakeSend();
+    let t = 1_000_000;
+    const app = createApp({ flock, dbPath: ":memory:", flockHome: home, pushSend: send, now: () => t, pushIntervalMs: 20 });
+
+    const beat = async (looking: boolean) => {
+      await app.request("/api/presence", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-flock-actor": "ada", "x-flock-actor-kind": "human" },
+        body: JSON.stringify({ client: "mac", board: board.slug, looking }),
+      });
+    };
+
+    const desktop = (idleFor: number) => clientIsLooking({ visible: true, focused: true, lastInputAt: t - idleFor, now: t, foregroundOnly: false });
+    expect(desktop(2_000)).toBe(true);
+    await beat(desktop(2_000));
+    await sayAndSettle(app, flock, board.id, "first line");
+    expect(calls.length).toBe(0);
+
+    t += IDLE_MS;
+    expect(desktop(IDLE_MS)).toBe(false);
+    await beat(desktop(IDLE_MS));
+    await sayAndSettle(app, flock, board.id, "she walked away");
+    expect(calls.length).toBe(1);
   });
 });
 
