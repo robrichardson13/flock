@@ -6,7 +6,7 @@ import { Markdownish, MessageBody } from "./markdown.tsx";
 import { agoText, timeAgo } from "./App.tsx";
 import { enterClass, useNewIds } from "./live.ts";
 import { threadChunks } from "./grouping.ts";
-import { ClampedBody, failPending, hasReaction, LineComposer, mergeThread, MessageReactions, nextTempId, resolvePending, ThreadGroup, type PendingSend } from "./thread.tsx";
+import { ClampedBody, failPending, hasReaction, LineComposer, mergeThread, MessageReactions, nextTempId, ReactionSheet, resolvePending, ThreadGroup, useDoubleTapReact, type PendingSend } from "./thread.tsx";
 import { replyQuote } from "./addToChat.tsx";
 import { draftKey, requestInsert } from "./compose.ts";
 import { buildDetailRows, type DetailRow } from "./details.ts";
@@ -441,7 +441,13 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
       {comments !== null && shownComments.length === 0 && <div className="muted small">No comments yet.</div>}
       {threadChunks(shownComments).map((chunk) =>
         chunk.system ? (
-          <SystemEntry key={chunk.items[0].id} comment={chunk.items[0]} isNew={newComments.has(chunk.items[0].id)} />
+          <SystemEntry
+            key={chunk.items[0].id}
+            comment={chunk.items[0]}
+            isNew={newComments.has(chunk.items[0].id)}
+            me={me}
+            onToggleReaction={(c, emoji, mine) => toggleCommentReaction(c.num, emoji, mine)}
+          />
         ) : (
           <ThreadGroup
             key={chunk.items[0].id}
@@ -819,16 +825,44 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
  * labelled with what it is. It still clamps behind "Show more" like everything else in the
  * thread — a full agent resolution is several screens long, and a thread that opens with one
  * of those unrolled is a wall, not a conversation.
+ *
+ * It is still a comment row underneath (card 63): core, the server and `flock react` already
+ * treat every `kind` alike, so this row gets the same reaction chips and double-tap sheet a
+ * bubble does — just no Reply, since quoting a question/resolution into a new comment isn't a
+ * thing today.
  */
-function SystemEntry({ comment: c, isNew }: { comment: Comment; isNew: boolean }) {
+export function SystemEntry({ comment: c, isNew, me, onToggleReaction }: {
+  comment: Comment;
+  isNew: boolean;
+  me: string;
+  onToggleReaction: (c: Comment, emoji: string, mine: boolean) => void;
+}) {
+  const [picked, setPicked] = useState<Comment | null>(null);
+  const tapHandlers = useDoubleTapReact<Comment>((entry) => {
+    if (entry.num <= 0) return false;
+    setPicked(entry);
+    return true;
+  });
   return (
-    <div className={`thread-system kind-${c.kind}${enterClass(isNew)}`}>
+    <div
+      className={`thread-system kind-${c.kind}${enterClass(isNew)}`}
+      {...tapHandlers(c)}
+    >
       <div className="thread-system-head">
         <span className={`kind-chip kind-${c.kind}`}>{c.kind}</span>
         <span className={`who ${c.authorKind}`}>{c.author}</span>
         <span className="muted tiny">{timeAgo(c.createdAt)}</span>
       </div>
       <ClampedBody text={c.body} />
+      {c.num > 0 && (
+        <MessageReactions reactions={c.reactions} viewer={me} onToggle={(emoji, mine) => onToggleReaction(c, emoji, mine)} />
+      )}
+      <ReactionSheet
+        entry={picked}
+        onClose={() => setPicked(null)}
+        isMine={(entry, emoji) => hasReaction(entry.reactions, me, emoji)}
+        onPick={(entry, emoji, mine) => onToggleReaction(entry, emoji, mine)}
+      />
     </div>
   );
 }
