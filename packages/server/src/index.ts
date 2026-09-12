@@ -18,6 +18,7 @@ import {
   type Actor,
   type CardStatus,
   type DecisionSelector,
+  type NotifySettingsFields,
 } from "@flock/core";
 import { defaultSend, loadOrCreateVapidKeys, startPushPump, type PushPump, type PushSend } from "./push.ts";
 import { formatPresenceReport, isLoopbackRequest, normalizeClientInfo } from "./presence-log.ts";
@@ -156,6 +157,28 @@ function requestProject(raw: unknown): string | undefined {
   return project;
 }
 
+/**
+ * `PUT /api/notify/settings`'s body, narrowed to the fields `Flock.putNotifySettings` accepts.
+ * A field simply absent from the body leaves the stored value alone (the "unset" spelling
+ * `putNotifySettings` documents); a field present as JSON `null` clears it back to "inherit";
+ * anything else must be the field's own type or the request is a 400, same as every other route.
+ */
+function pickNotifyPatch(body: Record<string, unknown>): Partial<NotifySettingsFields> {
+  const patch: Partial<NotifySettingsFields> = {};
+  for (const key of ["needsMe", "review", "info", "settled"] as const) {
+    if (!(key in body)) continue;
+    const v = body[key];
+    if (v !== null && typeof v !== "boolean") throw new FlockError(`${key} must be a boolean or null`, "invalid");
+    patch[key] = v;
+  }
+  if ("settledAfterMs" in body) {
+    const v = body.settledAfterMs;
+    if (v !== null && typeof v !== "number") throw new FlockError("settledAfterMs must be a number or null", "invalid");
+    patch.settledAfterMs = v;
+  }
+  return patch;
+}
+
 /** The selector shared by the archive and restore routes. A body naming no field is rejected: core
  *  treats an empty selector as `invalid` too, but rejecting here keeps the 400 message specific. */
 function decisionSelector(body: Record<string, unknown>): DecisionSelector {
@@ -204,6 +227,13 @@ export function createApp({
     });
     return { name, kind, ...runtime };
   };
+
+  // ADR 0024: the CLI's `--level review|info` on `say`/`comment` becomes this header on the
+  // equivalent request. `assertDeclarableLevel` (in `flock.say`/`addComment`) does the validation
+  // and the `needs-me` refusal; a missing header passes through as `undefined`, same as a CLI
+  // invocation with no `--level`.
+  const notifyLevelOf = (c: { req: { header(n: string): string | undefined } }): string | undefined =>
+    c.req.header("x-flock-notify")?.trim() || undefined;
 
   app.onError((err, c) => {
     if (err instanceof FlockError) return c.json({ error: err.message, code: err.code }, err.status as 400);
@@ -270,7 +300,9 @@ export function createApp({
   const cardAction = (name: string, fn: (actor: Actor, b: string, n: string, body: any) => unknown) =>
     app.post(`/api/boards/:b/cards/:n/${name}`, async (c) => {
       const body = await c.req.json().catch(() => ({}));
-      return c.json(fn(actorOf(c), c.req.param("b"), c.req.param("n"), body));
+      // ADR 0024: mirrored onto every card action's body, harmless to the ones that ignore it;
+      // only "comments" reads it.
+      return c.json(fn(actorOf(c), c.req.param("b"), c.req.param("n"), { ...body, notifyLevel: notifyLevelOf(c) }));
     });
   cardAction("claim", (a, b, n, body) => flock.claimCard(a, b, n, { force: !!body.force }));
   cardAction("release", (a, b, n) => flock.releaseCard(a, b, n));
@@ -296,7 +328,7 @@ export function createApp({
       throw new FlockError("attachments must be an array of ids");
     }
     if (!body.body?.trim() && !body.attachments?.length) throw new FlockError("body or attachments is required");
-    return flock.addComment(a, b, n, body.body ?? "", body.kind ?? "comment", { attachments: body.attachments });
+    return flock.addComment(a, b, n, body.body ?? "", body.kind ?? "comment", { attachments: body.attachments, level: body.notifyLevel });
   });
   cardAction("blockers", (a, b, n, body) => flock.addBlocker(a, b, n, body.by));
   app.delete("/api/boards/:b/cards/:n/blockers/:by", (c) =>
@@ -366,7 +398,7 @@ export function createApp({
       throw new FlockError("attachments must be an array of ids");
     }
     if (!body.body?.trim() && !body.attachments?.length) throw new FlockError("body or attachments is required");
-    return c.json(flock.say(actorOf(c), c.req.param("b"), body.body ?? "", { attachments: body.attachments }), 201);
+    return c.json(flock.say(actorOf(c), c.req.param("b"), body.body ?? "", { attachments: body.attachments, level: notifyLevelOf(c) }), 201);
   });
   app.post("/api/boards/:b/messages/:n/reactions", async (c) => {
     const body = await c.req.json().catch(() => ({}));
@@ -520,6 +552,28 @@ export function createApp({
       pushLeaseHeld: pump ? pump.leading() : false,
       clients: presence.snapshot(at).map((e) => ({ ...e, board: slugOf(e.boardId) })),
     });
+  });
+
+  // ----- notify settings (ADR 0024) -----
+  // `?board=<slug>` names a per-board override; omitted (or "") means the actor's global row.
+  // `flock.board` throws not_found on an unknown slug, which is exactly right here: unlike
+  // presence's best-effort resolution, a settings read/write for a board that does not exist is a
+  // caller error, not something to shrug off.
+  const notifyBoardId = (c: { req: { query(n: string): string | undefined } }): string => {
+    const slug = c.req.query("board");
+    return slug ? flock.board(slug).id : "";
+  };
+  app.get("/api/notify/settings", (c) => {
+    const boardId = notifyBoardId(c);
+    const actor = actorOf(c).name;
+    return c.json({ boardId, raw: flock.notifySettings(actor, boardId), resolved: flock.resolveNotifySettings(actor, boardId) });
+  });
+  app.put("/api/notify/settings", async (c) => {
+    const boardId = notifyBoardId(c);
+    const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+    const patch = pickNotifyPatch(body);
+    const raw = flock.putNotifySettings(actorOf(c), boardId, patch);
+    return c.json({ boardId, raw, resolved: flock.resolveNotifySettings(actorOf(c).name, boardId) });
   });
 
   // ----- push -----

@@ -26,6 +26,7 @@ import { bool, list, parseArgs, str } from "./args.ts";
 import { baseUrl, resolveHost } from "./dev.ts";
 import { handoffMarkdown } from "./handoff.ts";
 import { actorWasDefaulted, resolveActor } from "./identity.ts";
+import { buildNotifyPatch, formatNotifySettings, isEmptyPatch } from "./notify.ts";
 import { flockHome } from "./paths.ts";
 import { openForCli } from "./schema-policy.ts";
 import { embeddedAssets, installScriptPath, versionLine } from "./runtime.ts";
@@ -71,8 +72,11 @@ CARDS   (BOARD optional, see SCOPE; N is the card number, "#12" or "12")
   done [BOARD] N [--resolution TEXT] [--wontfix]
   block [BOARD] N --by M                Add a blocking edge (M must close before N starts)
   unblock [BOARD] N --by M
-  comment [BOARD] N TEXT [--attach PATH]...   Comment on a card; --attach is repeatable and
-                                      uploads an image (comment text is optional with one)
+  comment [BOARD] N TEXT [--attach PATH]... [--level review|info]
+                                      Comment on a card; --attach is repeatable and
+                                      uploads an image (comment text is optional with one).
+                                      --level declares this comment's notification level (default
+                                      info); needs-me is refused — park the card with \`flock ask\`.
 
 IDENTITY
   --as NAME        Act as NAME (implies --agent). Env: FLOCK_ACTOR, FLOCK_ACTOR_KIND
@@ -112,9 +116,26 @@ HUMAN IN THE LOOP
 TEAM
   handoff [BOARD]                     Print the agent onboarding text
   needs-me                            Cards waiting on a human, across all boards
-  say [BOARD] TEXT [--attach PATH]...   Post to the board channel; --attach is repeatable and
+  say [BOARD] TEXT [--attach PATH]... [--level review|info]
+                                      Post to the board channel; --attach is repeatable and
                                       uploads an image (message text is optional with one).
-                                      Prints the new message's ref (m<n>) for later \`flock react\`
+                                      Prints the new message's ref (m<n>) for later \`flock react\`.
+                                      --level declares this message's notification level (default
+                                      info, or review when the text contains a GitHub pull-request
+                                      URL); needs-me is refused — park the card with \`flock ask\`.
+  notify settings [BOARD] [--global]    Your notify settings: needs-me/review/everything/settled
+                                      and the settled threshold, and where each is coming from
+                                      (this board's override, your global default, or the built-in
+                                      default). BOARD resolves like everywhere else; --global
+                                      always shows your global row regardless of cwd.
+  notify set [BOARD] [--global] [--needs-me on|off] [--review on|off] [--everything on|off]
+             [--settled on|off] [--threshold 30m]
+                                      Write one or more toggles (needs-me/review/everything are
+                                      ADR 0024's three notification levels; settled is the quiet-
+                                      board check-in). Named flags only change what they name; a
+                                      board with none given later inherits a changed global value.
+                                      --threshold accepts "30m", "2h", or a bare number of minutes,
+                                      clamped to 5 minutes–24 hours.
   react [BOARD] REF EMOJI [--remove]    React to a channel message or a card comment; REF is
                                       "m7"/a bare "7" (message) or "4.2" (comment #2 on card #4).
                                       --remove removes the actor's reaction instead of adding it
@@ -757,7 +778,7 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       const attachPaths = list(flags.attach);
       if (attachPaths.length === 0 && a[1] === undefined) throw new FlockError("Missing text. Run `flock help`.", "invalid");
       const attachmentIds = attachPaths.map((p) => uploadAttachment(flock, actor, board, p));
-      const cm = flock.addComment(actor, board, num, a[1] ?? "", "comment", { attachments: attachmentIds });
+      const cm = flock.addComment(actor, board, num, a[1] ?? "", "comment", { attachments: attachmentIds, level: str(flags.level) });
       return out(ctx, cm, () => console.log(`Commented on #${flock.card(board, num).num}${cm.attachments.length ? `  + ${cm.attachments.length} attachments` : ""}`));
     }
     case "ask": {
@@ -775,7 +796,7 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       const attachPaths = list(flags.attach);
       if (attachPaths.length === 0 && a[0] === undefined) throw new FlockError("Missing message. Run `flock help`.", "invalid");
       const attachmentIds = attachPaths.map((p) => uploadAttachment(flock, actor, board, p));
-      const m = flock.say(actor, board, a[0] ?? "", { attachments: attachmentIds });
+      const m = flock.say(actor, board, a[0] ?? "", { attachments: attachmentIds, level: str(flags.level) });
       return out(ctx, m, () => console.log(`${messageRef(m.num)}  ${m.author}: ${m.body}${m.attachments.length ? `  + ${m.attachments.length} attachments` : ""}`));
     }
     case "react": {
@@ -916,6 +937,55 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       return out(ctx, { [past]: changed }, () => {
         if (!changed.length) return console.log(`Nothing to ${sub}.`);
         console.log(`${Past} ${changed.length} decision${changed.length === 1 ? "" : "s"}: ${changed.map((d) => `d${d.num}`).join(", ")}`);
+      });
+    }
+
+    case "notify": {
+      const sub = need(0, "subcommand (settings|set)");
+      a = a.slice(1);
+      if (sub !== "settings" && sub !== "set") throw new FlockError(`Unknown notify subcommand "${sub}". Run \`flock help\`.`, "invalid");
+
+      // Global unless a board is named (positional, resolved like everywhere else) or implied by
+      // the working directory. `--global` always wins, even inside a directory with its own board.
+      let boardId = "";
+      let boardLabel = "global (all boards)";
+      if (!bool(flags.global)) {
+        if (a[0] !== undefined && flock.findBoard(a[0])) {
+          const b = flock.board(a[0]);
+          boardId = b.id;
+          boardLabel = b.slug;
+          a = a.slice(1);
+        } else {
+          const here = flock.boardForDir(cwd);
+          if (here) {
+            boardId = here.id;
+            boardLabel = here.slug;
+          }
+        }
+      }
+
+      if (sub === "settings") {
+        const resolved = flock.resolveNotifySettings(actor.name, boardId);
+        const board = boardId === "" ? null : flock.notifySettings(actor.name, boardId);
+        const global = flock.notifySettings(actor.name, "");
+        return out(ctx, { boardId: boardId || null, board: boardId ? boardLabel : null, resolved, raw: board, global }, () => {
+          for (const line of formatNotifySettings({ boardId, boardLabel, resolved, board, global })) console.log(line);
+        });
+      }
+
+      // sub === "set"
+      const patch = buildNotifyPatch(flags);
+      if (isEmptyPatch(patch)) {
+        throw new FlockError("Nothing to set. Pass --needs-me/--review/--everything/--settled on|off, or --threshold.", "invalid");
+      }
+      const raw = flock.putNotifySettings(actor, boardId, patch);
+      const resolved = flock.resolveNotifySettings(actor.name, boardId);
+      const global = boardId === "" ? raw : flock.notifySettings(actor.name, "");
+      return out(ctx, { boardId: boardId || null, resolved, raw }, () => {
+        console.log(`Updated notify settings — ${boardLabel}:`);
+        for (const line of formatNotifySettings({ boardId, boardLabel, resolved, board: boardId === "" ? null : raw, global }).slice(1)) {
+          console.log(line);
+        }
       });
     }
 

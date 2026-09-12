@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import webpush from "web-push";
 import {
+  deliversAt,
+  levelFor,
   notificationClass,
   notificationFor,
   notifyTargets,
@@ -13,6 +15,8 @@ import {
   type Event,
   type Flock,
   type NotifyContext,
+  type NotifyLevel,
+  type NotifySettings,
 } from "@flock/core";
 import { formatPushDecision } from "./presence-log.ts";
 
@@ -143,6 +147,16 @@ export function startPushPump(opts: {
     return new NotificationBatcher({ isLooking: presence.isLooking.bind(presence) });
   }
 
+  /**
+   * ADR 0024: one keyed settings read per (recipient, board) per event — cheap, since settings are
+   * actor-keyed rather than endpoint-keyed. Returns both the decision and the settings it was made
+   * from, so `logDecisions` can fold them into the same line as the presence read (card 80).
+   */
+  function deliversHere(actor: string, boardId: string, level: NotifyLevel): { deliver: boolean; settings: NotifySettings } {
+    const settings: NotifySettings = flock.resolveNotifySettings(actor, boardId);
+    return { deliver: deliversAt(level, settings), settings };
+  }
+
   /** send(d) per §4: fan one Dispatch out to that actor's subscriptions for that board, today's prune/touch/log rules. */
   async function sendDispatch(d: Dispatch): Promise<{ sent: number; pruned: number }> {
     const subs = flock.pushSubscriptions({ boardId: d.boardId, actor: d.actor });
@@ -208,8 +222,21 @@ export function startPushPump(opts: {
     const payload = notificationFor(event, ctx);
     const subs = payload ? flock.pushSubscriptions({ boardId: event.boardId }) : [];
     const targets = payload ? notifyTargets(event, ctx, subs) : [];
-    const recipients = recipientsOf(targets);
-    logDecisions(event, ctx.boardSlug, recipients, subs);
+    const eligible = recipientsOf(targets);
+
+    // ADR 0024: `levelFor` never depends on the recipient, so it is resolved once per event; each
+    // recipient's own settings (global row, then per-board override, then the built-in default —
+    // `Flock.resolveNotifySettings`) then decide whether *they* hear it. Filtering the recipient
+    // list here, before the batcher, means a muted recipient never opens a batch key, is never
+    // counted into a merged "N new in <board>" title, and needs-me still goes through this same
+    // gate — it is "always, unless they turn it off", not a presence bypass.
+    const level = payload ? levelFor(event, ctx) : null;
+    const decisions = new Map<string, { deliver: boolean; settings: NotifySettings | null }>();
+    for (const actor of eligible) {
+      decisions.set(actor, level === null ? { deliver: true, settings: null } : deliversHere(actor, event.boardId, level));
+    }
+    logDecisions(event, ctx.boardSlug, eligible, subs, level, decisions);
+    const recipients = eligible.filter((actor) => decisions.get(actor)!.deliver);
 
     // Every event goes through the batcher, even one that notifies nobody, so the author-seen
     // reset (D9) applies uniformly. onEvent returns dispatches that go out now (an urgent bypass,
@@ -219,15 +246,23 @@ export function startPushPump(opts: {
   }
 
   /**
-   * One line per (event, recipient) saying what the pump believed about presence for exactly the
-   * key it looked up (card 54). Costs one map scan per recipient and only runs when an event has
-   * recipients, so it is cheap enough to leave on.
+   * One line per (event, recipient) carrying both what the pump believed about presence (card 54)
+   * and what ADR 0024's level filter decided — a single `[push] decision` line so "why didn't that
+   * buzz" has one place to look rather than two logs to cross-reference (card 80).
    */
-  function logDecisions(event: Event, boardSlug: string, recipients: readonly string[], subs: readonly { actor: string }[]): void {
+  function logDecisions(
+    event: Event,
+    boardSlug: string,
+    recipients: readonly string[],
+    subs: readonly { actor: string }[],
+    level: NotifyLevel | null,
+    decisions: ReadonlyMap<string, { deliver: boolean; settings: NotifySettings | null }>,
+  ): void {
     if (recipients.length === 0) return;
     const at = now();
     for (const actor of recipients) {
       const detail = presence.lookingDetail(actor, event.boardId, at);
+      const decision = decisions.get(actor)!;
       console.error(
         formatPushDecision({
           seq: event.seq,
@@ -241,6 +276,9 @@ export function startPushPump(opts: {
           presenceClients: detail.clients,
           via: detail.via,
           subscriptions: subs.filter((s) => s.actor === actor).length,
+          level,
+          deliver: decision.deliver,
+          settings: decision.settings,
         }),
       );
     }

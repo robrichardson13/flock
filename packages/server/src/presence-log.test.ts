@@ -108,9 +108,12 @@ describe("formatPushDecision", () => {
         presenceClients: 0,
         via: null,
         subscriptions: 1,
+        level: "review",
+        deliver: true,
+        settings: null,
       }),
     ).toBe(
-      "[push] decision event=412 type=message.posted class=chatter actor=robrichardson board=flock-2 boardId=7129s3kt looking=false age=- clients=0 subs=1",
+      "[push] decision event=412 type=message.posted class=chatter actor=robrichardson board=flock-2 boardId=7129s3kt looking=false age=- clients=0 level=review deliver=true settings=- subs=1",
     );
   });
 
@@ -127,6 +130,9 @@ describe("formatPushDecision", () => {
       presenceClients: 2,
       via: "board",
       subscriptions: 1,
+      level: "review",
+      deliver: true,
+      settings: null,
     });
     expect(line).toContain("looking=true(board) age=3.0s clients=2");
   });
@@ -144,6 +150,9 @@ describe("formatPushDecision", () => {
       presenceClients: 1,
       via: "home",
       subscriptions: 1,
+      level: "review",
+      deliver: true,
+      settings: null,
     });
     expect(line).toContain("looking=true(home)");
   });
@@ -161,6 +170,9 @@ describe("formatPushDecision", () => {
       presenceClients: 1,
       via: "board",
       subscriptions: 1,
+      level: null,
+      deliver: true,
+      settings: null,
     });
     // looking=true and it still goes out: ADR 0021 exempts asks. The class is what says
     // "by design" rather than "suppression failed".
