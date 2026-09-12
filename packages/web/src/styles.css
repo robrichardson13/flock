@@ -903,7 +903,16 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 .search-bar-input:focus { outline: none; }
 .search-bar-count { flex: none; white-space: nowrap; color: var(--muted); }
 .search-bar-clear { flex: none; }
-.search-bar-cancel { flex: none; padding: 0 var(--s1); }
+/* card 64: `.linkish`'s own min-height and negative-margin tap-target expansion (sized for a
+   standalone link) push Cancel past the bar's own right inset at 390px — the overflow the
+   390px screenshot caught. This row is a fixed-height toolbar, not a lone tappable line, so
+   Cancel keeps `.linkish`'s look but not its expanded box: no negative margin, no inflated
+   min-height, just enough padding to keep its own hit target comfortable within the row. */
+.search-bar-cancel {
+  flex: none; margin: 0; min-height: 0;
+  padding: var(--s1) var(--s1);
+  white-space: nowrap;
+}
 
 /* card 55: the nav icon that opens the composer wears the tab bar's own tinted "current"
    look while it's open, so the trigger and the surface it opens visibly belong together. */
