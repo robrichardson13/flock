@@ -1,7 +1,45 @@
+/** Hard ceiling on any one sweep; mirrors `CLOSE_LIMIT` in packages/web/src/push.ts. */
+const CLOSE_LIMIT = 100;
+
 // Take over as soon as a new version is served: this worker caches nothing, so there is no
 // in-flight state to protect and a stale push handler is the only failure mode worth avoiding.
 self.addEventListener("install", (e) => e.waitUntil(self.skipWaiting()));
-self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener("activate", (e) => e.waitUntil((async () => {
+  await self.clients.claim();
+  // Sweep the tray on activate. A new worker inherits the *same registration* as the one it
+  // replaces, so notifications the previous worker showed are still ours to close — and after an
+  // app update they are the ones most likely to be stale, since the page that would have
+  // dismissed them was running the old code. Bounded like every other sweep.
+  await closeAllNotifications(CLOSE_LIMIT);
+})()));
+
+// The page asks for this the moment it comes to the front (see `askWorkerToCloseAll` in
+// packages/web/src/push.ts). The worker does the closing itself because a worker enumerating its
+// own notifications is reliable on WebKit, where the same call from the page can come back empty.
+self.addEventListener("message", (event) => {
+  const data = event.data;
+  if (!data || data.type !== "flock:close-all") return;
+  const limit = typeof data.limit === "number" && data.limit > 0 ? Math.min(data.limit, CLOSE_LIMIT) : CLOSE_LIMIT;
+  event.waitUntil(closeAllNotifications(limit));
+});
+
+/** Closes every notification this registration has shown, bounded. Never throws: it runs from
+ *  event handlers where a rejection would be reported as a worker error and nothing else. */
+async function closeAllNotifications(limit) {
+  try {
+    const open = await self.registration.getNotifications();
+    let closed = 0;
+    for (const n of open) {
+      if (closed >= limit) break;
+      n.close();
+      closed++;
+    }
+    return closed;
+  } catch (err) {
+    console.warn("[sw] closeAllNotifications failed", err);
+    return 0;
+  }
+}
 
 // EVERY push must end in a visible notification. We subscribe with userVisibleOnly: true, and
 // WebKit revokes the whole subscription if a push arrives and nothing is shown — so the fallback
