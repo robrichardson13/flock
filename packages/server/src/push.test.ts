@@ -1058,18 +1058,18 @@ describe("a phone sitting on Home is not buzzed for a board (card 54)", () => {
     // The app is open on Home: `board: null`, looking. This is what the phone actually reported.
     expect((await beat(app, { client: "phone", board: null, looking: true })).status).toBe(204);
 
-    flock.say(scout, board.id, "a line on the board she is not scoped to");
+    flock.say(scout, board.id, "a line on the board she is not scoped to", { level: "review" });
     await Bun.sleep(60);
     expect(calls.length).toBe(0);
 
     // Every board, not just the one she last visited.
-    flock.say(scout, other.id, "a line on a different board entirely");
+    flock.say(scout, other.id, "a line on a different board entirely", { level: "review" });
     await Bun.sleep(60);
     expect(calls.length).toBe(0);
 
     // She puts the phone down: the leave beat lands and the next message reaches her.
     expect((await beat(app, { client: "phone", board: null, looking: false })).status).toBe(204);
-    flock.say(scout, board.id, "and now she should hear about it");
+    flock.say(scout, board.id, "and now she should hear about it", { level: "review" });
     await Bun.sleep(60);
     expect(calls.length).toBe(1);
     expect(calls[0]!.endpoint).toBe("https://push.example/ada-phone");
@@ -1086,7 +1086,7 @@ describe("a phone sitting on Home is not buzzed for a board (card 54)", () => {
     // An unknown slug must not be filed as Home, or a forgotten tab would silence every board.
     expect((await beat(app, { client: "stale", board: "a-board-that-was-deleted", looking: true })).status).toBe(204);
 
-    flock.say(scout, board.id, "she is not actually looking at anything");
+    flock.say(scout, board.id, "she is not actually looking at anything", { level: "review" });
     await Bun.sleep(60);
     expect(calls.length).toBe(1);
   });
