@@ -2182,7 +2182,17 @@ html[data-topbar] .sheet { max-height: 100%; }
 /* The number left the top bar (where it competed with the back chevron and the status
    chip) for a muted prefix line over the heading, where it reads as the card's name. */
 .card-heading-num { font-size: var(--t-foot); line-height: var(--lh-foot); color: var(--muted); font-variant-numeric: var(--num); margin-bottom: 2px; }
-.card-body { gap: var(--s4); padding-bottom: var(--s4); }
+/* #30: the body is a flex column whose children never shrink (`.screen-body > *` above), so
+   an unbounded child — a stray long token some future renderer forgets to wrap, the harness
+   "Run block" among them — would otherwise widen `.screen-body.card-body` itself and put a
+   horizontal scrollbar on the whole card, not just the offending line. `overflow-wrap: anywhere`
+   on `.md`/`.msg-body`/`.detail-value`/`.card-heading` already keeps every known piece of card
+   content from doing that, but this is the backstop: no child of the card body may ever push it
+   sideways. `pre`/`table` still scroll on their own axis because `overflow-x: auto` on those
+   elements opens a new scroll container that this rule does not reach into. `.card-details`
+   keeps `overflow: visible` in the drawer (see below) for its hover fill, which is fine — that
+   fill is a `box-shadow`, and a box-shadow never enters scrollable overflow. */
+.card-body { gap: var(--s4); padding-bottom: var(--s4); overflow-x: hidden; }
 .card-heading { font-size: var(--t-title); line-height: var(--lh-title); font-weight: var(--w-title); letter-spacing: var(--ls-title); margin: var(--s1) 0 0; overflow-wrap: anywhere; }
 /* #27: on the phone, .screen-body's own --edge-x inset (8px) is all the title and
    description had, while every row around the card page — boards, cards, the details
