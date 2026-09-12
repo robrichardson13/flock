@@ -69,6 +69,36 @@ export function quoteBlock(text: string, author: string | null, limit: number = 
   return [...header, ...quoted].join("\n") + "\n\n";
 }
 
+/** How much of a message's first line a reply's gist holds before it truncates (card #26) —
+ *  a reply names what is being answered, not a second copy of it, so this is far tighter than
+ *  a selection's own {@link QUOTE_CHAR_LIMIT}. */
+export const GIST_CHAR_LIMIT = 80;
+
+/**
+ * The one-line gist of `text`: its first non-blank line, interior whitespace (including any
+ * further newlines a caller passed by mistake) collapsed to single spaces, cut at `limit`
+ * characters with a trailing ellipsis rather than a mid-word stop. Empty (or entirely blank)
+ * `text` gists to `""`, same as `quoteBlock` treats it as nothing worth quoting.
+ */
+export function gist(text: string, limit: number = GIST_CHAR_LIMIT): string {
+  const normalized = text.replace(/\r\n?/g, "\n");
+  const firstLine = normalized.split("\n").find((l) => l.trim() !== "") ?? "";
+  const collapsed = firstLine.trim().replace(/\s+/g, " ");
+  if (collapsed.length <= limit) return collapsed;
+  return `${collapsed.slice(0, limit).trimEnd()}…`;
+}
+
+/**
+ * Reply's one-line quote (card #26, mobile's Reply row on the double-tap sheet): `ref` is the
+ * message's existing ref — `m<n>` for a channel message, `<card>.<n>` for a card comment,
+ * exactly as `flock react`/`card show` already print it — so tapping Reply names what is being
+ * answered without repeating its whole body. Ends in a blank line, same as `quoteBlock`, so
+ * `joinDraft` treats it identically and a caret placed right after it starts a fresh line.
+ */
+export function replyQuote(ref: string, author: string, body: string, limit: number = GIST_CHAR_LIMIT): string {
+  return `> ${ref} ${author}: ${gist(body, limit)}\n\n`;
+}
+
 /**
  * Where a quote lands in an existing draft: as-is onto an empty draft, and after a blank
  * line onto anything else — never mid-line onto whatever the human was already typing, and

@@ -1839,6 +1839,30 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
    the row. */
 .reaction-sheet-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--s2); }
 .reaction-picker-item.lg { width: 44px; height: 44px; font-size: 26px; }
+/* Reply, above the palette (#26): a `<button>` wearing `.list-row`'s own icon+label rhythm
+   (the roster row's shape) rather than an eighth button squeezed into the palette. Only the
+   properties a bare `<button>` carries that `.list-row` does not already set are reset here —
+   `all: unset` would also wipe `.list-row`'s later-in-cascade flex/gap/padding, since both
+   classes sit on the one element at equal specificity. Full width and edge-to-edge: the sheet
+   gives every row `--sheet-px` of its own horizontal padding, so a full-bleed row cancels that
+   with a negative margin and re-adds it as its own padding, the same trick `.composer-flush`
+   plays inside a sheet's `foot` slot. */
+.sheet-reply-row {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0 calc(-1 * var(--sheet-px));
+  padding-left: var(--sheet-px);
+  padding-right: var(--sheet-px);
+}
+.sheet-reply-icon { color: var(--muted); display: inline-flex; flex: none; }
+/* A hairline under Reply, inset the same amount the sheet already gives its own edges, so it
+   reads as separating one row from a different kind of control rather than a stray rule. */
+.sheet-divider { height: 1px; background: var(--line); margin: var(--s1) 0 var(--s2); }
 /* Activity's day separator: the same quiet-head grammar the Cards tab's section names use
    ("Doing 3") — no rule, no background, just a label one step above the runs it introduces. */
 .evt-day-label { font-size: var(--t-cap); font-weight: var(--w-head); color: var(--muted); padding: 0 0 var(--s1) 2px; }

@@ -265,6 +265,7 @@ export function ThreadGroup<T extends ThreadEntry>({
   entryStyle,
   entryFooter,
   doubleTapReact,
+  onReply,
 }: {
   group: readonly T[];
   mine: boolean;
@@ -288,6 +289,11 @@ export function ThreadGroup<T extends ThreadEntry>({
     isMine: (entry: T, emoji: string) => boolean;
     onPick: (entry: T, emoji: string, mine: boolean) => void;
   };
+  /** Reply, from the same sheet (card #26): a row above the palette that quotes the whole
+   *  entry into the caller's composer through the same `quoteBlock`/`requestInsert` channel
+   *  desktop's "Add to chat" already uses. Omit to leave the sheet reaction-only — nothing
+   *  today serves a `doubleTapReact` caller that cannot also take a reply. */
+  onReply?: (entry: T) => void;
 }) {
   const mobile = useIsMobile();
   // The bubble a double tap picked, i.e. what the reaction sheet is open over. Holding the
@@ -338,6 +344,7 @@ export function ThreadGroup<T extends ThreadEntry>({
           onClose={() => setPicked(null)}
           isMine={(entry, emoji) => doubleTapReact.isMine(entry, emoji)}
           onPick={(entry, emoji, mine) => doubleTapReact.onPick(entry, emoji, mine)}
+          onReply={onReply}
         />
       )}
     </div>
@@ -575,11 +582,12 @@ function ReactionPicker({ isMine, onPick }: { isMine: (emoji: string) => boolean
  * Open is `entry !== null`: the caller keeps the picked entry, so the sheet has what it needs to
  * mark the viewer's existing reactions and to hand the pick back.
  */
-function ReactionSheet<T extends ThreadEntry>({ entry, onClose, isMine, onPick }: {
+function ReactionSheet<T extends ThreadEntry>({ entry, onClose, isMine, onPick, onReply }: {
   entry: T | null;
   onClose: () => void;
   isMine: (entry: T, emoji: string) => boolean;
   onPick: (entry: T, emoji: string, mine: boolean) => void;
+  onReply?: (entry: T) => void;
 }) {
   // The entry the sheet was opened on, kept for the frames `Sheet` stays mounted while it
   // slides back down — clearing it with `open` would empty the sheet mid-exit.
@@ -588,6 +596,25 @@ function ReactionSheet<T extends ThreadEntry>({ entry, onClose, isMine, onPick }
   const shown = entry ?? last.current;
   return (
     <Sheet open={!!entry} onClose={onClose} title="React" hideClose>
+      {/* Reply reads as the primary action (#26): a full-width row above the emoji row,
+          the same `.list-row` rhythm the roster and board rows already use, rather than an
+          eighth button squeezed into the palette. */}
+      {shown && onReply && (
+        <>
+          <button
+            type="button"
+            className="list-row sheet-reply-row"
+            onClick={() => {
+              onReply(shown);
+              onClose();
+            }}
+          >
+            <span className="sheet-reply-icon" aria-hidden>{Icons.reply(20)}</span>
+            <span className="list-title">Reply</span>
+          </button>
+          <div className="sheet-divider" role="separator" aria-hidden />
+        </>
+      )}
       <div className="reaction-sheet-row" role="group" aria-label="Reactions">
         {shown && (
           <ReactionPalette

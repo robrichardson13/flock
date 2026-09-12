@@ -44,6 +44,25 @@ export class FakeNode {
   ownerDocument: any;
   attrs: Record<string, string> = {};
   style: FakeStyle = new FakeStyle();
+  /** `el.classList.add/remove` — backed by the same `class` attribute `className` reads and
+   *  React itself writes, so either form of toggling a class shows up to the other. Only the
+   *  handful of methods anything in this package actually calls. */
+  get classList() {
+    const read = () => (this.attrs.class ?? "").split(/\s+/).filter(Boolean);
+    const write = (tokens: string[]) => { this.attrs.class = tokens.join(" "); };
+    return {
+      add: (...tokens: string[]) => write([...new Set([...read(), ...tokens])]),
+      remove: (...tokens: string[]) => write(read().filter((t) => !tokens.includes(t))),
+      contains: (token: string) => read().includes(token),
+      toggle: (token: string, force?: boolean) => {
+        const has = read().includes(token);
+        const want = force ?? !has;
+        if (want) write([...new Set([...read(), token])]);
+        else write(read().filter((t) => t !== token));
+        return want;
+      },
+    };
+  }
   /** `el.dataset.foo = ...` / `delete el.dataset.foo` — a plain object is enough; nothing here
    *  reads it back through `getAttribute("data-foo")`. */
   dataset: Record<string, string> = {};
@@ -71,8 +90,18 @@ export class FakeNode {
     while (n.parentNode) n = n.parentNode;
     return n === this.ownerDocument;
   }
-  get textContent() { return ""; }
-  set textContent(_v: string) { /* React only ever clears text on these nodes */ }
+  /** React's `shouldSetTextContent` fast path: a host element whose only child is a string
+   *  gets that string written here directly rather than a separate Text child — exactly what
+   *  `<span>Reply</span>` compiles to. A real `textContent` setter replaces every child with
+   *  one text node, which is enough for a test to find the label the same way it would find
+   *  any other text: walking `childNodes` for a `nodeType === 3`. */
+  get textContent() {
+    return this.childNodes.map((c: any) => (c.nodeType === 3 ? (c.nodeValue ?? "") : c.textContent ?? "")).join("");
+  }
+  set textContent(v: string) {
+    this.childNodes = [];
+    if (v) this.childNodes.push({ nodeType: 3, nodeValue: v, parentNode: this, ownerDocument: this.ownerDocument });
+  }
 
   appendChild(c: any) {
     c.parentNode?.removeChild?.(c);
