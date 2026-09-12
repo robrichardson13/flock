@@ -1108,3 +1108,135 @@ describe("a phone sitting on Home is not buzzed for a board (card 54)", () => {
     expect(calls.length).toBe(1);
   });
 });
+
+describe("PushPump settled check-in (ADR 0024, card 79)", () => {
+  test("arms on another actor's event, fires once after the threshold, tagged for the cards tab", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+    flock.putNotifySettings(ada, board.id, { settled: true, settledAfterMs: 5 * 60_000 });
+    const { send, calls } = fakeSend();
+    let t = 1_000_000;
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 20, now: () => t });
+    try {
+      // info is off by default, so this arms the settled timer without itself buzzing anyone.
+      flock.say(scout, board.id, "working on it", { level: "info" });
+      await Bun.sleep(40);
+      expect(calls.length).toBe(0);
+
+      t += 5 * 60_000; // the quiet period elapses
+      await Bun.sleep(60); // the pump's own tick notices, no new event needed
+      expect(calls.length).toBe(1);
+      const payload = JSON.parse(calls[0]!.payload);
+      expect(payload.title).toBe(`${board.title} has settled`);
+      expect(payload.url).toBe(`#/b/${board.slug}/cards`);
+      expect(payload.tag).toBe(`#/b/${board.slug}/cards`);
+      expect(payload.body).toContain("scout");
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("does not fire again without a fresh event, and does not fire on the author's own post", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+    flock.putNotifySettings(ada, board.id, { settled: true, settledAfterMs: 5 * 60_000 });
+    const { send, calls } = fakeSend();
+    let t = 1_000_000;
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 20, now: () => t });
+    try {
+      flock.say(scout, board.id, "working on it", { level: "info" });
+      await Bun.sleep(40);
+
+      t += 5 * 60_000;
+      await Bun.sleep(60);
+      expect(calls.length).toBe(1); // first fire
+
+      t += 5 * 60_000; // stays quiet, no new activity
+      await Bun.sleep(60);
+      expect(calls.length).toBe(1); // no second fire off the same quiet period
+
+      // ada's own post never arms ada's own settled timer.
+      flock.say(ada, board.id, "still here", { level: "info" });
+      t += 5 * 60_000;
+      await Bun.sleep(60);
+      expect(calls.length).toBe(1);
+
+      // A fresh event from someone else re-arms it, and it fires again after the next quiet period.
+      flock.say(scout, board.id, "another update", { level: "info" });
+      await Bun.sleep(40);
+      t += 5 * 60_000;
+      await Bun.sleep(60);
+      expect(calls.length).toBe(2);
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("does not fire while the recipient is looking at the board", async () => {
+    const { flock, board } = fixture();
+    flock.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+    flock.putNotifySettings(ada, board.id, { settled: true, settledAfterMs: 5 * 60_000 });
+    const { send, calls } = fakeSend();
+    const presence = new Presence();
+    let t = 1_000_000;
+    presence.report({ client: "c1", actor: "ada", boardId: board.id, looking: true }, t);
+    const pump = startPushPump({ flock, keys: KEYS, send, intervalMs: 20, now: () => t, presence });
+    try {
+      flock.say(scout, board.id, "working on it", { level: "info" });
+      await Bun.sleep(40);
+
+      t += 5 * 60_000;
+      presence.report({ client: "c1", actor: "ada", boardId: board.id, looking: true }, t); // still looking
+      await Bun.sleep(60);
+      expect(calls.length).toBe(0); // suppressed while looking, deferred rather than dropped
+
+      presence.report({ client: "c1", actor: "ada", boardId: board.id, looking: false }, t);
+      await Bun.sleep(60);
+      expect(calls.length).toBe(1); // fires as soon as looking stops, no new event needed
+    } finally {
+      pump.stop();
+    }
+  });
+
+  test("a follower without the delivery lease never fires a settled check-in", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "flock-settled-lease-"));
+    const path = join(dir, "flock.db");
+    try {
+      const a = new Flock(path);
+      const b = new Flock(path);
+      const board = a.createBoard(ada, { title: "Flock v1" });
+      a.subscribePush(ada, { endpoint: "https://push.example/ada", keys: { p256dh: "p", auth: "a" } });
+      a.putNotifySettings(ada, board.id, { settled: true, settledAfterMs: 5 * 60_000 });
+      const first = fakeSend();
+      const second = fakeSend();
+      let t = 1_000_000;
+      // The max lease TTL is 60s (in the same fake-clock units as `t`). Jump `t` in steps smaller
+      // than that, with a real sleep between each so A's own tick gets to renew before the next
+      // step — a single 5-minute leap would make B's claim see A's lease as expired, which is a
+      // race artefact of sharing one fake clock across two "processes", not a real takeover.
+      const leaseTtlMs = 60_000;
+      const pumpA = startPushPump({ flock: a, keys: KEYS, send: first.send, intervalMs: 20, now: () => t, leaseTtlMs });
+      await Bun.sleep(60); // A claims the lease before B ever starts
+      const pumpB = startPushPump({ flock: b, keys: KEYS, send: second.send, intervalMs: 20, now: () => t, leaseTtlMs });
+      try {
+        a.say(scout, board.id, "working on it", { level: "info" });
+        await Bun.sleep(60);
+
+        for (let i = 0; i < 6; i++) {
+          t += 50_000; // 6 * 50s = 5 minutes, each step under the 60s lease TTL
+          await Bun.sleep(30); // let A's tick renew before the next step
+        }
+        await Bun.sleep(60);
+        expect(first.calls.length).toBe(1); // A, the leaseholder, runs the settled tick and fires
+        expect(second.calls.length).toBe(0); // B never claims the lease, so its tick never runs it
+      } finally {
+        pumpA.stop();
+        pumpB.stop();
+        a.close();
+        b.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

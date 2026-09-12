@@ -9,14 +9,18 @@ import {
   notificationFor,
   notifyTargets,
   recipientsOf,
+  summarize,
   NotificationBatcher,
   Presence,
+  SettledTracker,
   type Dispatch,
   type Event,
   type Flock,
+  type NotificationPayload,
   type NotifyContext,
   type NotifyLevel,
   type NotifySettings,
+  type SettledFire,
 } from "@flock/core";
 import { formatPushDecision } from "./presence-log.ts";
 
@@ -142,9 +146,111 @@ export function startPushPump(opts: {
   let inFlight = false;
   let leads = false;
   let batcher = newBatcher();
+  let settled = newSettled();
+  // ADR 0024: bounded record of the last event per board, for the settled notification's body.
+  // Capped like SettledTracker itself so an unbounded number of boards never grows the pump's
+  // memory; oldest-inserted evicted first (good enough for a "last seen" hint, not a queue).
+  const MAX_LAST_EVENT_BOARDS = 200;
+  const lastEventByBoard = new Map<string, { gist: string; seq: number }>();
 
   function newBatcher(): NotificationBatcher {
     return new NotificationBatcher({ isLooking: presence.isLooking.bind(presence) });
+  }
+
+  /** Fresh tracker with no armed state — used on construction, on a lease takeover (never
+   *  double-fire off state from before we lost the lease), and on stop() (a restart-equivalent
+   *  shutdown drops pending state, per the ADR). */
+  function newSettled(): SettledTracker {
+    return new SettledTracker({
+      isLooking: (actor, boardId) => presence.isLooking(actor, boardId, now()),
+      thresholdFor: (actor, boardId) => flock.resolveNotifySettings(actor, boardId).settledAfterMs,
+      clock: now,
+    });
+  }
+
+  /** Distinct actors subscribed to this board (or globally) with `settled` on in their resolved settings. */
+  function settledRecipients(boardId: string): string[] {
+    const subs = flock.pushSubscriptions({ boardId });
+    const seen = new Set<string>();
+    const recipients: string[] = [];
+    for (const sub of subs) {
+      if (seen.has(sub.actor)) continue;
+      seen.add(sub.actor);
+      if (flock.resolveNotifySettings(sub.actor, boardId).settled) recipients.push(sub.actor);
+    }
+    return recipients;
+  }
+
+  /** One-line, human-legible gist of an event for the settled notification's body. */
+  function summarizeEvent(event: Event): string {
+    const body = typeof event.data.body === "string" ? event.data.body : "";
+    if (body.trim().length > 0) return `${event.actor}: ${summarize(body)}`;
+    return `${event.actor} ${event.type}`;
+  }
+
+  function recordLastEvent(event: Event): void {
+    lastEventByBoard.delete(event.boardId); // re-insert to keep insertion order = recency
+    if (lastEventByBoard.size >= MAX_LAST_EVENT_BOARDS) {
+      const oldest = lastEventByBoard.keys().next().value;
+      if (oldest !== undefined) lastEventByBoard.delete(oldest);
+    }
+    lastEventByBoard.set(event.boardId, { gist: summarizeEvent(event), seq: event.seq });
+  }
+
+  /** Feeds the settled tracker every event the pump processes, per the ADR: any event whose
+   *  author is not the recipient arms (or re-arms) that recipient's quiet timer for this board. */
+  function armSettled(event: Event): void {
+    recordLastEvent(event);
+    const recipients = settledRecipients(event.boardId);
+    if (recipients.length === 0) return;
+    settled.onEvent(event, recipients);
+  }
+
+  /** ~"23m" / "2h 5m" / "1d 3h" — bounded, no fractional units. */
+  function formatQuietDuration(ms: number): string {
+    const totalMinutes = Math.max(1, Math.round(ms / 60_000));
+    if (totalMinutes < 60) return `${totalMinutes}m`;
+    const totalHours = Math.floor(totalMinutes / 60);
+    const remMinutes = totalMinutes % 60;
+    if (totalHours < 24) return remMinutes > 0 ? `${totalHours}h ${remMinutes}m` : `${totalHours}h`;
+    const days = Math.floor(totalHours / 24);
+    const remHours = totalHours % 24;
+    return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+  }
+
+  /** Turns one fire into a dispatch: title/body/tag per the ADR, plus the `[push] settled` log line. */
+  function buildSettledDispatch(fire: SettledFire): Dispatch | null {
+    let board: { slug: string; title: string };
+    try {
+      board = flock.board(fire.boardId);
+    } catch {
+      // Board is gone by the time this fired; nothing sensible to notify about.
+      return null;
+    }
+    const quiet = formatQuietDuration(fire.quietMs);
+    console.error(`[push] settled actor=${fire.actor} board=${board.slug} quiet=${quiet}`);
+    const info = lastEventByBoard.get(fire.boardId);
+    const body = info && info.gist.length > 0 ? `Quiet for ${quiet}. Last: ${info.gist}` : `Quiet for ${quiet}.`;
+    const url = `#/b/${board.slug}/cards`;
+    const payload: NotificationPayload = {
+      title: `${board.title} has settled`,
+      body,
+      url,
+      tag: url,
+      seq: info?.seq ?? flock.lastSeq(),
+      renotify: true,
+    };
+    return { actor: fire.actor, boardId: fire.boardId, payload };
+  }
+
+  /** Runs the settled tracker's tick and dispatches whatever fired. Called from the pump's own
+   *  tick, only while this process holds the delivery lease. */
+  async function deliverSettled(): Promise<{ sent: number; pruned: number }> {
+    const fires = settled.tick(now());
+    if (fires.length === 0) return { sent: 0, pruned: 0 };
+    const dispatches = fires.map(buildSettledDispatch).filter((d): d is Dispatch => d !== null);
+    if (dispatches.length === 0) return { sent: 0, pruned: 0 };
+    return sendAll(dispatches);
   }
 
   /**
@@ -218,6 +324,11 @@ export function startPushPump(opts: {
       // Board (or card) is gone by the time we got here; nothing sensible to notify about.
       return { sent: 0, pruned: 0 };
     }
+
+    // ADR 0024: every processed event arms the settled timer for its board, independent of
+    // whether it produces a notification at all — a settled check-in is about board activity,
+    // not about what got pushed.
+    armSettled(event);
 
     const payload = notificationFor(event, ctx);
     const subs = payload ? flock.pushSubscriptions({ boardId: event.boardId }) : [];
@@ -322,6 +433,7 @@ export function startPushPump(opts: {
         // takeover never replays a backlog, and drop half-built batches so nothing goes out late.
         since = flock.lastSeq();
         batcher = newBatcher();
+        settled = newSettled();
         return;
       }
       const events = flock.events({ since });
@@ -335,6 +447,12 @@ export function startPushPump(opts: {
         }
       }
       await flush();
+      try {
+        await deliverSettled();
+      } catch (err) {
+        // A settled misfire must never stop the tail either.
+        console.error("[push] error delivering settled check-ins:", err);
+      }
     } catch (err) {
       console.error("[push] tail error:", err);
     } finally {
@@ -365,6 +483,7 @@ export function startPushPump(opts: {
       leads = false;
       // Drop pending state (§2.7): a restart-equivalent shutdown never awaits a flush.
       batcher = newBatcher();
+      settled = newSettled();
     },
   };
 }
