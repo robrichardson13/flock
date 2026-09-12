@@ -22,6 +22,9 @@ import {
 } from "@flock/core";
 import { defaultSend, loadOrCreateVapidKeys, startPushPump, type PushPump, type PushSend } from "./push.ts";
 import { formatPresenceReport, isLoopbackRequest, normalizeClientInfo } from "./presence-log.ts";
+import { createRegistry, type HarnessRegistry } from "@flock/harness/registry";
+import { ClaudeCodeReader } from "@flock/harness/claude-code";
+import { actorTelemetryTotals, createTelemetryRefresher, gateTranscripts, isLoopbackRequest as isLoopbackTelemetryContext, sessionFromHeader } from "./telemetry.ts";
 
 export interface ServerOptions {
   flock: Flock;
@@ -51,6 +54,9 @@ export interface ServerOptions {
   now?: () => number;
   /** Test seam: the pump's poll interval. Default 500ms; ignored when push is disabled. */
   pushIntervalMs?: number;
+  /** Test seam: replaces the default harness registry (a real `ClaudeCodeReader`) that backs
+   * refresh-on-read (ADR 0025) — a fake reader in tests, never the real `~/.claude`. */
+  harnessRegistry?: HarnessRegistry;
 }
 
 function defaultHuman(): string {
@@ -200,11 +206,14 @@ export function createApp({
   pushSend,
   now,
   pushIntervalMs,
+  harnessRegistry,
 }: ServerOptions) {
   const app = new Hono();
   app.use("/api/*", cors());
 
   const clock = now ?? Date.now;
+  const registry = harnessRegistry ?? createRegistry([new ClaudeCodeReader()]);
+  const telemetry = createTelemetryRefresher(flock, registry, { now: clock });
   const pushEnabled = (push ?? true) && process.env.FLOCK_NO_PUSH !== "1";
   const resolvedHome = flockHome ?? (process.env.FLOCK_HOME ? resolve(process.env.FLOCK_HOME) : join(homedir(), DB_DIRNAME));
   const vapid = pushEnabled ? loadOrCreateVapidKeys(resolvedHome) : null;
@@ -225,6 +234,10 @@ export function createApp({
       model: c.req.header("x-flock-model"),
       effort: c.req.header("x-flock-effort"),
     });
+    // ADR 0025: the run key travels the same way harness/model/effort do, so a write from this
+    // API carries the session that made it.
+    const session = sessionFromHeader(c.req.header("x-flock-session"));
+    if (session) runtime.session = session;
     return { name, kind, ...runtime };
   };
 
@@ -267,8 +280,16 @@ export function createApp({
     flock.deleteBoard(actorOf(c), c.req.param("b"));
     return c.body(null, 204);
   });
-  // One actor as this board knows them, for the web's actor sheet: mirrors Flock.actorProfile.
-  app.get("/api/boards/:b/actors/:name", (c) => c.json(flock.actorProfile(c.req.param("b"), decodeURIComponent(c.req.param("name")))));
+  // One actor as this board knows them, for the web's actor sheet: mirrors Flock.actorProfile,
+  // plus ADR 0025's telemetry (refreshed on read) and totals over this actor's distinct sessions.
+  app.get("/api/boards/:b/actors/:name", async (c) => {
+    const b = c.req.param("b");
+    const name = decodeURIComponent(c.req.param("name"));
+    const profile = flock.actorProfile(b, name);
+    const sessions = await telemetry.refreshActor(b, name);
+    const gated = gateTranscripts(sessions, isLoopbackTelemetryContext(c));
+    return c.json({ ...profile, telemetry: gated, totals: actorTelemetryTotals(sessions) });
+  });
   app.get("/api/boards/:b/export", (c) => c.text(exportBoard(flock, c.req.param("b")), 200, { "content-type": "text/markdown; charset=utf-8" }));
 
   // ----- cards -----
@@ -290,10 +311,18 @@ export function createApp({
     if (!body.title?.trim()) throw new FlockError("title is required");
     return c.json(flock.createCard(actorOf(c), c.req.param("b"), body), 201);
   });
-  app.get("/api/boards/:b/cards/:n", (c) => {
+  app.get("/api/boards/:b/cards/:n", async (c) => {
     const b = c.req.param("b");
     const n = c.req.param("n");
-    return c.json({ card: flock.card(b, n), comments: flock.comments(b, n), blocks: flock.dependents(b, n).map((d) => d.num) });
+    const card = flock.card(b, n);
+    const sessions = await telemetry.refreshCard(b, card.num);
+    return c.json({
+      card,
+      comments: flock.comments(b, n),
+      blocks: flock.dependents(b, n).map((d) => d.num),
+      duration: flock.cardDuration(b, card.num),
+      telemetry: gateTranscripts(sessions, isLoopbackTelemetryContext(c)),
+    });
   });
   app.patch("/api/boards/:b/cards/:n", async (c) => c.json(flock.updateCard(actorOf(c), c.req.param("b"), c.req.param("n"), await c.req.json())));
 
