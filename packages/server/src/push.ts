@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import webpush from "web-push";
@@ -72,12 +73,16 @@ export type PushSend = (
 ) => Promise<{ statusCode: number }>;
 
 export interface PushPump {
-  /** Deliver everything this one event calls for. Exported for tests; the loop calls it. */
+  /** Deliver everything this one event calls for. Exported for tests; the loop calls it.
+   *  Unguarded by the delivery lease — only `tick()` decides whether this process delivers. */
   deliver(event: Event): Promise<{ sent: number; pruned: number }>;
   /** Flush any trailing batch flushes whose window has closed. The tick calls it; tests call it. */
   flush(): Promise<{ sent: number; pruned: number }>;
-  /** Stop the tail. Called from the server's shutdown path and from tests. Drops pending batches. */
+  /** Stop the tail and give the delivery lease up. Called from the server's shutdown path and
+   *  from tests. Drops pending batches. */
   stop(): void;
+  /** Whether this process currently holds the delivery lease. For tests and diagnostics. */
+  leading(): boolean;
 }
 
 /** web-push's sendNotification with setVapidDetails(keys) applied. Exported so the test route can
@@ -112,6 +117,12 @@ export function startPushPump(opts: {
   presence?: Presence;
   /** Clock. Default Date.now. Tests inject a fake clock to drive the batch window without timers. */
   now?: () => number;
+  /** This process's identity in the delivery lease (ADR 0023). Default a fresh uuid per pump. */
+  leaseOwner?: string;
+  /** How long a claim on the delivery lease stays good without a renewal. Default ten intervals,
+   *  floored at 5s: long enough that a slow tick never hands delivery to a sibling mid-batch,
+   *  short enough that a killed leader is replaced within seconds. */
+  leaseTtlMs?: number;
 }): PushPump {
   const { flock } = opts;
   const send = opts.send ?? defaultSend(opts.keys);
@@ -119,8 +130,11 @@ export function startPushPump(opts: {
   const now = opts.now ?? Date.now;
   const presence = opts.presence ?? new Presence();
   let since = opts.since ?? flock.lastSeq();
+  const leaseOwner = opts.leaseOwner ?? randomUUID();
+  const leaseTtlMs = opts.leaseTtlMs ?? Math.max(5_000, intervalMs * 10);
   let stopped = false;
   let inFlight = false;
+  let leads = false;
   let batcher = newBatcher();
 
   function newBatcher(): NotificationBatcher {
@@ -206,10 +220,41 @@ export function startPushPump(opts: {
     return sendAll(batcher.due(now()));
   }
 
+  /**
+   * Take or renew the single-writer delivery lease (ADR 0023) and report the transition once.
+   * Fails closed: if the claim throws, this process does not deliver this tick — a duplicate
+   * notification on every device is worse than a late one, and the next tick retries.
+   */
+  function claimLead(at: number): boolean {
+    let won = false;
+    try {
+      won = flock.acquirePushLease({ owner: leaseOwner, ttlMs: leaseTtlMs, at, pid: process.pid });
+    } catch (err) {
+      console.error("[push] could not claim the delivery lease:", err);
+      won = false;
+    }
+    if (won !== leads) {
+      console.error(
+        won
+          ? `[push] this process (pid ${process.pid}) is delivering push for this database`
+          : `[push] another process holds the push delivery lease for this database; staying quiet`,
+      );
+      leads = won;
+    }
+    return won;
+  }
+
   async function tick(): Promise<void> {
     if (inFlight) return;
     inFlight = true;
     try {
+      if (!claimLead(now())) {
+        // Someone else is delivering. Fast-forward past everything they handled so a later
+        // takeover never replays a backlog, and drop half-built batches so nothing goes out late.
+        since = flock.lastSeq();
+        batcher = newBatcher();
+        return;
+      }
       const events = flock.events({ since });
       for (const event of events) {
         since = event.seq;
@@ -238,9 +283,17 @@ export function startPushPump(opts: {
   return {
     deliver,
     flush,
+    leading: () => leads,
     stop() {
       stopped = true;
       clearInterval(timer);
+      // Hand the lease back rather than making a sibling wait out the ttl (ADR 0023).
+      try {
+        flock.releasePushLease(leaseOwner);
+      } catch (err) {
+        console.error("[push] could not release the delivery lease:", err);
+      }
+      leads = false;
       // Drop pending state (§2.7): a restart-equivalent shutdown never awaits a flush.
       batcher = newBatcher();
     },
