@@ -70,6 +70,14 @@ export interface Card {
   /** Set while status is awaiting-human. */
   question: string | null;
   questionBy: string | null;
+  /**
+   * The comment num of the pending question — the `question`-kind comment `askHuman` posted
+   * alongside it — so a UI can react to it (and thereby answer it, card 76) without a separate
+   * fetch of the card's full comment thread. Null whenever `question` is null.
+   */
+  questionCommentNum: number | null;
+  /** Reactions already on the pending question comment, same shape and ordering as a comment's. Empty when `question` is null. */
+  questionReactions: Reaction[];
   position: number;
   createdBy: string;
   createdAt: string;
@@ -203,6 +211,12 @@ export interface CommentReactionResult {
   comment: Comment;
   /** False when the reaction was already there (react) or already absent (unreact); no event was emitted. */
   changed: boolean;
+  /**
+   * Set when this reaction was a human reacting to the card's still-pending question: the
+   * reaction doubled as the answer (the emoji itself), and this is the card after that
+   * transition. `unreactFromComment` never sets this — unreacting never un-answers.
+   */
+  answeredCard?: Card;
 }
 
 export interface Decision {

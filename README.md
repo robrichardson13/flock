@@ -94,6 +94,8 @@ Everything from the web app, live over SSE.
 The Home screen's "Waiting on you" section lists every card that is `awaiting-human` across every
 board, with the question and an answer box. Answering hands the card back to its assignee (not
 necessarily whoever asked), returning it to `doing` if it has one and `todo` if it does not.
+Double-tapping the question instead of typing reacts to it with an emoji, which answers it the
+same way — handy for a plain yes/no.
 
 Inside a board: cards on desktop, a tabbed list on mobile, plus a channel, an activity feed and a
 decisions tab. Add a card, comment on one, reopen a closed one with a reason, write in the

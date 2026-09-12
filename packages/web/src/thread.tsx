@@ -212,7 +212,10 @@ export function useDoubleTapReact<T>(
       onPointerUp: (e: ReactPointerEvent) => {
         if (!coarse) return;
         const target = e.target as HTMLElement;
-        if (target.closest?.("button, a, .reaction-picker-wrap")) {
+        // #76: the ask panel's answer field and Answer button live inside the same
+        // double-tap-able row as everything else in the thread; a tap that starts on either
+        // must reach the input/button normally, not get eaten as a reaction gesture.
+        if (target.closest?.("button, a, input, textarea, .reaction-picker-wrap")) {
           lastTap.current = null;
           downPoint.current = null;
           return;

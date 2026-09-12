@@ -659,8 +659,20 @@ export class Flock {
       .all(cardId) as { num: number; status: CardStatus }[]).map((r) => ({ num: r.num, open: !CLOSED_STATUSES.includes(r.status) }));
   }
 
+  /** The `question`-kind comment `askHuman` posted for this card's current question, with its
+   *  reactions — so `rowToCard` can hand the UI everything it needs to react to (and thereby
+   *  answer, card 76) the pending ask without a second fetch. Null once there is no question. */
+  private pendingQuestionComment(cardId: string): { num: number; reactions: Reaction[] } | null {
+    const row = this.db
+      .query("SELECT id, num FROM comments WHERE card_id = ? AND kind = 'question' ORDER BY num DESC LIMIT 1")
+      .get(cardId) as { id: string; num: number } | null;
+    if (!row) return null;
+    return { num: row.num, reactions: this.reactionsForComments([row.id]).get(row.id) ?? [] };
+  }
+
   private rowToCard(r: CardRow): Card {
     const blockers = this.blockersOf(r.id);
+    const pendingQuestion = r.question !== null ? this.pendingQuestionComment(r.id) : null;
     return {
       id: r.id,
       boardId: r.board_id,
@@ -672,6 +684,8 @@ export class Flock {
       labels: JSON.parse(r.labels),
       question: r.question,
       questionBy: r.question_by,
+      questionCommentNum: pendingQuestion?.num ?? null,
+      questionReactions: pendingQuestion?.reactions ?? [],
       position: r.position,
       createdBy: r.created_by,
       createdAt: r.created_at,
@@ -1431,7 +1445,32 @@ export class Flock {
     this.touchBoard(b.id);
     const comment = this.readComment(row, c.num);
     this.emit(actor, b.id, "comment.reacted", c.num, commentReactionEventData(e, comment));
-    return { comment, changed: true };
+    const answeredCard = this.answerViaReactionIfPending(actor, b.id, c, row, e);
+    return { comment, changed: true, ...(answeredCard ? { answeredCard } : {}) };
+  }
+
+  /**
+   * A human reacting to the card's still-pending question answers it, the same way typing the
+   * answer would (card 76): the emoji itself becomes the answer text, and `card.answered`
+   * carries `viaReaction: true` alongside it so listeners (the conductor skill's approve/reject
+   * table) can treat it exactly like a typed 👍/👎. An agent's reaction never answers — only a
+   * human's word counts as approval. And it only fires for the *pending* question: the highest
+   * `question`-kind comment on the card while it is still `awaiting-human`. Reacting to an
+   * older, already-resolved question (or to any other comment kind) is an ordinary reaction;
+   * unreacting is never routed here, so removing a reaction never un-answers.
+   */
+  private answerViaReactionIfPending(actor: Actor, boardId: string, c: Card, row: CommentRow, emoji: string): Card | undefined {
+    if (actor.kind !== "human" || c.status !== "awaiting-human" || row.kind !== "question") return undefined;
+    const latest = this.db.query("SELECT COALESCE(MAX(num), 0) AS n FROM comments WHERE card_id = ? AND kind = 'question'").get(c.id) as { n: number };
+    if (row.num !== latest.n) return undefined;
+    const next: CardStatus = c.assignee ? "doing" : "todo";
+    this.db
+      .query("UPDATE cards SET status = ?, question = NULL, question_by = NULL, updated_at = ? WHERE id = ?")
+      .run(next, now(), c.id);
+    this.addComment(actor, boardId, c.num, emoji, "answer");
+    this.touchBoard(boardId);
+    this.emit(actor, boardId, "card.answered", c.num, { answer: emoji, askedBy: c.questionBy, title: c.title, viaReaction: true });
+    return this.card(boardId, c.num);
   }
 
   /** Remove `actor`'s `emoji` from comment `num` on card `ref`. Idempotent the same way `reactToComment` is. */
