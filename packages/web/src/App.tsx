@@ -438,7 +438,7 @@ function Shell() {
   // suspended rather than hidden, so the leave transition that edge depends on may never be
   // recorded and the app comes back still believing it was looking. This asks "is it in front
   // now?" from every signal a resume might produce, deduped, and sweeps unfiltered.
-  useEffect(() => installForegroundDismiss(() => { void dismissAllNotifications(); }), []);
+  useEffect(() => installForegroundDismiss((reason) => { void dismissAllNotifications(reason); }), []);
 
   // Register the service worker up front, not only when the notifications toggle is used: a
   // registration has to exist for `currentSubscription()` to read this device's state, and for
