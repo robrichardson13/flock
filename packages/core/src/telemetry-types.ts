@@ -8,8 +8,9 @@
 /** Liveness as the reader computes it (ADR 0026 §4); deliberately coarse. */
 export type Liveness = "running" | "idle" | "gone" | "unknown";
 
-/** How a session reading was collected. */
-export type TelemetrySource = "hook" | "reader";
+/** How a session reading was collected. Flock never installs or relies on Claude Code hooks
+ * (d10): every reading comes from a harness reader looking at a transcript on demand. */
+export type TelemetrySource = "reader";
 
 /** Longest `key` a caller may write, and the longest freeform string field. Defensive, not policy. */
 export const MAX_KEY_LENGTH = 200;
@@ -80,6 +81,40 @@ export interface HarnessSessionTelemetry extends SessionReading {
   declaredModel?: string;
   /** Other card numbers this session wrote on, so a session total never reads as one card's own. */
   alsoWorked: number[];
+}
+
+/**
+ * Bound on re-reading a session that ended without ever getting a cost-state line (killed,
+ * interrupted, or simply never resumed): past this age a refresher gives up rather than reading
+ * it forever. Named and bounded per ADR 0023's amendment on retroactive cost.
+ */
+export const ENDED_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** The slice of a reading `isSessionFinal` needs — anything that already carries these fields
+ * (a stored row, a fresh reader result) qualifies without an extra cast. */
+export type FinalityCheck = Pick<SessionReading, "costUsd" | "liveness" | "lastActivityAt" | "partial" | "extra">;
+
+/**
+ * True once a session reading is settled and never worth reading again.
+ *
+ * Claude Code appends its cost-state line to a transcript only after the session itself has
+ * ended, so cost lands retroactively: a reader must keep re-reading a session that looks over
+ * until one of three things makes it truly final —
+ *  - it has cost (`costUsd` is known), or
+ *  - its transcript is gone (the last read already reported `missing-transcript`), or
+ *  - it ended more than `ENDED_SESSION_MAX_AGE_MS` ago and still has neither, so re-reading it
+ *    forever would cost more than the telemetry is worth.
+ * A session that has not gone quiet (`liveness` is anything but `"gone"`) is never final on the
+ * age rule alone — it may still be running.
+ */
+export function isSessionFinal(entry: FinalityCheck, now: number): boolean {
+  if (entry.costUsd !== undefined) return true;
+  if (entry.partial && entry.extra?.unavailableReason === "missing-transcript") return true;
+  if (entry.liveness === "gone" && entry.lastActivityAt) {
+    const age = now - Date.parse(entry.lastActivityAt);
+    if (Number.isFinite(age) && age > ENDED_SESSION_MAX_AGE_MS) return true;
+  }
+  return false;
 }
 
 /** flock's own card duration: claim to close, from the events table alone. Never needs a harness. */

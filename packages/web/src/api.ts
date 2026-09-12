@@ -83,7 +83,9 @@ export interface ActorInfo {
  * no place in a browser bundle.
  */
 export type Liveness = "running" | "idle" | "gone" | "unknown";
-export type TelemetrySource = "hook" | "reader";
+/** Flock never installs or relies on Claude Code hooks (d10): every reading comes from a
+ * harness reader looking at a transcript on demand. */
+export type TelemetrySource = "reader";
 
 /** One harness session's telemetry, as `card`/`actorProfile` return it. Every field but
  *  `key`, `actor` and `observedAt` is nullable/absent on some real run — an unlinked agent's

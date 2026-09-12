@@ -157,8 +157,9 @@ TEAM
   telemetry [BOARD] [N] [--refresh] [--json]
                                       Harness sessions for card N, or for --as/FLOCK_ACTOR when N
                                       is omitted: cost, context used/max, tool calls, liveness.
-                                      Re-reads any session that has not ended yet; --refresh forces
-                                      every session, including ones already ended. See docs/adr/0026.
+                                      Re-reads any session that is not yet final (cost still
+                                      missing, and either recently active or the transcript
+                                      still there); --refresh forces every session. See docs/adr/0026.
 
 SETUP
   init [TITLE] [--body MD | --body-file F] [--local]
@@ -170,16 +171,12 @@ SETUP
                                       loopback only. Prints the https tailnet URL first when its
                                       parent (\`up --foreground --tailscale\`) established a mount;
                                       --open still opens the loopback address.
-  setup [--no-start] [--skill-only] [--hooks | --no-hooks | --remove-hooks]
+  setup [--no-start] [--skill-only]
                                       Write ~/.claude/skills/flock/SKILL.md, then \`flock up\`
                                       (a symlinked destination is left alone). --skill-only
                                       does just the skill; --no-start skips starting the daemon.
                                       Reports ~/.flock/skill.md (your personalization of the
                                       skill, see docs/config.md) when it exists; silent when not.
-                                      --hooks opts in to a marked SessionEnd/SubagentStop entry in
-                                      ~/.claude/settings.json that reports harness telemetry
-                                      promptly (off by default; FLOCK_NO_HOOKS=1 always refuses
-                                      it); --remove-hooks deletes exactly that entry. See docs/adr/0026.
   up [--port N] [--host H] [--isolated | --db PATH] [--foreground] [--open]
      [--tailscale | --no-tailscale]
                                       Start the daemon in the background (detached; survives the
@@ -390,19 +387,7 @@ async function main(argv: string[]) {
       json: bool(flags.json),
       noStart: bool(flags["no-start"]),
       skillOnly: bool(flags["skill-only"]),
-      hooks: bool(flags.hooks),
-      noHooks: bool(flags["no-hooks"]),
-      removeHooks: bool(flags["remove-hooks"]),
     });
-    return;
-  }
-
-  // Hook-facing, never db-scoped by board: reads its own JSON payload off stdin and must exit 0
-  // on every failure (a telemetry hook must never be able to interrupt a Claude Code session),
-  // so it is dispatched here, before the generic error handling below applies to every other verb.
-  if (cmd === "telemetry" && rest[0] === "record") {
-    const { telemetryRecordCommand } = await import("./telemetry.ts");
-    await telemetryRecordCommand({ dbPath: str(flags.db) });
     return;
   }
 

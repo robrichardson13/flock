@@ -1,15 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Flock, type Actor } from "@flock/core";
-import {
-  bestEffortRefresh,
-  fmtContext,
-  fmtCost,
-  fmtDuration,
-  parseHookPayload,
-  runKeyFor,
-  telemetryForActor,
-  telemetryForCard,
-} from "./telemetry.ts";
+import { bestEffortRefresh, fmtContext, fmtCost, fmtDuration, telemetryForActor, telemetryForCard } from "./telemetry.ts";
 
 const ada: Actor = { name: "ada", kind: "human" };
 const scoutSession = "claude-code:8ea8caf2-d288-4e0a-89de-04c45158535c";
@@ -20,53 +11,6 @@ function fresh() {
   const board = f.createBoard(ada, { title: "Telemetry", body: "" });
   return { f, board };
 }
-
-describe("parseHookPayload", () => {
-  test("accepts a minimal valid payload", () => {
-    const p = parseHookPayload(JSON.stringify({ session_id: "abc", transcript_path: "/x.jsonl", cwd: "/proj" }));
-    expect(p).toEqual({ session_id: "abc", transcript_path: "/x.jsonl", cwd: "/proj", agent_id: undefined });
-  });
-
-  test("carries agent_id when present (SubagentStop)", () => {
-    const p = parseHookPayload(JSON.stringify({ session_id: "abc", agent_id: "agent-1" }));
-    expect(p?.agent_id).toBe("agent-1");
-  });
-
-  test("rejects empty stdin", () => {
-    expect(parseHookPayload("")).toBeUndefined();
-    expect(parseHookPayload("   ")).toBeUndefined();
-  });
-
-  test("rejects malformed JSON", () => {
-    expect(parseHookPayload("{not json")).toBeUndefined();
-  });
-
-  test("rejects a JSON array or primitive", () => {
-    expect(parseHookPayload("[]")).toBeUndefined();
-    expect(parseHookPayload("42")).toBeUndefined();
-  });
-
-  test("rejects a payload with no session_id", () => {
-    expect(parseHookPayload(JSON.stringify({ transcript_path: "/x.jsonl" }))).toBeUndefined();
-  });
-
-  test("bounds every string field's length", () => {
-    const long = "x".repeat(10_000);
-    const p = parseHookPayload(JSON.stringify({ session_id: long, cwd: long }));
-    expect(p?.session_id.length).toBe(4096);
-    expect(p?.cwd?.length).toBe(4096);
-  });
-});
-
-describe("runKeyFor", () => {
-  test("no agent_id: family:sessionId", () => {
-    expect(runKeyFor({ session_id: "abc" })).toBe("claude-code:abc");
-  });
-
-  test("with agent_id: family:sessionId#agentId", () => {
-    expect(runKeyFor({ session_id: "abc", agent_id: "agent-1" })).toBe("claude-code:abc#agent-1");
-  });
-});
 
 describe("format helpers", () => {
   test("fmtDuration renders hours, minutes, seconds, and the null dash", () => {
@@ -98,7 +42,26 @@ describe("telemetryForCard / telemetryForActor", () => {
     f.close();
   });
 
-  test("an ended session (endedAt set) is returned without attempting a refresh", async () => {
+  test("a session with cost is final and is returned without attempting a refresh", async () => {
+    const { f, board } = fresh();
+    f.createCard(scout, board.id, { title: "X" });
+    f.claimCard(scout, board.id, 1);
+    f.recordSessionReading({
+      key: scoutSession,
+      sessionId: "8ea8caf2-d288-4e0a-89de-04c45158535c",
+      observedAt: "2026-09-11T00:00:00.000Z",
+      endedAt: "2026-09-11T00:05:00.000Z",
+      costUsd: 1.23,
+      toolCalls: 7,
+    });
+    const result = await telemetryForCard(f, board.id, 1, { refresh: false, cwd: null });
+    expect(result.telemetry).toHaveLength(1);
+    // Unchanged: no cwd was ever available to resolve a refresh against, and none was needed.
+    expect(result.telemetry[0]!.toolCalls).toBe(7);
+    f.close();
+  });
+
+  test("an ended session without cost yet is still a refresh candidate (cost lands retroactively)", async () => {
     const { f, board } = fresh();
     f.createCard(scout, board.id, { title: "X" });
     f.claimCard(scout, board.id, 1);
@@ -109,10 +72,12 @@ describe("telemetryForCard / telemetryForActor", () => {
       endedAt: "2026-09-11T00:05:00.000Z",
       toolCalls: 7,
     });
+    // No cwd to resolve a reader against, so the refresh attempt is a no-op — but it must be
+    // attempted (not skipped as "final") since there is still no cost on this reading.
     const result = await telemetryForCard(f, board.id, 1, { refresh: false, cwd: null });
     expect(result.telemetry).toHaveLength(1);
-    // Unchanged: no cwd was ever available to resolve a refresh against, and none was needed.
     expect(result.telemetry[0]!.toolCalls).toBe(7);
+    expect(result.telemetry[0]!.costUsd).toBeUndefined();
     f.close();
   });
 

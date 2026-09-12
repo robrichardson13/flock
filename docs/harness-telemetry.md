@@ -36,7 +36,7 @@ In a terminal:
 flock telemetry            # your own sessions (--as / FLOCK_ACTOR), with totals
 flock telemetry 12         # the sessions that worked card 12, and the card's duration
 flock telemetry 12 --json  # the same, machine-readable, including the transcript path
-flock telemetry 12 --refresh   # re-read every session first, including ones already ended
+flock telemetry 12 --refresh   # re-read every session first, even ones already final
 ```
 
 `flock card show --json` carries the same numbers as `telemetry` and `duration` keys. Nothing in
@@ -74,67 +74,23 @@ than throwing. A malformed line is skipped, never thrown from.
 Two limits worth knowing:
 
 - **A subagent reports its parent's session.** `CLAUDE_CODE_SESSION_ID` inside a subagent is the
-  parent's id and there is no per-agent variable. Without the hook below, N subagents on N cards
-  all report one key, and its numbers describe the whole conducted run. That is a true reading,
-  just a coarse one — which is what `also worked` exists to say out loud.
+  parent's id and there is no per-agent variable. N subagents on N cards all report one key, and
+  its numbers describe the whole conducted run. That is a true reading, just a coarse one — which
+  is what `also worked` exists to say out loud.
 - **Cost is retroactive.** The harness writes its cost line when the *session* ends, which is not
-  when the agent runs `flock done` — it is later, when you close the terminal. On the no-install
-  path a card closed at 11pm shows `—` for cost until something reads that transcript again, and
-  possibly forever if nothing does.
+  when the agent runs `flock done` — it is later, when you close the terminal. A card closed at
+  11pm shows `—` for cost until something reads that transcript again, which keeps happening on
+  every later view (see the refresh rule below) until the number shows up.
 
-Refreshes happen where somebody is looking: the server re-reads a non-ended session when a card or
-actor page is fetched and the stored reading is more than 15 seconds old, single-flight per key. A
-session that has ended is immutable and is never re-read. `flock done` and `flock release` each do
-one best-effort read. Nothing polls in the background, and a refresh never emits a flock event.
+Refreshes happen where somebody is looking, and never any other way: the server re-reads a session
+when a card or actor page is fetched and the stored reading is more than 15 seconds old,
+single-flight per key. `flock done` and `flock release` each do one best-effort read. Nothing polls
+in the background, and a refresh never emits a flock event.
 
-## The hook (opt-in)
-
-The hook is the only way cost lands promptly and reliably, and the only way a subagent gets its own
-attribution. It is offered, never assumed.
-
-```
-flock setup --hooks          # install
-flock setup --remove-hooks   # remove
-flock setup --no-hooks       # set up flock without being asked
-```
-
-It writes one marked entry per event into `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "SessionEnd": [
-      {
-        "_flock": "harness-telemetry",
-        "matcher": "*",
-        "hooks": [{ "type": "command", "command": "flock telemetry record" }]
-      }
-    ]
-  }
-}
-```
-
-`SessionEnd` and `SubagentStop` only — never `PreToolUse`, never per turn. On either event Claude
-Code hands `flock telemetry record` the session id, the transcript path, the cwd, and (on
-`SubagentStop`) the agent id that exists nowhere else. flock reads the transcript and stores the
-same row it would have read anyway, with `source = "hook"`.
-
-The terms, the same ones the PATH line `flock setup` writes into a shell rc already follows:
-
-- **Never silent.** `flock setup` prints what it added and where.
-- **Marked.** `"_flock": "harness-telemetry"` is how it is found and removed exactly, and why a
-  second install is a no-op rather than a duplicate.
-- **Additive.** The file is read, the entry merged, and written back via temp-file-and-rename. Your
-  own `SessionEnd` hook survives. A file flock cannot parse is never written to — it says so and
-  touches nothing.
-- **Opt out before the fact:** `flock setup --no-hooks`, or `FLOCK_NO_HOOKS=1`.
-- **Undo after the fact:** `flock setup --remove-hooks` deletes exactly the marked entries and
-  leaves everything else, or delete the `_flock`-marked block by hand in five seconds. Removing it
-  costs you prompt cost and per-subagent attribution; nothing else changes and nothing breaks.
-- **Cheap and quiet.** Hard timeout, and on any failure it exits 0 and prints nothing. A telemetry
-  hook must never be able to interrupt somebody's session.
-
-`flock telemetry record` is the hook's subcommand and is not listed in `flock help`.
+A session is **final** — never read again — once one of three things is true: it has cost, its
+transcript is gone, or it went quiet more than seven days ago and still has neither. Short of that,
+a session that looks over keeps being re-read on every later view, because the cost-state line above
+can still land at any moment.
 
 ## Privacy
 
@@ -156,7 +112,6 @@ fields. It is for reading the board, not for billing or enforcing anything.
 | Var | What it does |
 | --- | --- |
 | `FLOCK_SESSION` | Sets the run key by hand, for a harness flock cannot detect. Precedence: `--session`, this var, then detection. |
-| `FLOCK_NO_HOOKS` | `1` (or any non-empty value that is not `0`/`false`) makes `flock setup` skip the hook install entirely. |
 
 ## What is not here yet
 

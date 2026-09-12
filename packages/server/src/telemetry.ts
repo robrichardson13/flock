@@ -6,6 +6,7 @@
  * full of tabs never turns into unbounded filesystem work.
  */
 import type { Flock, HarnessSessionTelemetry } from "@flock/core";
+import { isSessionFinal } from "@flock/core";
 import type { HarnessRegistry } from "@flock/harness/registry";
 
 /** ADR 0026 §2: a non-ended session is refreshed when its stored reading is older than this. */
@@ -42,12 +43,15 @@ export interface TelemetryRefresher {
 }
 
 /**
- * Builds the refresh-on-read policy over one `Flock` and one harness registry. A session with
- * `endedAt` set is immutable and is never re-read (ADR 0026). A session with no stored row yet
- * (`observedAt: ""`) is always a candidate, bounded by the same TTL against the last *attempt*
- * (not just the last successful read) so a reader that keeps failing does not get hammered on
- * every page view. Refreshes for the same run key are single-flight: concurrent requests for the
- * same card or actor collapse onto one underlying read.
+ * Builds the refresh-on-read policy over one `Flock` and one harness registry. A session is
+ * refreshed until `isSessionFinal` (core) says it is settled — cost lands retroactively (Claude
+ * Code appends its cost-state line only after the session ends), so `endedAt` alone is not
+ * enough: a session that looks over but has no cost yet keeps being read, bounded by
+ * `ENDED_SESSION_MAX_AGE_MS`. A session with no stored row yet (`observedAt: ""`) is always a
+ * candidate, bounded by the same TTL against the last *attempt* (not just the last successful
+ * read) so a reader that keeps failing does not get hammered on every page view. Refreshes for
+ * the same run key are single-flight: concurrent requests for the same card or actor collapse
+ * onto one underlying read.
  */
 export function createTelemetryRefresher(
   flock: Flock,
@@ -60,7 +64,7 @@ export function createTelemetryRefresher(
   const lastAttemptAt = new Map<string, number>();
 
   const isStale = (entry: HarnessSessionTelemetry): boolean => {
-    if (entry.endedAt) return false;
+    if (isSessionFinal(entry, now())) return false;
     const lastRead = entry.observedAt ? Date.parse(entry.observedAt) : 0;
     const lastAttempt = lastAttemptAt.get(entry.key) ?? 0;
     return now() - Math.max(lastRead, lastAttempt) > REFRESH_TTL_MS;

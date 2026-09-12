@@ -1,27 +1,16 @@
 /**
- * `flock telemetry` (ADR 0026 §2, §5): the human's terminal surface for harness telemetry, and
- * the hook-facing `flock telemetry record` that a Claude Code `SessionEnd`/`SubagentStop` hook
- * invokes. Both are thin: core stores and queries (`recordSessionReading`, `sessionsForCard`,
- * `sessionsForActor`, `cardDuration`); `@flock/harness` reads a transcript. This file only wires
- * them together and formats the result.
- *
- * `telemetryRecordCommand` must never throw and must never be noisy on success: a telemetry hook
- * that could interrupt somebody's Claude Code session would be worse than no telemetry at all
- * (ADR 0026 §2 "Cheap and quiet"). Every failure is logged to stderr with context and swallowed.
+ * `flock telemetry` (ADR 0026 §2, §5): the human's terminal surface for harness telemetry.
+ * Thin: core stores and queries (`recordSessionReading`, `sessionsForCard`, `sessionsForActor`,
+ * `cardDuration`); `@flock/harness` reads a transcript on demand. This file only wires them
+ * together and formats the result. There is no hook-facing path: flock never installs or relies
+ * on Claude Code hooks (ADR 0026, d10) — every reading comes from reading the transcript when
+ * something asks to see it.
  */
 import type { Flock, HarnessSessionTelemetry } from "@flock/core";
-import { resolveDbPath } from "@flock/core";
+import { isSessionFinal } from "@flock/core";
 import { createRegistry, type HarnessRegistry } from "@flock/harness/registry";
-import type { RunRef } from "@flock/harness/reader";
 import { ClaudeCodeReader } from "@flock/harness/claude-code";
-import { CLAUDE_CODE_FAMILY } from "@flock/harness/claude-code-paths";
-import { openForCli } from "./schema-policy.ts";
 
-/** A hook payload is a few hundred bytes of JSON; this is a hard ceiling against a hook someone
- * misconfigured to pipe something else in, not a realistic size. */
-const MAX_HOOK_STDIN_BYTES = 256 * 1024;
-/** Wall-clock budget for the whole record: read stdin, resolve, read the transcript, write the row. */
-const HOOK_TIMEOUT_MS = 5_000;
 /** A card's or actor's session count is normally 1-3; this bounds a pathological board. */
 const MAX_SESSIONS_TO_REFRESH = 20;
 const REFRESH_TIMEOUT_MS = 3_000;
@@ -73,12 +62,15 @@ function totalsOf(telemetry: HarnessSessionTelemetry[]): TelemetryActorResult["t
 }
 
 /**
- * Refresh a card's/actor's sessions when asked, or when a session has not ended yet (ADR 0026
- * §2 "Level 1"). Bounded: at most MAX_SESSIONS_TO_REFRESH reads, each with its own timeout, and
- * a reader that cannot resolve a session (no cwd hint) is left as-is rather than failing the call.
+ * Refresh a card's/actor's sessions when asked, or when a session is not yet final (ADR 0026
+ * §2 "Level 1"; `isSessionFinal` — cost lands retroactively, so a session without cost is kept
+ * re-read until it has cost, its transcript is gone, or it is simply too old to keep checking).
+ * Bounded: at most MAX_SESSIONS_TO_REFRESH reads, each with its own timeout, and a reader that
+ * cannot resolve a session (no cwd hint) is left as-is rather than failing the call.
  */
 async function refreshAll(flock: Flock, telemetry: HarnessSessionTelemetry[], opts: { refresh: boolean; cwd: string | null }): Promise<HarnessSessionTelemetry[]> {
-  const due = telemetry.filter((t) => opts.refresh || !t.endedAt).slice(0, MAX_SESSIONS_TO_REFRESH);
+  const now = Date.now();
+  const due = telemetry.filter((t) => opts.refresh || !isSessionFinal(t, now)).slice(0, MAX_SESSIONS_TO_REFRESH);
   if (due.length === 0) return telemetry;
   const entries = await Promise.all(due.map(async (t) => [t.key, await refreshOne(flock, t, opts.cwd)] as const));
   const refreshed = new Map(entries);
@@ -103,111 +95,11 @@ async function refreshOne(flock: Flock, entry: HarnessSessionTelemetry, cwd: str
   }
 }
 
-// ---------------------------------------------------------------------------------------------
-// flock telemetry record — hook-facing, reads the hook's JSON payload on stdin
-// ---------------------------------------------------------------------------------------------
-
-export interface HookPayload {
-  session_id: string;
-  transcript_path?: string;
-  cwd?: string;
-  agent_id?: string;
-}
-
-export interface TelemetryRecordOptions {
-  dbPath?: string;
-}
-
-/** Never throws. Every failure is logged to stderr with context; the process still exits 0. */
-export async function telemetryRecordCommand(opts: TelemetryRecordOptions): Promise<void> {
-  try {
-    await recordFromHook(opts);
-  } catch (err) {
-    console.error(`flock telemetry record: ${errMessage(err)}`);
-  }
-}
-
-async function recordFromHook(opts: TelemetryRecordOptions): Promise<void> {
-  await withTimeout(async () => {
-    const raw = await readStdinBounded(MAX_HOOK_STDIN_BYTES);
-    const payload = parseHookPayload(raw);
-    if (!payload) return;
-
-    const { flock } = openForCli(resolveDbPath(opts.dbPath).path);
-    try {
-      const key = runKeyFor(payload);
-      const ref: RunRef = {
-        key,
-        family: CLAUDE_CODE_FAMILY,
-        sessionId: payload.session_id,
-        agentId: payload.agent_id,
-        cwd: payload.cwd,
-        transcript: payload.transcript_path,
-      };
-      const reader = defaultRegistry().readerFor(CLAUDE_CODE_FAMILY);
-      if (!reader) return;
-      const reading = await reader.read(ref);
-      if (!reading) return;
-      flock.recordSessionReading({ ...reading, source: "hook" });
-    } finally {
-      flock.close();
-    }
-  }, HOOK_TIMEOUT_MS);
-}
-
-export function runKeyFor(payload: HookPayload): string {
-  return payload.agent_id ? `${CLAUDE_CODE_FAMILY}:${payload.session_id}#${payload.agent_id}` : `${CLAUDE_CODE_FAMILY}:${payload.session_id}`;
-}
-
-/** `stdin`, capped at `maxBytes` — a hook payload is small JSON; a larger stream is refused
- * rather than buffered without bound. */
-async function readStdinBounded(maxBytes: number): Promise<string> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of process.stdin) {
-    total += chunk.length;
-    if (total > maxBytes) throw new Error(`stdin payload exceeded ${maxBytes} bytes`);
-    chunks.push(chunk as Buffer);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-const MAX_HOOK_STRING = 4096;
-
-/** Parses and validates the hook JSON. Returns undefined (logging why) on anything malformed —
- * this is attacker-shaped input in the same sense a transcript is (ADR 0026 §2). */
-export function parseHookPayload(raw: string): HookPayload | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    console.error("flock telemetry record: empty stdin, nothing to record");
-    return undefined;
-  }
-  let json: unknown;
-  try {
-    json = JSON.parse(trimmed);
-  } catch (err) {
-    console.error(`flock telemetry record: stdin was not valid JSON (${errMessage(err)})`);
-    return undefined;
-  }
-  if (!json || typeof json !== "object") {
-    console.error("flock telemetry record: stdin JSON was not an object");
-    return undefined;
-  }
-  const obj = json as Record<string, unknown>;
-  const sessionId = typeof obj.session_id === "string" ? obj.session_id.trim().slice(0, MAX_HOOK_STRING) : "";
-  if (!sessionId) {
-    console.error("flock telemetry record: hook payload had no session_id");
-    return undefined;
-  }
-  const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim().slice(0, MAX_HOOK_STRING) : undefined);
-  return { session_id: sessionId, transcript_path: str(obj.transcript_path), cwd: str(obj.cwd), agent_id: str(obj.agent_id) };
-}
-
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Bounds an async operation to `timeoutMs`; rejects rather than hanging a hook or a CLI call. */
+/** Bounds an async operation to `timeoutMs`; rejects rather than hanging a CLI call. */
 function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> {
   return Promise.race([
     fn(),

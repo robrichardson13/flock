@@ -20,8 +20,8 @@ import {
   type TelemetrySource,
 } from "./telemetry-types.ts";
 
-export type { Liveness, TelemetrySource, SessionReading, HarnessSessionTelemetry, CardDuration, HarnessSessionRow } from "./telemetry-types.ts";
-export { MAX_KEY_LENGTH, MAX_TOOL_HISTOGRAM_ENTRIES, MAX_EXTRA_JSON_LENGTH } from "./telemetry-types.ts";
+export type { Liveness, TelemetrySource, SessionReading, HarnessSessionTelemetry, CardDuration, HarnessSessionRow, FinalityCheck } from "./telemetry-types.ts";
+export { MAX_KEY_LENGTH, MAX_TOOL_HISTOGRAM_ENTRIES, MAX_EXTRA_JSON_LENGTH, ENDED_SESSION_MAX_AGE_MS, isSessionFinal } from "./telemetry-types.ts";
 
 /** Cap a tool histogram to the top MAX_TOOL_HISTOGRAM_ENTRIES entries by count. Defensive: a
  * malformed or huge reading must never grow a row without bound. */

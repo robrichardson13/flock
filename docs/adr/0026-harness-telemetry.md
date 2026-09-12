@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS harness_sessions (
   ended_reason  TEXT,               -- clean | absent | null
   pid           INTEGER,
   partial       INTEGER,            -- 1 when a read hit its size cap
-  source        TEXT,               -- hook | reader
+  source        TEXT,               -- reader
   observed_at   TEXT NOT NULL,      -- when these numbers were read: the TTL clock
   extra         TEXT,               -- JSON, harness-specific readings flock never queries
   updated_at    TEXT NOT NULL
@@ -178,72 +178,59 @@ for catching a conductor that routed one model and passed another.
 - **A JSON blob on the actor.** Unqueryable, and ADR 0005 already ruled that runtime facts get
   real columns so a future `--model opus` filter is a where-clause away.
 
-### 2. Collection: a reader is the primitive, a hook is the accelerator
+### 2. Collection: a reader is the only primitive, and cost lands retroactively
 
-Three levels, each usable without the ones above it:
+**Flock never installs or relies on Claude Code hooks.** Everything here is zero-install, in two
+layers:
 
-**Level 0 — the link, zero install.** `detectRuntime()` gains `session`, read from
-`CLAUDE_CODE_SESSION_ID` (plus `CLAUDE_PID` for the liveness path). Every `claim`, `comment`,
-`done` already carries runtime; now it carries the run key too. This alone buys the card→session
-link and, with the events table, per-card wall clock. It needs no consent and no install because
-it is the machinery ADR 0005 already built.
+**The link.** `detectRuntime()` gains `session`, read from `CLAUDE_CODE_SESSION_ID` (plus
+`CLAUDE_PID` for the liveness path). Every `claim`, `comment`, `done` already carries runtime; now
+it carries the run key too. This alone buys the card→session link and, with the events table,
+per-card wall clock. It needs no consent and no install because it is the machinery ADR 0005
+already built.
 
 Its known weakness, measured: inside a subagent that variable is the **parent's** session id and
 there is no per-agent variable, so N subagents on N cards report one key. The numbers then
 describe the whole conducted run, which is a true and useful reading, just a coarse one.
 
-**Level 1 — the numbers, zero install.** A **reader** resolves the transcript from
-`(cwd, session id)` by the documented encoding, reads it, and upserts a `harness_sessions` row.
-Because the path is derivable, the hook is *not* required to get numbers — which is what makes a
-zero-install v1 possible.
+**The numbers.** A **reader** resolves the transcript from `(cwd, session id)` by the documented
+encoding, reads it, and upserts a `harness_sessions` row. Because the path is derivable, nothing
+needs to be installed to get numbers — this is the only collection path there is.
 
-**Level 2 — exactness and push, one opt-in install.** A Claude Code `SessionEnd` /
-`SubagentStop` hook invokes `flock telemetry record`, which reads the payload on stdin
-(`session_id`, `transcript_path`, `cwd`, and on `SubagentStop` the `agent_id` that exists nowhere
-else) and upserts the same row with `source = "hook"`. It adds two things level 1 cannot get:
-per-subagent attribution, and a push at the moment the session ends.
-
-**That second one matters more than it looks.** `cost-state` does not exist until the session
-ends, and a session does not end when the agent runs `flock done` — it ends later, when the human
-closes the terminal. So on the zero-install path, **cost is always retroactive**: it appears the
-next time something reads that transcript, minutes or hours after the card closed, or never if
-nothing ever looks again. The hook is the only way a card's cost lands promptly and reliably.
-That is the honest case for asking a user to install it, and the reason it is offered rather than
-assumed.
-
-#### Is mutating `~/.claude/settings.json` acceptable?
-
-Yes, opt-in, on the same terms as the PATH line `flock setup` already writes into a user's shell
-rc (`path-setup.ts`):
-
-- **Never silent.** `flock setup` prints what it is adding and where. The conductor skill may
-  offer it once; it may not install it unprompted.
-- **Marked.** The hook entry carries a fixed marker (`"_flock": "harness-telemetry"`) so it can be
-  found and removed exactly, and so a second install is a no-op rather than a duplicate.
-- **Additive.** The file is read, the entry merged into the existing `hooks` object, and written
-  back via temp-file-and-rename. Any existing `SessionEnd` hook stays. A parse failure means
-  flock does not write at all and says so — it never rewrites a file it did not understand.
-- **Opt-out before the fact:** `flock setup --no-hooks`, or `FLOCK_NO_HOOKS=1`, matching
-  `FLOCK_NO_MODIFY_PATH`.
-- **Undone after the fact:** `flock setup --remove-hooks` deletes exactly the marked entry and
-  leaves everything else, and the marker is documented in `docs/harness-telemetry.md` so a
-  human can delete it by hand in five seconds. Removing it degrades flock to level 1; nothing
-  breaks.
-- **Cheap and quiet.** The hook runs on `SessionEnd`/`SubagentStop` only — never `PreToolUse`,
-  never per-turn. It has a hard timeout, and on any failure it exits 0 without printing: a
-  telemetry hook must never be able to interrupt somebody's session.
+**Cost is always retroactive.** `cost-state` does not exist until the session ends, and a session
+does not end when the agent runs `flock done` — it ends later, when the human closes the
+terminal. So a card's cost appears the next time something reads that transcript: minutes or
+hours after the card closed, or not until somebody next opens the card, however much later that
+is. Nothing pushes a number the moment a session ends; a reader only ever answers when asked.
+That is the trade the zero-install design makes, and §"Who triggers a refresh" below is what keeps
+that answer from going stale forever.
 
 #### Who triggers a refresh
 
 - **The server, lazily on read, with a TTL.** When a card view is fetched and any of its sessions
-  is not `ended`, the server refreshes those rows if `observed_at` is older than **15 seconds**,
-  single-flight per key. A session with `ended_at` set is immutable and is **never re-read**.
-  Cost is proportional to attention: nobody watching means nothing read.
+  is not `isSessionFinal` (below), the server refreshes those rows if `observed_at` is older than
+  **15 seconds**, single-flight per key. Cost is proportional to attention: nobody watching means
+  nothing read.
 - **The CLI, on `done` and `release`,** best-effort: one read, swallowed failures logged at debug,
   never able to fail the close. It usually catches the tool counts and final context, and usually
   misses the cost, for the reason above.
-- **The hook, when installed**, on session end.
 - **`flock telemetry refresh [card]`,** the explicit manual path, for backfilling.
+
+**When a session is finally left alone.** Re-reading a session forever would cost more than the
+telemetry is worth, so a session stops being a refresh candidate — `isSessionFinal` in
+`packages/core/src/telemetry-types.ts` — once any one of three things is true:
+
+- **it has cost** (`cost_usd` is known — the harness's `cost-state` line landed), or
+- **its transcript is gone** (the last read already reported `missing-transcript`; nothing will
+  ever change that), or
+- **it went quiet more than `ENDED_SESSION_MAX_AGE_MS` (seven days) ago and still has neither** —
+  a killed or abandoned session that will never get a cost-state line at all.
+
+Short of one of those three, a session that looks over (`liveness: "gone"`, no cost yet) is kept a
+refresh candidate: the next view past the TTL reads the transcript again, on the chance the
+cost-state line has landed since. That is what makes retroactive cost visible at all without an
+install — the cost simply shows up whenever a human next looks, however much later that is, up to
+the seven-day bound.
 
 **Rejected:** a poller in the daemon (work proportional to boards rather than to attention, and it
 runs all night while nobody looks); a statusline wrapper (hijacks a user-visible setting most
@@ -303,7 +290,7 @@ Four states, computed by the reader, stored on the row, and deliberately coarse:
 | --- | --- | --- |
 | `running` | pid alive **and** transcript mtime within the fresh window | rollout mtime fresh **and** last `task_started` unmatched |
 | `idle` | pid alive **and** mtime stale | mtime stale **and** last turn closed by `task_complete` |
-| `gone` | pid dead, or the transcript has a `cost-state` line | only when a `sessionEnd` hook said so |
+| `gone` | pid dead, or the transcript has a `cost-state` line | not yet reachable — no pid and no zero-install end-of-session signal (see below) |
 | `unknown` | no session key, no transcript, unsupported harness, or the reading is past its TTL | the default |
 
 Three rules the implementation must not soften:
@@ -370,8 +357,8 @@ unconditionally.
 summing over **distinct** session keys so one session working three cards is counted once.
 
 **New verb `flock telemetry [<card>] [--refresh] [--json]`** — the human's terminal surface, and
-the only new human-readable output. `flock telemetry record` is its hook-facing subcommand,
-undocumented in `flock help` the way `handoff`'s aliases are.
+the only new human-readable output. There is no hook-facing subcommand; every reading comes from
+`--refresh` or the same lazy on-view refresh the server does.
 
 **Card page (web)**: below Details, a *Run* block, one row per session:
 
@@ -402,14 +389,15 @@ Codex maps onto the same table with a different reader and no changes to core:
 | `context_max` | `model_context_window`, inline in the rollout — no catalog lookup |
 | token counts | `token_count.info.total_token_usage` |
 | `tool_calls`, `tools` | `response_item.payload.type == "function_call"`, by `name` |
-| `liveness` | mtime plus an unmatched `task_started`/`task_complete` pair. **No pid exists**, so `gone` is only reachable via a `sessionEnd` hook |
+| `liveness` | mtime plus an unmatched `task_started`/`task_complete` pair. **No pid exists**, and with no hook to signal an end either, `gone` may not be reachable at all for Codex — open question for whoever builds this reader |
 | `extra` | `rate_limits.primary/secondary.used_percent`, `plan_type` |
 | **`cost_usd`** | **null, always.** Codex is a subscription; a dollar figure derived from a price table would be fiction. The UI shows the rate-limit percentage where the dollar figure would go |
 
 Codex's effort and reasoning settings come from the same `threads` row, which is better than
-anything Claude Code offers. Its env vars and hook stdin payload are **unverified** and must be
-confirmed on a working install before the detector is written — which is why Codex is designed for
-here and implemented later.
+anything Claude Code offers. Its env vars are **unverified** and must be confirmed on a working
+install before the detector is written — which is why Codex is designed for here and implemented
+later. Whatever Codex needs, it stays zero-install too: flock never installs or relies on a
+harness's own hooks, Claude Code's or otherwise.
 
 **The seam.** A new package, `packages/harness`, holds every reader behind one interface:
 
@@ -434,13 +422,13 @@ is one file plus one line in the registry, and it cannot reach core even by acci
 
 ## Consequences
 
-- **Cost on the zero-install path is retroactive and sometimes never arrives.** A card closed at
-  11pm shows `—` for cost until something reads that transcript after the session ends. This is
-  the strongest argument for the hook and the thing a user should be told when they are offered
-  it.
-- **A subagent without the hook reports its parent's session.** Its numbers describe the whole
-  conducted run. The UI must therefore never present a session total as "what this card cost";
-  `alsoWorked` exists so it cannot.
+- **Cost is retroactive and sometimes never arrives.** A card closed at 11pm shows `—` for cost
+  until something reads that transcript again, which keeps happening on every later view
+  (`isSessionFinal`) until the number lands or the session ages out after
+  `ENDED_SESSION_MAX_AGE_MS` (seven days). There is no install that makes it prompter.
+- **A subagent reports its parent's session.** Its numbers describe the whole conducted run. The
+  UI must therefore never present a session total as "what this card cost"; `alsoWorked` exists so
+  it cannot.
 - **Context max depends on a weekly-expiring, content-hashed cache file.** Glob it, tolerate its
   absence, and fall back to no maximum (render the number, not the bar) rather than a guessed one.
   The `[1m]` variant is invisible in the transcript, so a 200K-mode run on a 1M-catalogued model
@@ -477,21 +465,20 @@ Six cards, in blocker order. Each is sized for one sonnet delegation on the
    line count and timeout, with `partial` rather than an exception. Tests run off checked-in
    fixture transcripts, never the real `~/.claude`.
 
-3. **CLI: detection, the verb, and the opt-in hook.** *(blocked by 1, 2)*
+3. **CLI: detection and the verb.** *(blocked by 1, 2)*
    `detectRuntime()` learns `session` from `CLAUDE_CODE_SESSION_ID`; `resolveActor` keeps the
    flag → env → detect precedence with a `--session` flag and `FLOCK_SESSION`. New
-   `flock telemetry [card] [--refresh] [--json]` plus the hook-facing `flock telemetry record`
-   (reads the hook payload on stdin, exits 0 on every failure, prints nothing). `flock setup`
-   gains `--hooks` / `--no-hooks` / `--remove-hooks` writing a marked entry into
-   `~/.claude/settings.json` via temp-file-and-rename, refusing to write a file it cannot parse,
-   with `FLOCK_NO_HOOKS=1` as the env opt-out. `done`/`release` do one best-effort read.
+   `flock telemetry [card] [--refresh] [--json]`, zero-install: no hook-facing subcommand, no
+   settings.json writer. `done`/`release` do one best-effort read.
 
 4. **server: refresh on read, and telemetry in the payloads.** *(blocked by 1, 2)*
-   `GET /api/boards/:b/cards/:n` and the actor profile route refresh non-ended sessions whose
-   `observed_at` is older than the 15s TTL, single-flight per key, never blocking the response on
-   a slow read; ended sessions are never re-read. `telemetry` and `duration` on the card payload,
-   `telemetry` + `totals` on the actor payload, `session` on `/api/actors`. The `transcript` path
-   is omitted unless the request is from loopback. No new event type and no SSE change.
+   `GET /api/boards/:b/cards/:n` and the actor profile route refresh sessions that are not yet
+   `isSessionFinal` and whose `observed_at` is older than the 15s TTL, single-flight per key,
+   never blocking the response on a slow read; a session is left alone only once it has cost, its
+   transcript is gone, or it has been quiet for more than `ENDED_SESSION_MAX_AGE_MS`. `telemetry`
+   and `duration` on the card payload, `telemetry` + `totals` on the actor payload, `session` on
+   `/api/actors`. The `transcript` path is omitted unless the request is from loopback. No new
+   event type and no SSE change.
 
 5. **web: the Run block and the actor totals strip.** *(blocked by 4)*
    Card page Run rows (model chip, cost, context bar, duration, tools, liveness dot + last
@@ -503,7 +490,8 @@ Six cards, in blocker order. Each is sized for one sonnet delegation on the
 6. **verification and docs.** *(blocked by 3, 4, 5)*
    End-to-end against an isolated database (`FLOCK_DB` in the scratchpad, never the shared board):
    a real Claude Code session claims and closes a card, numbers land, liveness moves
-   `running → gone`, the hook install is idempotent and `--remove-hooks` restores the file byte
-   for byte. `bun test`, `bun run typecheck`, `bun run build` green. `docs/harness-telemetry.md`
-   (what the hook is, what it reads, what it stores, how to remove it by hand), `docs/config.md`
-   for `FLOCK_NO_HOOKS`/`FLOCK_SESSION`, README and CLAUDE.md lines, and this ADR marked accepted.
+   `running → gone`, and a card viewed again after the transcript gains its `cost-state` line
+   shows the cost on the next view — no install involved. `bun test`, `bun run typecheck`,
+   `bun run build` green. `docs/harness-telemetry.md` (what the Run block shows, how a session is
+   linked with no install, the retroactive-cost refresh/finality rule), `docs/config.md` for
+   `FLOCK_SESSION`, README and CLAUDE.md lines, and this ADR marked accepted.
