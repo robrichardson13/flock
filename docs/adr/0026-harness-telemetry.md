@@ -53,8 +53,9 @@ and Codex 0.116.0 data:
 - **Env**: `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PID` are exported to every child process. Inside
   a subagent, `CLAUDE_CODE_SESSION_ID` is the **parent's** id and **there is no `agentId`
   variable**. Still, as in ADR 0005, nothing names the model.
-- **Hooks** receive `session_id`, `transcript_path` and `cwd` on stdin for every event, and
-  `SubagentStop` is the only place `agent_id` is handed out.
+- **Hooks** were considered and rejected (§2, d10: flock never installs or relies on Claude Code
+  hooks). Noted here only because it is what `SubagentStop` would have been the sole source of:
+  the `agent_id` a subagent has nowhere else in its own environment.
 - **Codex** has a better index and worse liveness: `~/.codex/state_5.sqlite` `threads` gives
   `rollout_path`, `cwd`, `model`, `reasoning_effort`, `tokens_used`, `created_at`/`updated_at` in
   one SELECT, and the rollout carries `model_context_window` inline. There is **no dollar cost
@@ -65,9 +66,9 @@ and Codex 0.116.0 data:
 `events` and `actors` already carry nullable `harness`/`model`/`effort`. There is **no claims
 table**: a claim is `cards.assignee` plus a `card.claimed` event, and `boardActors` already
 group-bys the event log to answer "who ran what here". Core has no filesystem access beyond its
-own database file. `packages/core/src/hooks.ts` already ships a permission-guarded hook runner,
-and `packages/cli/src/path-setup.ts` already edits a file in the user's home directory behind a
-fixed marker comment and an env opt-out. Both are precedents this design leans on.
+own database file. `packages/cli/src/path-setup.ts` already edits a file in the user's home
+directory behind a fixed marker comment and an env opt-out — a precedent for a well-behaved,
+marked, removable edit to a file outside flock's own database, if this design ever needed one.
 
 ## Decision
 
