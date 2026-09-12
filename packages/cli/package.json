@@ -3,5 +3,5 @@
   "version": "0.1.0",
   "type": "module",
   "bin": { "flock": "src/main.ts" },
-  "dependencies": { "@flock/core": "workspace:*", "@flock/server": "workspace:*" }
+  "dependencies": { "@flock/core": "workspace:*", "@flock/harness": "workspace:*", "@flock/server": "workspace:*" }
 }

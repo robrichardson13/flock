@@ -17,6 +17,7 @@
       },
       "dependencies": {
         "@flock/core": "workspace:*",
+        "@flock/harness": "workspace:*",
         "@flock/server": "workspace:*",
       },
     },

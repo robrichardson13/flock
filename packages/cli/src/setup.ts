@@ -18,6 +18,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { flockHome } from "./daemon.ts";
+import { type HooksResult, installHooks, isNoHooks, removeHooks, reportHooksResult } from "./hooks.ts";
 import { ensurePathConfigured, isNoModifyPath, type EnsurePathResult } from "./path-setup.ts";
 import { personalizationPath } from "./paths.ts";
 import { isStandalone, skillPath, version } from "./runtime.ts";
@@ -26,6 +27,10 @@ export interface SetupOptions {
   json: boolean;
   noStart?: boolean;
   skillOnly?: boolean;
+  /** Opt-in install of the harness-telemetry hooks (ADR 0023): off unless explicitly asked. */
+  hooks?: boolean;
+  noHooks?: boolean;
+  removeHooks?: boolean;
 }
 
 export interface SkillRecord {
@@ -146,6 +151,19 @@ function reportPath(result: EnsurePathResult, dir: string, json: boolean): void 
   }
 }
 
+/**
+ * Whether/how to touch the harness-telemetry hooks this run. `--remove-hooks` wins outright.
+ * Otherwise installing is opt-in (`--hooks`) and `FLOCK_NO_HOOKS`/`--no-hooks` refuse it even
+ * when `--hooks` was also passed — the same fail-closed precedence `isNoModifyPath` uses for
+ * PATH, since an unwanted install costs more than a missed opt-in. No flags at all: untouched.
+ */
+function resolveHooks(opts: SetupOptions): HooksResult | undefined {
+  if (opts.removeHooks) return removeHooks();
+  if (!opts.hooks) return undefined;
+  if (opts.noHooks || isNoHooks(process.env.FLOCK_NO_HOOKS)) return undefined;
+  return installHooks();
+}
+
 /** `flock setup`: write the skill, repair `PATH` if needed, then `flock up` unless
  *  `--no-start`/`--skill-only`. */
 export async function setupCommand(opts: SetupOptions): Promise<void> {
@@ -171,6 +189,9 @@ export async function setupCommand(opts: SetupOptions): Promise<void> {
         });
   if (path) reportPath(path, dir, opts.json);
 
+  const hooks = resolveHooks(opts);
+  if (hooks) reportHooksResult(hooks, opts.json);
+
   const personalization = personalizationPath();
   const hasPersonalization = existsSync(personalization);
 
@@ -180,6 +201,7 @@ export async function setupCommand(opts: SetupOptions): Promise<void> {
         skill: skill.action,
         dest: skill.dest,
         path: path?.action,
+        hooks: hooks?.action,
         personalization,
         hasPersonalization,
       }),
