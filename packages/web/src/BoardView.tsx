@@ -153,6 +153,17 @@ export function displayTabWhileClosing(tab: BoardTab, cardClosing: boolean, last
 }
 
 /**
+ * #22: `actorName` clears the moment the route does — before the actor sheet has had any
+ * chance to play its own fade-out — so anything that needs to know whose sheet is still
+ * *visually* on screen (as opposed to whose route is current) has to keep naming it through
+ * that closing beat. Mirrors the pattern `Sheet` itself uses for `children` (`shown.current`):
+ * hold the last real value rather than going blank the instant the prop that fed it does.
+ */
+export function stickyActorName(actorName: string | undefined, lastActorName: string | undefined): string | undefined {
+  return actorName ?? lastActorName;
+}
+
+/**
  * The mobile Cards tab's own scroll container, restoring and remembering its position
  * (ADR 0013). A genuine component, not inlined, so `useScrollRestore` mounts and unmounts
  * with the pane itself — the `.tab-pane` it lives under is keyed on the tab, so switching
@@ -208,6 +219,32 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
     swapTimer.current = window.setTimeout(() => setSwapping(false), D_BASE);
   }, []);
   useEffect(() => () => window.clearTimeout(swapTimer.current), []);
+  // #22: the actor sheet's own name and "still on screen" flag, held through the frame(s)
+  // where `actorName` has already cleared (the route changed) but `Sheet`'s fade-out has not
+  // finished playing. Without this the sheet used to be yanked out of the tree in the same
+  // commit the route changed in — no exit animation at all — while the pane/tab bar behind it
+  // (gated on `actorName` being truthy) flipped back to the raw route instantly, so whatever
+  // was uncovered read as a remount rather than a close. Detected in the render phase (the
+  // same "adjusting state in response to a prop change" idiom `wasCardsTab` above uses), so
+  // the very commit that clears the route also arms the hold — one render later would already
+  // be too late to catch the frame that unmounts things gated on `actorName`.
+  const lastActorName = useRef<string | undefined>(actorName);
+  if (actorName) lastActorName.current = actorName;
+  const [actorClosing, setActorClosing] = useState(false);
+  const actorCloseTimer = useRef(0);
+  const [wasActorOpen, setWasActorOpen] = useState(!!actorName);
+  if (!!actorName !== wasActorOpen) {
+    setWasActorOpen(!!actorName);
+    window.clearTimeout(actorCloseTimer.current);
+    if (actorName) {
+      setActorClosing(false);
+    } else {
+      setActorClosing(true);
+      actorCloseTimer.current = window.setTimeout(() => setActorClosing(false), D_BASE);
+    }
+  }
+  useEffect(() => () => window.clearTimeout(actorCloseTimer.current), []);
+  const actorOnScreen = !!actorName || actorClosing;
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
@@ -579,10 +616,16 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
   useEffect(() => {
     if (!actorName) {
       backFromActor.current = window.location.hash || "#/";
+    }
+    // Only once the sheet has actually finished closing (#22): resetting these the instant the
+    // route clears would drop the "Team" back control and the remembered pane mid fade-out,
+    // while the closing sheet is still on screen showing the wrong state for the beat it has
+    // left to play.
+    if (!actorOnScreen) {
       isDeepLinkActor.current = false;
       actorFromRoster.current = false;
     }
-  }, [actorName, tab, cardNum]);
+  }, [actorName, actorOnScreen, tab, cardNum]);
   // No effect ties the roster to the actor route any more, and it matters that there is not
   // one: the roster is modal, so a roster row is the only way to reach an actor from it, and
   // that row already records where the list was and closes it (`onEnterActor`). An effect
@@ -722,13 +765,21 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
   // Seeded from the snapshot already on screen (#43): the header's facts and the cards this
   // actor holds are in `snap`, so the sheet opens on real rows and the fetch fills in the
   // history behind them.
-  const actorSheet = actorName ? (
+  //
+  // #22: rendered whenever the sheet is either open or still finishing its own close
+  // (`actorOnScreen`), with `open` truthfully following the route rather than a hardcoded
+  // `true` — that is what lets `Sheet`'s own graceful-close machinery (ui.tsx) play the exit
+  // fade instead of the whole thing being yanked out of the tree the instant the route clears.
+  // `shownActorName` keeps naming the actor through that same closing beat, the way `Sheet`
+  // itself keeps showing `shown.current` while `open` is already false.
+  const shownActorName = stickyActorName(actorName, lastActorName.current);
+  const actorSheet = actorOnScreen && shownActorName ? (
     <ActorSheet
-      key={actorName}
-      open
+      key={shownActorName}
+      open={!!actorName}
       boardRef={b.slug}
-      name={actorName}
-      seed={{ member: snap.team.find((m) => m.name === actorName), holding: snap.cards.filter((c) => c.assignee === actorName) }}
+      name={shownActorName}
+      seed={{ member: snap.team.find((m) => m.name === shownActorName), holding: snap.cards.filter((c) => c.assignee === shownActorName) }}
       onClose={() => { dispatchRoster({ type: "leaveActor" }); window.location.hash = backFromActor.current; }}
       // Back is the same navigation as close — the actor view is a route, so leaving it means
       // going back to the one it covered — and then the roster comes with it (#31).
@@ -764,7 +815,7 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
     // card is closing, show the destination tab underneath from the first frame instead, so
     // there is only the one transition: the card sliding away over the pane it is about to
     // land on.
-    const displayTab: BoardTab = displayTabWhileClosing(tab, cardClosing, lastTab.current, !!actorName);
+    const displayTab: BoardTab = displayTabWhileClosing(tab, cardClosing, lastTab.current, actorOnScreen);
     const paneClass = tabDir.current ? `tab-pane tab-in-${tabDir.current}` : "tab-pane";
     return (
       <div className={`screen${pushed ? " screen--pushed" : ""}`} ref={screenRef}>
@@ -885,7 +936,7 @@ export function BoardView({ boardRef, cardNum, actorName, tab, onBoardsChanged, 
     );
   }
 
-  const effectiveTab = displayTabWhileClosing(tab, false, lastTab.current, !!actorName);
+  const effectiveTab = displayTabWhileClosing(tab, false, lastTab.current, actorOnScreen);
   const pane: Exclude<BoardTab, "cards"> = effectiveTab === "cards" ? "channel" : effectiveTab;
   const { state: boardStateValue, label: boardStateLabel } = boardState(snap.counts);
 
