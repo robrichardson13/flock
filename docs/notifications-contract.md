@@ -568,8 +568,8 @@ self.addEventListener("push", (event) => {
       // browsers that do honour it — the click handler prefers it and falls back to the tag.
       tag: p.tag || p.url,
       data: { url: p.url },
-      icon: "/icon-192.png",
-      badge: "/icon-192.png",
+      icon: "/icon-v2-192.png",
+      badge: "/badge-v2-96.png",
       // ADR 0021: alert on a same-tag replacement for a leading-edge burst or an ask, stay quiet
       // for a trailing flush. Guarded against an empty tag (Chrome throws if renotify is true with
       // one) even though tag is never empty in practice — belt and braces. Safari, iOS Safari and
@@ -612,7 +612,10 @@ work on the desktop and quietly do nothing on the primary target. `renotify` is 
 and it is still safe to set unconditionally: it is an enhancement Chrome/Edge honour and every other
 target silently ignores, never gating any behaviour those platforms need. `icon` and `badge` are
 set because they cost nothing and help on Chrome and Android; expect iOS to ignore `badge` (WebKit
-bug 280160) and to use the home-screen icon regardless.
+bug 280160) and to use the home-screen icon regardless. `badge` is a separate asset from `icon`
+(card #2): Chrome renders it as a monochrome alpha mask in the status bar, so it points at a
+white-silhouette-on-transparent PNG (`badge-v2-96.png`) rather than the full-colour tile — a
+full-bleed opaque icon there renders as a solid grey blob.
 
 ### 3.2 The page side: `packages/web/src/push.ts`
 
