@@ -11,7 +11,7 @@ import { FlockError } from "./types.ts";
  * whenever `SCHEMA` or `migrate()` below changes, and only ever add columns/tables/indexes:
  * migrations must stay additive so a newer binary can always read an older database.
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /**
  * Thrown by `openDatabase` when the database's stamped `user_version` is higher than this
@@ -192,6 +192,19 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS push_subs_actor ON push_subscriptions(actor);
 CREATE INDEX IF NOT EXISTS push_subs_board ON push_subscriptions(board_id);
+-- Exactly one row, id 'singleton': which server process currently owns push delivery for this
+-- database (ADR 0023). Several serve processes routinely share ~/.flock/flock.db -- an installed
+-- daemon plus one dev environment per checkout -- and each runs its own push pump over the same
+-- events table, so without this every notification went out once per process.
+-- expires_at is epoch milliseconds, not an ISO string like every other timestamp here: it is
+-- compared against the pump's injected clock, never rendered to a human.
+CREATE TABLE IF NOT EXISTS push_lease (
+  id TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,
+  pid INTEGER,
+  acquired_at TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS reactions (
   board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
   message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,

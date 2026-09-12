@@ -839,3 +839,71 @@ describe("POST /api/presence", () => {
     expect(res.status).toBe(204);
   });
 });
+
+// Card 52: three `flock serve` processes — an installed daemon plus a dev environment per
+// checkout — routinely share ~/.flock/flock.db, and every one of them ran a pump over the same
+// events table. One channel burst reached the phone three times. ADR 0023.
+describe("PushPump delivery lease across processes on one database", () => {
+  function sharedDb(): { path: string; cleanup: () => void } {
+    const dir = mkdtempSync(join(tmpdir(), "flock-lease-"));
+    return { path: join(dir, "flock.db"), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  }
+
+  test("two pumps over one database deliver an event once, not twice", async () => {
+    const { path, cleanup } = sharedDb();
+    const a = new Flock(path);
+    const b = new Flock(path);
+    const board = a.createBoard(ada, { title: "Flock v1" });
+    a.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    const first = fakeSend();
+    const second = fakeSend();
+    const pumpA = startPushPump({ flock: a, keys: KEYS, send: first.send, intervalMs: 20 });
+    const pumpB = startPushPump({ flock: b, keys: KEYS, send: second.send, intervalMs: 20 });
+    try {
+      a.say(ada, board.id, "hello everyone");
+      await Bun.sleep(150);
+      expect(first.calls.length + second.calls.length).toBe(1);
+      expect([pumpA.leading(), pumpB.leading()].filter(Boolean).length).toBe(1);
+    } finally {
+      pumpA.stop();
+      pumpB.stop();
+      a.close();
+      b.close();
+      cleanup();
+    }
+  });
+
+  test("the follower takes over when the leader stops, and does not replay what the leader sent", async () => {
+    const { path, cleanup } = sharedDb();
+    const a = new Flock(path);
+    const b = new Flock(path);
+    const board = a.createBoard(ada, { title: "Flock v1" });
+    a.subscribePush(scout, { endpoint: "https://push.example/scout", keys: { p256dh: "p", auth: "a" } });
+    const first = fakeSend();
+    const second = fakeSend();
+    const pumpA = startPushPump({ flock: a, keys: KEYS, send: first.send, intervalMs: 20 });
+    await Bun.sleep(60); // A claims the lease before B ever starts
+    const pumpB = startPushPump({ flock: b, keys: KEYS, send: second.send, intervalMs: 20 });
+    try {
+      await Bun.sleep(60);
+      a.say(ada, board.id, "while A leads");
+      await Bun.sleep(120);
+      expect(first.calls.length).toBe(1);
+      expect(second.calls.length).toBe(0);
+
+      pumpA.stop(); // releases the lease rather than making B wait out the ttl
+      await Bun.sleep(120);
+      expect(pumpB.leading()).toBe(true);
+      expect(second.calls.length).toBe(0); // no replay of the event A already delivered
+
+      b.say(ada, board.id, "while B leads");
+      await Bun.sleep(120);
+      expect(second.calls.length).toBe(1);
+    } finally {
+      pumpB.stop();
+      a.close();
+      b.close();
+      cleanup();
+    }
+  });
+});
