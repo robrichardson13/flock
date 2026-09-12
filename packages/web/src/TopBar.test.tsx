@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { act, type ReactElement } from "react";
 import { installDom, type FakeDom, type FakeNode } from "./testdom.ts";
-import { TopBar, topBarShape } from "./TopBar.tsx";
+import { TopBar, TopBarProvider, topBarShape, useTopBarSlot } from "./TopBar.tsx";
 import type { Route } from "./App.tsx";
 
 function route(board?: string): Route {
@@ -79,5 +79,82 @@ describe("TopBar bell placement (#10)", () => {
   it("does not render the bell on a board route", () => {
     const el = mount(<TopBar route={route("flock-2")} {...props} />);
     expect(hasClass(el, "notify-btn")).toBe(false);
+  });
+});
+
+/**
+ * Card 50: the search icon is Cards-tab-only chrome, registered through the board slot like
+ * `onOpenBrief`/`onOpenTeam`. It has to show and hide as a screen re-registers the slot with
+ * (or without) `onOpenSearch` — the toggle this test exercises — without any *title* change to
+ * force the bar to re-render (see the `Titles.search` comment in TopBar.tsx).
+ */
+describe("TopBar search icon (card 50)", () => {
+  let dom: FakeDom;
+  let createRoot: typeof import("react-dom/client").createRoot;
+
+  beforeAll(async () => {
+    dom = installDom();
+    createRoot = (await import("react-dom/client")).createRoot;
+  });
+  afterAll(() => dom.uninstall());
+
+  let cleanup: (() => void) | null = null;
+  afterEach(() => { cleanup?.(); cleanup = null; });
+
+  const props = {
+    actor: "rob",
+    onNewBoard: () => {},
+    onRename: () => {},
+    onOpenNotifications: () => {},
+  };
+
+  function findByLabel(node: FakeNode, label: string): FakeNode | null {
+    if (node.attrs?.["aria-label"] === label) return node;
+    for (const c of node.children as FakeNode[]) {
+      const found = findByLabel(c, label);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function Slotter({ withSearch }: { withSearch: boolean }) {
+    useTopBarSlot("board", { title: "flock-2", onOpenSearch: withSearch ? () => {} : undefined });
+    return null;
+  }
+
+  function mount(withSearch: boolean): { root: FakeNode; rerender: (v: boolean) => void } {
+    const container = dom.container as unknown as Element;
+    const root = createRoot(container);
+    const render = (v: boolean) =>
+      act(() => {
+        root.render(
+          <TopBarProvider>
+            <TopBar route={route("flock-2")} {...props} />
+            <Slotter withSearch={v} />
+          </TopBarProvider>,
+        );
+      });
+    render(withSearch);
+    cleanup = () => act(() => root.unmount());
+    return { root: dom.container.firstChild as FakeNode, rerender: render };
+  }
+
+  it("renders the search icon on the Cards tab", () => {
+    const { root } = mount(true);
+    expect(findByLabel(root, "Search cards")).not.toBeNull();
+  });
+
+  it("renders no search icon off the Cards tab", () => {
+    const { root } = mount(false);
+    expect(findByLabel(root, "Search cards")).toBeNull();
+  });
+
+  it("shows and hides the icon as the slot toggles, with no other prop changing", () => {
+    const { rerender } = mount(true);
+    expect(findByLabel(dom.container.firstChild as FakeNode, "Search cards")).not.toBeNull();
+    rerender(false);
+    expect(findByLabel(dom.container.firstChild as FakeNode, "Search cards")).toBeNull();
+    rerender(true);
+    expect(findByLabel(dom.container.firstChild as FakeNode, "Search cards")).not.toBeNull();
   });
 });

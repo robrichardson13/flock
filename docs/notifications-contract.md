@@ -610,16 +610,49 @@ implement this; the regex is duplicated by hand in `packages/web/src/notifGroups
 share the module. Only *this* device's notifications are ever touched — dismissal never reaches
 another device's tray.
 
-**Dismissal on foreground (card 44).** Independently, `packages/web/src/push.ts`'s
-`closeBoardNotifications(boardSlug, limit = 50)` closes this device's open notifications for the
-current board (or every board, when there is none) the moment the page becomes "looking" — reusing
-`clientIsLooking`/`Presence` from ADR 0021 rather than a second definition of "foregrounded", so
-what suppresses a send and what dismisses one never drift apart. `presence.ts`'s `usePresence` grew
-a `becameLooking` transition and an optional `onBecameLooking(board)` callback, fired once per
-transition into looking (not on every heartbeat); `App.tsx` wires it straight to
-`closeBoardNotifications`. `closeBoardNotifications` never throws — every failure is logged with
-context and treated as "closed nothing" — and is a no-op wherever notifications or service workers
-are unsupported.
+**Dismissal on foreground (cards 44, 53).** Card 44 hung this off presence's `becameLooking`
+edge; card 53 found that wrong on the platform it was written for. An iOS home-screen app is
+*suspended*, not merely hidden, so the `visibilitychange` -> hidden evaluate that records
+`looking: false` is not guaranteed to run before the process freezes — and on resume from the app
+switcher `visibilitychange` may not fire at all. Presence itself tolerates that (the server's
+presence TTL expires the stale "looking" on its own, which is why send-suppression was never
+affected), but an edge-triggered dismissal does not: with no recorded leave, there is no transition
+back and nothing is ever dismissed. Presence therefore no longer drives dismissal at all, and
+`usePresence` no longer takes a callback.
+
+The replacement is level-triggered, in `packages/web/src/dismiss.ts`:
+`installForegroundDismiss` asks "is the app in front of the person *now*?" on `visibilitychange`
+to visible, on `pageshow` (persisted or not — an iOS resume presents as either), on `focus`, and
+once on mount when the page is already visible (the cold-launch case, which fires none of the
+three). A `DISMISS_DEDUPE_MS` (1.5s) gate collapses one resume that fires several of those into a
+single sweep; `shouldDismiss`/`createDismissGate` are the pure, tested core.
+
+The sweep itself is `dismissAllNotifications()` in `push.ts`, and it runs two routes at once
+because each has a platform where it comes back empty:
+
+- `askWorkerToCloseAll()` posts `{ type: "flock:close-all", limit }` to the active worker, which
+  enumerates and closes its own notifications from *inside* the worker. This is the route that
+  works on iOS: card 44's tap-to-clear-siblings proves the same call is reliable in the worker
+  context, while the page asking the registration for the same list is not.
+- `closeBoardNotifications(null, 100)` does it from the page. It now resolves the registration
+  through `navigator.serviceWorker.ready` (raced against a 3s timeout, falling back to
+  `getRegistration`) rather than `getRegistration` alone, so the first load after a `sw.js` update
+  cannot read a registration whose worker is still installing. An **empty** result is logged, not
+  silently accepted — that silence is precisely what hid the WebKit behaviour for a whole release.
+
+The sweep is unfiltered by board. The app is one origin, the person is now looking at it, and
+everything left in the tray is stale; scoping it to the current board only left banners behind for
+the boards they were about to look at anyway. Both routes are bounded to `CLOSE_LIMIT` (100),
+neither throws, and both are no-ops wherever notifications or service workers are unsupported.
+
+`sw.js` closes everything on `activate` too, after `clients.claim()`. A new worker inherits the
+same *registration* as the one it replaces, so the previous worker's notifications are still its
+to close — and right after an app update they are the ones most likely to be stale, because the
+page that would have dismissed them was running the old code. There is no reload signal for an
+already-running page (card 41), so nothing else covers that window.
+
+Only *this* device's notifications are ever touched, by any of these routes — dismissal never
+reaches another device's tray.
 
 **There is no `fetch` handler and there must not be one.** flock's assets are content-hashed and
 served immutable; offline is out of scope. A caching worker would be a brand-new and entirely

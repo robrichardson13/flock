@@ -17,7 +17,8 @@ import { keyboardShrunk, readoutRequested, shellHeight } from "./vv.ts";
 import { VVReadout } from "./VVReadout.tsx";
 import { ActorLinks, Avatar, Icons, OverlayProvider, PromptProvider, PushStack, useEdgeSwipePeek, useIsMobile, usePrompt } from "./ui.tsx";
 import { PushPanel } from "./Notifications.tsx";
-import { closeBoardNotifications, currentSubscription, disablePush, enablePush, primePushKey, pushKeyNow, pushState, readPushEnv, withServerKey, type PushState } from "./push.ts";
+import { currentSubscription, disablePush, dismissAllNotifications, enablePush, primePushKey, pushKeyNow, pushState, readPushEnv, withServerKey, type PushState } from "./push.ts";
+import { installForegroundDismiss } from "./dismiss.ts";
 import { usePresence } from "./presence.ts";
 
 /**
@@ -394,10 +395,7 @@ function Shell() {
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
-  // Clears this device's own stale push notifications for the current board the moment the app
-  // is foregrounded (per card 44), reusing presence's "looking" transition so the definitions of
-  // "foregrounded" stay in sync between what suppresses a send and what dismisses one.
-  usePresence(actor, hash, closeBoardNotifications);
+  usePresence(actor, hash);
 
   const load = useCallback(async () => {
     try {
@@ -434,6 +432,13 @@ function Shell() {
     }).catch(() => {});
     load();
   }, [load]);
+
+  // Clears this device's stale push notifications whenever the app is in front of the person
+  // (card 53). Not hung off presence's `becameLooking` edge any more: an iOS home-screen app is
+  // suspended rather than hidden, so the leave transition that edge depends on may never be
+  // recorded and the app comes back still believing it was looking. This asks "is it in front
+  // now?" from every signal a resume might produce, deduped, and sweeps unfiltered.
+  useEffect(() => installForegroundDismiss(() => { void dismissAllNotifications(); }), []);
 
   // Register the service worker up front, not only when the notifications toggle is used: a
   // registration has to exist for `currentSubscription()` to read this device's state, and for

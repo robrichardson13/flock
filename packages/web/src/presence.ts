@@ -43,16 +43,6 @@ export function presenceStep(prev: PresenceState | null, next: { looking: boolea
   return next.looking || prev.failed ? "beat" : "none";
 }
 
-/**
- * True exactly on the evaluation that starts looking (was false or absent, now true) — never on a
- * heartbeat re-evaluation while already looking, and never on the leave transition. `usePresence`
- * uses this as the trigger to dismiss this device's own notifications, so it fires once per
- * visibility transition rather than on every heartbeat.
- */
-export function becameLooking(prev: PresenceState | null, next: { looking: boolean }): boolean {
-  return next.looking && !(prev?.looking ?? false);
-}
-
 /** `#/b/<slug>/...` -> the board slug; anything else (Home included) -> null. Mirrors the board
  * capture of `parseRoute` in App.tsx without importing it, so this module has no dependency on
  * the shell (which mounts `usePresence` itself). */
@@ -74,12 +64,13 @@ const CLIENT_ID = typeof crypto !== "undefined" && typeof crypto.randomUUID === 
  * { keepalive: true })`) the moment looking stops — including on `pagehide`. Sends nothing while
  * the actor name is empty (first load, before `/api/me` resolves).
  *
- * `onBecameLooking`, when given, is called with the current board (or null on Home) exactly once
- * per transition into looking — see `becameLooking` — so the caller (App.tsx, wiring in
- * `closeBoardNotifications` from `push.ts`) can clear this device's stale notifications the moment
- * the app is foregrounded, without this module knowing anything about push.
+ * Presence deliberately does *not* drive notification dismissal (it did between PR 48 and card
+ * 53). The transition into looking is only as trustworthy as the leave evaluate that preceded
+ * it, and an iOS home-screen app can be suspended without one ever running. Presence itself
+ * tolerates that — the server's TTL expires the stale "looking" on its own — but an edge-
+ * triggered dismissal does not. See `dismiss.ts` for the level-triggered replacement.
  */
-export function usePresence(actor: string, hash: string, onBecameLooking?: (board: string | null) => void): void {
+export function usePresence(actor: string, hash: string): void {
   const board = boardFromHash(hash);
   const lastInputAtRef = useRef<number>(Date.now());
   const prevRef = useRef<PresenceState | null>(null);
@@ -117,7 +108,6 @@ export function usePresence(actor: string, hash: string, onBecameLooking?: (boar
         foregroundOnly: foregroundOnlyDevice(),
       });
       const next = { looking, board };
-      if (becameLooking(prevRef.current, next)) onBecameLooking?.(board);
       if (presenceStep(prevRef.current, next, now) === "none") return;
       report(next, now);
     };

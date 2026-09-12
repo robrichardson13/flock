@@ -1233,4 +1233,6 @@ export const Icons = {
   /** Reply, on the mobile reaction sheet's Reply row: a corner arrow turning back up and
    *  left, the same glyph family (stroke, no fill) as the rest of the set. */
   reply: (s?: number) => <I size={s} d="M9 8L3 13l6 5M3 13h11a6 6 0 0 1 6 6v1" />,
+  /** Search (card 50): a magnifier, for the cards-tab search toggle on both shells. */
+  search: (s?: number) => <I size={s} d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-4.35-4.35" />,
 };
