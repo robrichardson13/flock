@@ -135,3 +135,27 @@ describe("presenceStep retries a failed report", () => {
   });
 });
 
+
+describe("presenceStep, forced (card 91)", () => {
+  const t0 = 1_000_000;
+  const quiet: PresenceState = { looking: false, board: "b", lastSentAt: t0, failed: false };
+
+  // The exact hole in the log: the client reported looking=false when iOS flashed a notification
+  // banner over a foregrounded app, then said nothing at all for 80s while the server's 45s TTL
+  // expired underneath it. Unforced, this stays "none" for ever.
+  it("breaks the permanent silence a looking=false report used to start", () => {
+    expect(presenceStep(quiet, { looking: false, board: "b" }, t0 + 80_000)).toBe("none");
+    expect(presenceStep(quiet, { looking: false, board: "b" }, t0 + 80_000, true)).toBe("beat");
+  });
+
+  it("beats on a resume even inside the cadence, so a wake is reported at once", () => {
+    const looking: PresenceState = { looking: true, board: "b", lastSentAt: t0, failed: false };
+    expect(presenceStep(looking, { looking: true, board: "b" }, t0 + 100)).toBe("none");
+    expect(presenceStep(looking, { looking: true, board: "b" }, t0 + 100, true)).toBe("beat");
+  });
+
+  it("still prefers 'send' when the state actually changed, forced or not", () => {
+    expect(presenceStep(quiet, { looking: true, board: "b" }, t0 + 100, true)).toBe("send");
+    expect(presenceStep(null, { looking: true, board: "b" }, t0, true)).toBe("send");
+  });
+});

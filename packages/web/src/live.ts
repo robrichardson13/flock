@@ -1519,6 +1519,12 @@ export interface LiveStreamOptions {
 }
 
 /**
+ * Dispatched on `window` each time the event stream connects. The one signal that a suspended
+ * iOS page is running again which does not depend on `visibilitychange` firing (card 91).
+ */
+export const LIVE_UP_EVENT = "flock:live-up";
+
+/**
  * An EventSource that survives iOS backgrounding: it resumes from the last seq it saw,
  * refetches on visibilitychange/pageshow/online, reconnects with backoff when the browser
  * gives up, and polls quietly only while it is not connected.
@@ -1549,6 +1555,10 @@ export function useLiveStream({ path, types, onEvent, onWake, fetchSince }: Live
       downTimer = 0;
       setDown(false);
       stopPolling();
+      // A stream that just connected is a resume signal for anything else that went quiet with
+      // the page: on iOS the reconnect often lands before `visibilitychange` does, and sometimes
+      // instead of it. `usePresence` listens (card 91); nothing else may assume it is delivered.
+      window.dispatchEvent(new Event(LIVE_UP_EVENT));
     };
     const markDown = () => {
       if (!downTimer) downTimer = window.setTimeout(() => setDown(true), DOWN_NOTICE_MS);

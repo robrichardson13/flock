@@ -1,3 +1,19 @@
+/**
+ * How long a "looking" report is trusted after the beat that made it: three cadences of the
+ * client's 15s heartbeat.
+ *
+ * Card 91 asked whether this should shrink to `2 x cadence + slack` now that the client re-arms
+ * on every resume signal. It should not, yet, and the reason is the shape of the two failure
+ * modes. Too long, and a phone that vanished without a leaving beat stays "looking" for the
+ * remainder of the window — one missed buzz. Too short, and a phone whose beat is merely late
+ * reads as absent and gets buzzed while its owner is staring at it, which is the whole of card 91
+ * and cards 54, 70 and 87 before it. The second is the expensive one, and it is the one a shorter
+ * window makes more likely. A locked or backgrounded phone is already handled at the front, not
+ * here: `visibilitychange` -> hidden and `pagehide` each send `looking: false` immediately (with
+ * `keepalive`), which deletes the entry outright rather than waiting for any TTL. This window
+ * only covers the case where that leaving beat was never sent or never arrived. Revisit once a
+ * field log shows a clean run of `gap=`-free beats from a standalone client.
+ */
 export const PRESENCE_TTL_MS = 45_000;
 
 /** A focused, visible window with no input in the last three minutes is not "looking" (ADR 0021). */
@@ -53,6 +69,15 @@ export interface PresenceClientInfo {
   focused?: boolean;
   lastInputAgeMs?: number;
   foregroundOnly?: boolean;
+  /**
+   * Why this beat fired, but only when it fired late: the client noticed that more than
+   * `GAP_FACTOR` cadences had passed since its previous tick — a frozen timer, a resumed app, a
+   * reconnected stream (card 91). Absent on an ordinary on-cadence beat, so its presence in the
+   * log is itself the signal.
+   */
+  gapReason?: string;
+  /** How long the client was silent before that late beat, in ms. Paired with `gapReason`. */
+  gapMs?: number;
   /** `navigator.userAgent`, as the request carried it. Bounded by the caller. */
   userAgent?: string;
   /**
