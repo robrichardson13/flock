@@ -2182,7 +2182,17 @@ html[data-topbar] .sheet { max-height: 100%; }
 /* The number left the top bar (where it competed with the back chevron and the status
    chip) for a muted prefix line over the heading, where it reads as the card's name. */
 .card-heading-num { font-size: var(--t-foot); line-height: var(--lh-foot); color: var(--muted); font-variant-numeric: var(--num); margin-bottom: 2px; }
-.card-body { gap: var(--s4); padding-bottom: var(--s4); }
+/* #30: the body is a flex column whose children never shrink (`.screen-body > *` above), so
+   an unbounded child — a stray long token some future renderer forgets to wrap, the harness
+   "Run block" among them — would otherwise widen `.screen-body.card-body` itself and put a
+   horizontal scrollbar on the whole card, not just the offending line. `overflow-wrap: anywhere`
+   on `.md`/`.msg-body`/`.detail-value`/`.card-heading` already keeps every known piece of card
+   content from doing that, but this is the backstop: no child of the card body may ever push it
+   sideways. `pre`/`table` still scroll on their own axis because `overflow-x: auto` on those
+   elements opens a new scroll container that this rule does not reach into. `.card-details`
+   keeps `overflow: visible` in the drawer (see below) for its hover fill, which is fine — that
+   fill is a `box-shadow`, and a box-shadow never enters scrollable overflow. */
+.card-body { gap: var(--s4); padding-bottom: var(--s4); overflow-x: hidden; }
 .card-heading { font-size: var(--t-title); line-height: var(--lh-title); font-weight: var(--w-title); letter-spacing: var(--ls-title); margin: var(--s1) 0 0; overflow-wrap: anywhere; }
 /* #27: on the phone, .screen-body's own --edge-x inset (8px) is all the title and
    description had, while every row around the card page — boards, cards, the details
@@ -2297,8 +2307,17 @@ html[data-topbar] .sheet { max-height: 100%; }
 
 .ask-box { background: var(--attention-bg); border: 1px solid var(--attention-line); border-radius: var(--radius); padding: var(--s3) var(--s4); display: flex; flex-direction: column; gap: var(--s2); }
 .ask-box .input { background: var(--bg-2); }
-.primary-actions { display: flex; gap: var(--s2); }
-.primary-actions .btn { flex: 1; }
+/* #30: three buttons — Claim (anyway, on a blocked card, the row's longest label), Hold,
+   Mark done — do not all fit one 390px-wide row with room to spare, and `.btn` is
+   `white-space: nowrap` with no `min-width: 0`, so a flex item here refuses to shrink past its
+   own label's width: the row used to overflow past the edge instead of wrapping. `flex-basis:
+   auto` (not the `0%` a bare `flex: 1` sets) makes each button's hypothetical size its actual
+   label width, which is what the wrap algorithm needs to see in order to break the line
+   correctly instead of confidently fitting three zero-basis items that then blow out on
+   shrink's own floor. `flex-grow: 1` still shares out real slack when everything fits on one
+   line, same as before. */
+.primary-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.primary-actions .btn { flex: 1 1 auto; }
 /* The card's thread is the channel's thread (thread.tsx): the same bubbles, the same
    grouping, the same --edge-x inset — .card-body already carries it — and the same 16px
    between groups the channel uses, so a comment run reads the same on either screen. What
