@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { api, getActorName, type Card, type CardStatus, type Comment } from "./api.ts";
+import { api, getActorName, type Card, type CardDuration, type CardStatus, type Comment, type HarnessSessionTelemetry } from "./api.ts";
 import { type ActorRuntimes } from "./BoardView.tsx";
 import { questionEntry, type QuestionEntry } from "./NeedsYou.tsx";
 import { Markdownish, MessageBody } from "./markdown.tsx";
@@ -11,6 +11,7 @@ import { ClampedBody, failPending, hasReaction, LineComposer, mergeThread, Messa
 import { replyQuote } from "./addToChat.tsx";
 import { draftKey, requestInsert } from "./compose.ts";
 import { buildDetailRows, type DetailRow } from "./details.ts";
+import { RunBlock } from "./Telemetry.tsx";
 import { autoFocusField, useDialogFocus } from "./focus.ts";
 import { readSnapshot, snapKey, writeSnapshot } from "./snapshot.ts";
 import { useTopBarSlot } from "./TopBar.tsx";
@@ -44,6 +45,11 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
   const [seed] = useState(() => readSnapshot<CardSnapshot>(snapKey.card(boardSlug, card.num)));
   const [comments, setComments] = useState<Comment[] | null>(seed?.comments ?? null);
   const [blocks, setBlocks] = useState<number[]>(seed?.blocks ?? []);
+  // ADR 0023: not part of the cached snapshot (unlike comments/blocks above) — a stale
+  // reading of a live number is worse than a blank Run block for the one round trip it
+  // takes `reload()` to arrive.
+  const [telemetry, setTelemetry] = useState<HarnessSessionTelemetry[]>([]);
+  const [duration, setDuration] = useState<CardDuration>({ claimedAt: null, closedAt: null, ms: null });
   // #31: own comments are optimistic — a submit lands here immediately, rendered by
   // `mergeThread` right after `comments`, rather than waiting on `reload()`'s round trip.
   // Cleared (per entry) once the confirmed row it stands in for comes back in `comments`.
@@ -144,6 +150,8 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
     const r = await api.card(boardId, card.num);
     setComments(r.comments);
     setBlocks(r.blocks);
+    setTelemetry(r.telemetry);
+    setDuration(r.duration);
     writeSnapshot(snapKey.card(boardSlug, card.num), { comments: r.comments, blocks: r.blocks });
   };
   useEffect(() => {
@@ -674,6 +682,7 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
         <div className="screen-body card-body" ref={scrollerRef}>
           {titleBlock}
           {detailsList}
+          <RunBlock telemetry={telemetry} duration={duration} status={card.status} />
           {askBox}
           {commentsBlock}
           {/* #29: marks where the thread actually ends, for the jump-to-latest observer
@@ -690,6 +699,7 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
           <div className="screen-body card-body">
             {titleBlock}
             {detailsList}
+            <RunBlock telemetry={telemetry} duration={duration} status={card.status} />
             {commentsBlock}
             {createdLine}
             {askBox}

@@ -75,6 +75,83 @@ export interface ActorInfo {
   effort?: string;
 }
 
+/**
+ * ADR 0023: harness telemetry. Mirrors `@flock/core`'s `HarnessSessionTelemetry`/
+ * `CardDuration` field-for-field (§5's JSON block) as plain local types rather than an
+ * import — web only ever reaches into `@flock/core`'s narrow subpaths (`/types`,
+ * `/attachments`, …); its main entry pulls in `Flock`'s `bun:sqlite` dependency, which has
+ * no place in a browser bundle.
+ */
+export type Liveness = "running" | "idle" | "gone" | "unknown";
+export type TelemetrySource = "hook" | "reader";
+
+/** One harness session's telemetry, as `card`/`actorProfile` return it. Every field but
+ *  `key`, `actor` and `observedAt` is nullable/absent on some real run — an unlinked agent's
+ *  session writes nulls, and every surface here renders that as unknown, never as zero. */
+export interface HarnessSessionTelemetry {
+  key: string;
+  /** The actor whose events carried this session key. */
+  actor: string;
+  harness?: string;
+  /** Observed from the transcript — never the agent's own declared `model` below. */
+  model?: string;
+  /** What the agent declared on its own writes (ADR 0005); may differ from `model`. */
+  declaredModel?: string;
+  contextUsed?: number;
+  contextMax?: number;
+  /** Null while the session is live, and null forever on a harness with no dollar figure. */
+  costUsd?: number;
+  /** False when the harness flagged an unknown-model cost. */
+  costExact?: boolean;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  toolCalls?: number;
+  /** Histogram by tool name, e.g. `{ Bash: 24, Edit: 18 }`. */
+  tools?: Record<string, number>;
+  startedAt?: string;
+  /** Set only when the harness says the session ended. */
+  endedAt?: string;
+  durationMs?: number;
+  apiMs?: number;
+  toolMs?: number;
+  /** Transcript mtime / thread updated_at: the liveness clock. */
+  lastActivityAt?: string;
+  liveness?: Liveness;
+  /** The harness's own raw word (busy/idle/shell/…), never used as `liveness` itself. */
+  livenessNote?: string;
+  endedReason?: "clean" | "absent";
+  pid?: number;
+  /** True when a bounded read hit its size/line/time cap before finishing. */
+  partial?: boolean;
+  source?: TelemetrySource;
+  /** When these numbers were read: the TTL clock a server-side refresh compares against. */
+  observedAt: string;
+  /** Other card numbers this session wrote on, so a session total never reads as one card's own. */
+  alsoWorked: number[];
+  /** Absolute path on this machine. CLI `--json` only; the HTTP API omits it off loopback. */
+  transcript?: string;
+}
+
+/** flock's own card duration: claim to close, from the events table alone. Never needs a harness. */
+export interface CardDuration {
+  claimedAt: string | null;
+  closedAt: string | null;
+  /** `closedAt - claimedAt` in ms, or null when either end is missing. */
+  ms: number | null;
+}
+
+/** The actor page's totals strip: sums over **distinct** sessions, so one session working
+ *  three cards is counted once. */
+export interface ActorTelemetryTotals {
+  sessions: number;
+  cards: number;
+  costUsd: number | null;
+  costExact: boolean;
+  toolCalls: number | null;
+}
+
 const ACTOR_KEY = "flock.actor";
 
 export function getActorName(): string {
@@ -176,9 +253,13 @@ export const api = {
   updateBoard: (b: string, patch: Partial<Pick<Board, "title" | "body" | "status">>) => req<Board>("PATCH", `/boards/${b}`, patch),
   deleteBoard: (b: string) => req<void>("DELETE", `/boards/${b}`),
   snapshot: (b: string) => req<Snapshot>("GET", `/boards/${b}`),
-  /** One actor as this board knows them, plus every card they touched here. */
-  actorProfile: (b: string, name: string) => req<ActorProfile>("GET", `/boards/${b}/actors/${encodeURIComponent(name)}`),
-  card: (b: string, n: number) => req<{ card: Card; comments: Comment[]; blocks: number[] }>("GET", `/boards/${b}/cards/${n}`),
+  /** One actor as this board knows them, plus every card they touched here. `telemetry`/
+   *  `totals` are ADR 0023's addition: that actor's distinct harness sessions on this board. */
+  actorProfile: (b: string, name: string) =>
+    req<ActorProfile & { telemetry: HarnessSessionTelemetry[]; totals: ActorTelemetryTotals }>("GET", `/boards/${b}/actors/${encodeURIComponent(name)}`),
+  /** `duration`/`telemetry` are ADR 0023's addition, additive to the existing shape. */
+  card: (b: string, n: number) =>
+    req<{ card: Card; comments: Comment[]; blocks: number[]; duration: CardDuration; telemetry: HarnessSessionTelemetry[] }>("GET", `/boards/${b}/cards/${n}`),
   createCard: (b: string, input: { title: string; body?: string; labels?: string[]; blockedBy?: number[] }) => req<Card>("POST", `/boards/${b}/cards`, input),
   updateCard: (b: string, n: number, patch: { title?: string; body?: string; addLabels?: string[]; removeLabels?: string[] }) => req<Card>("PATCH", `/boards/${b}/cards/${n}`, patch),
   claim: (b: string, n: number, force = false) => req<Card>("POST", `/boards/${b}/cards/${n}/claim`, { force }),
