@@ -791,6 +791,7 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
           const ref = commentRef(target.cardNum, target.num);
           if (!result.changed) return console.log(remove ? "not reacted" : "already reacted");
           console.log(`${emoji} ${ref} (${actor.name})${remove ? " removed" : ""}`);
+          if (!remove && result.answeredCard) console.log(`answered #${result.answeredCard.num} with ${emoji}`);
         });
       }
       const result = remove ? flock.unreact(actor, board, target.num, emoji) : flock.react(actor, board, target.num, emoji);

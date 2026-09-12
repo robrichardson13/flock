@@ -263,6 +263,98 @@ describe("comment reaction events", () => {
   });
 });
 
+describe("a human reaction on the pending question answers it (card 76)", () => {
+  test("a human's reaction on the pending question answers the card as that emoji, and leaves awaiting-human", () => {
+    const { f, board, card } = fresh();
+    f.claimCard(scout, board.id, card.num);
+    f.askHuman(scout, board.id, card.num, "ship it?");
+    const q = f.comments(board.id, card.num).find((c) => c.kind === "question")!;
+    const { comment, changed, answeredCard } = f.reactToComment(ada, board.id, card.num, q.num, "👍");
+    expect(changed).toBe(true);
+    expect(comment.reactions).toEqual([{ emoji: "👍", count: 1, actors: ["ada"] }]);
+    expect(answeredCard).toBeDefined();
+    expect(answeredCard!.status).toBe("doing"); // assigned to scout, so it goes back to doing
+    expect(answeredCard!.question).toBeNull();
+    expect(answeredCard!.questionBy).toBeNull();
+    const answer = f.comments(board.id, card.num).find((c) => c.kind === "answer")!;
+    expect(answer.body).toBe("👍");
+    expect(answer.author).toBe("ada");
+  });
+
+  test("goes to todo, not doing, when the card is unassigned", () => {
+    const { f, board, card } = fresh();
+    f.askHuman(scout, board.id, card.num, "ship it?");
+    const q = f.comments(board.id, card.num).find((c) => c.kind === "question")!;
+    const { answeredCard } = f.reactToComment(ada, board.id, card.num, q.num, "👍");
+    expect(answeredCard!.status).toBe("todo");
+  });
+
+  test("card.answered carries the emoji as the answer, and viaReaction: true", () => {
+    const { f, board, card } = fresh();
+    f.askHuman(scout, board.id, card.num, "ship it?");
+    const q = f.comments(board.id, card.num).find((c) => c.kind === "question")!;
+    f.reactToComment(ada, board.id, card.num, q.num, "👍");
+    const e = f.events({ boardId: board.id }).find((x) => x.type === "card.answered")!;
+    expect(e.data.answer).toBe("👍");
+    expect(e.data.viaReaction).toBe(true);
+    expect(e.actor).toBe("ada");
+    // comment.reacted still fires alongside it.
+    expect(f.events({ boardId: board.id }).some((x) => x.type === "comment.reacted")).toBe(true);
+  });
+
+  test("an agent's reaction on the pending question never answers it", () => {
+    const { f, board, card } = fresh();
+    f.askHuman(scout, board.id, card.num, "ship it?");
+    const q = f.comments(board.id, card.num).find((c) => c.kind === "question")!;
+    const { answeredCard } = f.reactToComment(builder, board.id, card.num, q.num, "👍");
+    expect(answeredCard).toBeUndefined();
+    expect(f.card(board.id, card.num).status).toBe("awaiting-human");
+    expect(f.events({ boardId: board.id }).some((x) => x.type === "card.answered")).toBe(false);
+  });
+
+  test("reacting to an already-answered question is an ordinary reaction", () => {
+    const { f, board, card } = fresh();
+    f.askHuman(scout, board.id, card.num, "ship it?");
+    const q = f.comments(board.id, card.num).find((c) => c.kind === "question")!;
+    f.answerHuman(ada, board.id, card.num, "yes");
+    const { answeredCard } = f.reactToComment(ada, board.id, card.num, q.num, "👍");
+    expect(answeredCard).toBeUndefined();
+    expect(f.card(board.id, card.num).status).toBe("todo");
+    expect(f.events({ boardId: board.id }).filter((x) => x.type === "card.answered")).toHaveLength(1);
+  });
+
+  test("reacting to a non-question comment on an awaiting-human card is an ordinary reaction", () => {
+    const { f, board, card } = fresh();
+    const note = f.addComment(scout, board.id, card.num, "context for the ask");
+    f.askHuman(scout, board.id, card.num, "ship it?");
+    const { answeredCard } = f.reactToComment(ada, board.id, card.num, note.num, "👍");
+    expect(answeredCard).toBeUndefined();
+    expect(f.card(board.id, card.num).status).toBe("awaiting-human");
+  });
+
+  test("reacting to an older, superseded question (re-asked since) is an ordinary reaction", () => {
+    const { f, board, card } = fresh();
+    f.askHuman(scout, board.id, card.num, "which one?");
+    const firstQ = f.comments(board.id, card.num).find((c) => c.kind === "question")!;
+    f.answerHuman(ada, board.id, card.num, "the first");
+    f.askHuman(scout, board.id, card.num, "actually, which one really?");
+    const { answeredCard } = f.reactToComment(ada, board.id, card.num, firstQ.num, "👍");
+    expect(answeredCard).toBeUndefined();
+    expect(f.card(board.id, card.num).status).toBe("awaiting-human");
+  });
+
+  test("unreacting from the pending question never answers it", () => {
+    const { f, board, card } = fresh();
+    f.askHuman(scout, board.id, card.num, "ship it?");
+    const q = f.comments(board.id, card.num).find((c) => c.kind === "question")!;
+    f.reactToComment(builder, board.id, card.num, q.num, "👀");
+    const result = f.unreactFromComment(ada, board.id, card.num, q.num, "👀");
+    expect(result.changed).toBe(false); // ada never reacted, so nothing to remove
+    expect("answeredCard" in result).toBe(false);
+    expect(f.card(board.id, card.num).status).toBe("awaiting-human");
+  });
+});
+
 describe("markdown export/import", () => {
   test("does not carry comments, so there is nothing for their reactions to round-trip", () => {
     const { f, board, card } = fresh();
