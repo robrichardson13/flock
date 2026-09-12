@@ -90,8 +90,22 @@ export interface LookingDetail {
   looking: boolean;
   /** Age of the freshest matching report, or null when there is none. */
   ageMs: number | null;
-  /** How many live clients match (actor, boardId). */
+  /** How many live clients match. */
   clients: number;
+  /** Which rule matched: the client is on this board, or it is on Home (§D8 amendment). */
+  via: "board" | "home" | null;
+}
+
+/**
+ * A presence entry whose scope is `null` is on **Home** — the boards list, where the bell lives —
+ * and counts as looking at every board (card 54). See `isLooking`.
+ *
+ * A client that named a board slug the server could not resolve must NOT land here: it is a stale
+ * tab pointed at a deleted board, not someone watching the app. The server gives those a scope of
+ * `unresolvedScope(slug)`, which can never equal a board id and so matches nothing.
+ */
+export function unresolvedScope(slug: string): string {
+  return `unresolved:${slug.slice(0, 64)}`;
 }
 
 /**
@@ -129,14 +143,22 @@ export class Presence {
     });
   }
 
+  /**
+   * Is this actor looking at this board right now?
+   *
+   * A client scoped to the board is the obvious yes. A client on **Home** (`boardId: null`) is
+   * also a yes, for every board (card 54, amending ADR 0021's §D8 keying). The reason is what a
+   * buzz is *for*: it says "come and look". Someone on Home is already in the app, watching the
+   * board list light up and the bell count climb; buzzing their phone while they hold it and read
+   * that list is the complaint this rule exists to prevent. It matters far more on iOS than it
+   * reads on paper — a home-screen app launches at `start_url: "/"`, which *is* Home, so the
+   * status quo pushed a foregrounded phone through the whole first stretch of every session.
+   *
+   * Urgent notifications (asks, awaiting-human) never reach this function; they bypass presence
+   * entirely and still arrive. Nothing here silences the things you are meant to be told about.
+   */
   isLooking(actor: string, boardId: string, now: number): boolean {
-    this.#prune(now);
-    for (const entry of this.#byClient.values()) {
-      if (entry.actor === actor && entry.boardId === boardId && entry.expiresAt > now) {
-        return true;
-      }
-    }
-    return false;
+    return this.lookingDetail(actor, boardId, now).looking;
   }
 
   /**
@@ -147,12 +169,19 @@ export class Presence {
     this.#prune(now);
     let clients = 0;
     let freshest: number | null = null;
+    let via: "board" | "home" | null = null;
     for (const entry of this.#byClient.values()) {
-      if (entry.actor !== actor || entry.boardId !== boardId) continue;
+      if (entry.actor !== actor) continue;
+      // `null` is Home and matches every board; anything else must match exactly, so a client
+      // on another board — or on an unresolved scope — suppresses nothing here.
+      const matched: "board" | "home" | null = entry.boardId === boardId ? "board" : entry.boardId === null ? "home" : null;
+      if (matched === null) continue;
       clients++;
+      // A board match is the stronger reason; report it even if a Home client is fresher.
+      if (via === null || matched === "board") via = matched;
       if (freshest === null || entry.reportedAt > freshest) freshest = entry.reportedAt;
     }
-    return { looking: clients > 0, ageMs: freshest === null ? null : now - freshest, clients };
+    return { looking: clients > 0, ageMs: freshest === null ? null : now - freshest, clients, via };
   }
 
   /** Every live client, freshest first. For the loopback presence dump. */

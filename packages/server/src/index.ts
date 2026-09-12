@@ -14,6 +14,7 @@ import {
   DB_DIRNAME,
   Presence,
   PRESENCE_TTL_MS,
+  unresolvedScope,
   type Actor,
   type CardStatus,
   type DecisionSelector,
@@ -458,14 +459,16 @@ export function createApp({
     if (body.board !== null && body.board !== undefined && typeof body.board !== "string") {
       throw new FlockError("board must be a string or null", "invalid");
     }
-    // An unknown slug resolves to null rather than 404ing: presence is best-effort, and a 404
-    // would spam the console over a board that was deleted out from under an open tab.
+    // An unknown slug does not 404: presence is best-effort, and a 404 would spam the console over
+    // a board that was deleted out from under an open tab. It does not become `null` either —
+    // `null` means Home, which now suppresses every board (card 54) — so it gets a scope that can
+    // never equal a board id and therefore matches nothing.
     let boardId: string | null = null;
     if (typeof body.board === "string" && body.board.length > 0) {
       try {
         boardId = flock.board(body.board).id;
       } catch {
-        boardId = null;
+        boardId = unresolvedScope(body.board);
       }
     }
     const actor = actorOf(c);

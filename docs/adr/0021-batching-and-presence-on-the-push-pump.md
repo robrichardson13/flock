@@ -90,9 +90,10 @@ does (a phone).
 `client` is a random id generated once per page load and held in module memory, not
 `sessionStorage` — Chrome copies `sessionStorage` into a duplicated tab, which would merge two
 tabs' presence into one and defeat independent per-tab tracking. `board` is the slug parsed from
-the hash route, or `null` on Home; an unknown slug resolves to `boardId: null` rather than 404ing,
-since presence is best-effort and a 404 would spam the console over a board deleted out from under
-an open tab.
+the hash route, or `null` on Home; an unknown slug resolves rather than 404ing, since presence is
+best-effort and a 404 would spam the console over a board deleted out from under an open tab. (Card
+54 amendment, below: `null` now means "looking at every board", and an unknown slug resolves to
+`unresolvedScope(slug)` rather than `null` so it keeps matching nothing.)
 
 **"Looking"** requires the tab to be visible, focused, and to have had user input in the last three
 minutes (`IDLE_MS = 180_000`), on that specific board. Focus is required, not just visibility,
@@ -300,3 +301,48 @@ Two other paths make a foregrounded phone buzz, both deliberate and both left al
 - **Presence is keyed `(actor, boardId)` and `board` is `null` on Home.** Sitting on the boards
   list suppresses nothing on any board. That is correct as far as it goes — Home shows no channel —
   but it is worth knowing that "the app is open" is not the same as "presence is on".
+
+---
+
+## Amendment (card 54): Home counts as looking at every board
+
+The second "not changed" item above turned out to be the bug, and the log from the real phone is
+what showed it.
+
+`GET`/`POST /api/presence` now log a line each, so presence is observable from outside for the
+first time. What the phone reported, minutes after the logging shipped:
+
+```
+[presence] 17:13:28Z actor=robrichardson board=flock-2 looking=true  mode=standalone build=d24f7a3… fg=true ua=iPhone/18.7/Safari
+[push] decision event=7367 type=message.posted class=chatter actor=robrichardson board=flock-2 looking=true age=10.2s clients=1 subs=1
+[presence] 17:14:22Z actor=robrichardson board=-       looking=true  mode=standalone build=d24f7a3… fg=true …
+```
+
+Two things follow. The bundle is current (`build=d24f7a3…`, the sha that had merged minutes
+earlier), so the standalone app is not serving stale JS — the hypothesis this card and card 70 both
+led with. And `clientIsLooking` is doing its job: `mode=standalone`, `fg=true`, `looking=true`, and
+the channel message at 17:13:56 was correctly suppressed.
+
+What is not doing its job is the keying. The phone spends long stretches reporting `board=-` — Home
+— while plainly foregrounded, because an iOS home-screen app launches at `start_url: "/"`, and
+Home is where the bell and the board list live (PR 38). Keyed strictly by board, a Home client
+matched no `isLooking(actor, boardId)` query at all, so **every board's chatter buzzed a phone the
+owner was holding and reading**, through the whole first stretch of every session. "Home shows no
+channel" is true and beside the point: the buzz's job is to say *come and look*, and someone on
+Home is already looking — at a board list whose rows light up and a bell whose count climbs.
+
+So: a presence entry with `boardId: null` now satisfies `isLooking` for every board.
+`lookingDetail` reports which rule matched (`via: "board" | "home"`), and the decision log prints
+it as `looking=true(home)`, so the two are never confused when reading a log.
+
+Two guards come with it:
+
+- An **unresolved slug is no longer filed as `null`**. It gets `unresolvedScope(slug)`, which can
+  never equal a board id and so matches nothing — otherwise a tab left open on a deleted board
+  would silence every board at once. The `[presence]` line marks it `board=<slug>(unknown)`.
+- **Urgent is untouched.** Asks and awaiting-human moves never consult presence, so the Home rule
+  silences chatter and nothing you are expected to answer. There is a test for exactly that.
+
+The first "not changed" item stands: asks still bypass presence, and during a conducted run they
+remain a real share of the buzzes. That is now visible in the log as `class=urgent`, which is worth
+knowing before reading any push as a suppression failure.
