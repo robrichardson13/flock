@@ -14,6 +14,8 @@
  * window so a resume that fires all three does the work once.
  */
 
+import type { SweepReason } from "./dismissLog.ts";
+
 /** Two signals from the same resume land within milliseconds of each other; a person cannot
  *  background and foreground the app inside this window, so anything closer is the same event. */
 export const DISMISS_DEDUPE_MS = 1_500;
@@ -60,24 +62,24 @@ export interface DismissTargets {
  * kept the page alive); `focus` is the belt to those braces on the resumes that fire neither.
  */
 export function installForegroundDismiss(
-  run: () => void,
+  run: (reason: SweepReason) => void,
   targets: DismissTargets = { doc: document, win: window },
   gate: () => boolean = createDismissGate(),
 ): () => void {
   const { doc, win } = targets;
-  const fire = () => {
+  const fire = (reason: SweepReason) => {
     if (!gate()) return;
     try {
-      run();
+      run(reason);
     } catch (err) {
       // Never swallowed, never propagated into an event listener: a failed sweep must not take
       // the page down, and a silent one would be exactly the bug this module exists to fix.
       console.warn("[dismiss] foreground sweep threw", err);
     }
   };
-  const onVisibility = () => { if (doc.visibilityState === "visible") fire(); };
-  const onPageshow = () => fire();
-  const onFocus = () => fire();
+  const onVisibility = () => { if (doc.visibilityState === "visible") fire("visible"); };
+  const onPageshow = () => fire("pageshow");
+  const onFocus = () => fire("focus");
 
   doc.addEventListener("visibilitychange", onVisibility);
   win.addEventListener("pageshow", onPageshow);
@@ -85,7 +87,7 @@ export function installForegroundDismiss(
   // The app may already be in front on mount — a cold launch from the Home Screen icon is the
   // single most common way the person gets here with notifications still in the tray, and it
   // fires none of the three events above.
-  if (doc.visibilityState === "visible") fire();
+  if (doc.visibilityState === "visible") fire("mount");
 
   return () => {
     doc.removeEventListener("visibilitychange", onVisibility);

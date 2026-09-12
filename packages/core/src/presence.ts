@@ -55,6 +55,23 @@ export interface PresenceClientInfo {
   foregroundOnly?: boolean;
   /** `navigator.userAgent`, as the request carried it. Bounded by the caller. */
   userAgent?: string;
+  /**
+   * The notification-dismissal read-out (card 70): what the page's last foreground sweep did.
+   * Diagnostic only — presence never reads any of it, and a client that sends none of it behaves
+   * exactly as before. See `packages/web/src/dismissLog.ts` for what each field means.
+   */
+  sweepAgeMs?: number;
+  sweepReason?: string;
+  sweepCount?: number;
+  swState?: string;
+  notifsSeen?: number;
+  notifsClosed?: number;
+  workerAck?: string;
+  workerSeen?: number;
+  workerClosed?: number;
+  activateSeen?: number;
+  activateClosed?: number;
+  dismissErr?: string;
 }
 
 export interface PresenceReport {

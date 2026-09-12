@@ -1,4 +1,5 @@
 import { api } from "./api.ts";
+import { ACK_TIMEOUT_MS, dismissRecorder, formatSwState, type SweepReason } from "./dismissLog.ts";
 import { notificationsToClose } from "./notifGroups.ts";
 
 /** Everything the decision depends on, read off the environment by the caller. */
@@ -182,14 +183,26 @@ async function activeRegistration(): Promise<ServiceWorkerRegistration | null> {
  * that at all. `askWorkerToCloseAll` is the answer to it; this log is how anyone knows it fired.
  */
 export async function closeBoardNotifications(boardSlug: string | null, limit = CLOSE_LIMIT): Promise<number> {
-  if (!("serviceWorker" in navigator) || typeof Notification === "undefined") return 0;
+  return (await sweepFromPage(boardSlug, limit)).closed;
+}
+
+/** What one page-side sweep saw and closed. `seen` is `-1` when the page could not even ask. */
+export interface PageSweepResult {
+  seen: number;
+  closed: number;
+}
+
+/** `closeBoardNotifications` with the count the page *saw* kept, which is the number that tells a
+ *  WebKit enumeration failure apart from an already-empty tray. */
+async function sweepFromPage(boardSlug: string | null, limit: number): Promise<PageSweepResult> {
+  if (!("serviceWorker" in navigator) || typeof Notification === "undefined") return { seen: -1, closed: 0 };
   try {
     const reg = await activeRegistration();
-    if (!reg) return 0;
+    if (!reg) return { seen: -1, closed: 0 };
     const open = await reg.getNotifications();
     if (open.length === 0) {
       console.info("[push] page-side getNotifications() saw none open (expected on WebKit; the worker sweeps too)");
-      return 0;
+      return { seen: 0, closed: 0 };
     }
     const closeTags = new Set(notificationsToClose(open.map((n) => n.tag), boardSlug, limit));
     let closed = 0;
@@ -199,10 +212,29 @@ export async function closeBoardNotifications(boardSlug: string | null, limit = 
       n.close();
       closed++;
     }
-    return closed;
+    return { seen: open.length, closed };
   } catch (err) {
     console.warn(`[push] closeBoardNotifications(${boardSlug ?? "-"}) failed`, err);
-    return 0;
+    dismissRecorder.error(err);
+    return { seen: -1, closed: 0 };
+  }
+}
+
+/** A one-line summary of which worker is in charge, for the presence beat. Never throws. */
+export async function readSwState(): Promise<string> {
+  if (!("serviceWorker" in navigator)) return "unsupported";
+  try {
+    const reg = await activeRegistration();
+    if (!reg) return formatSwState(null);
+    return formatSwState({
+      scriptURL: reg.active?.scriptURL ?? null,
+      state: reg.active?.state ?? null,
+      hasController: !!navigator.serviceWorker.controller,
+      hasWaiting: !!reg.waiting,
+    });
+  } catch (err) {
+    dismissRecorder.error(err);
+    return "error";
   }
 }
 
@@ -220,17 +252,66 @@ export const CLOSE_ALL_MESSAGE = "flock:close-all";
  * throws.
  */
 export async function askWorkerToCloseAll(): Promise<boolean> {
-  if (!("serviceWorker" in navigator)) return false;
+  if (!("serviceWorker" in navigator)) {
+    dismissRecorder.ack("unsupported");
+    return false;
+  }
   try {
     const reg = await activeRegistration();
     const worker = reg?.active ?? navigator.serviceWorker.controller ?? null;
-    if (!worker) return false;
-    worker.postMessage({ type: CLOSE_ALL_MESSAGE, limit: CLOSE_LIMIT });
+    if (!worker) {
+      dismissRecorder.ack("no-worker");
+      return false;
+    }
+    const port = openAckPort();
+    dismissRecorder.ack("pending");
+    worker.postMessage({ type: CLOSE_ALL_MESSAGE, limit: CLOSE_LIMIT }, port ? [port] : []);
     return true;
   } catch (err) {
     console.warn("[push] askWorkerToCloseAll failed", err);
+    dismissRecorder.error(err);
+    dismissRecorder.ack("no-worker");
     return false;
   }
+}
+
+/**
+ * A one-shot reply channel for `flock:close-all`, handed to the worker so its answer lands in
+ * `dismissRecorder` and rides out on the next presence beat. Nothing awaits it: the sweep is
+ * fire-and-forget, and an answer that arrives 200ms later is still on the same beat. Bounded by
+ * `ACK_TIMEOUT_MS`, after which the ack is recorded as a timeout and the port is dropped.
+ *
+ * Returns null where `MessageChannel` does not exist, in which case the worker gets no port and
+ * the ack stays `pending` — which is itself the reading "we could not ask".
+ */
+function openAckPort(): MessagePort | null {
+  if (typeof MessageChannel === "undefined") return null;
+  const { port1, port2 } = new MessageChannel();
+  let settled = false;
+  const done = () => {
+    if (settled) return;
+    settled = true;
+    try { port1.close(); } catch { /* already closed; nothing to do */ }
+  };
+  const timer = setTimeout(() => {
+    if (settled) return;
+    dismissRecorder.ack("timeout");
+    done();
+  }, ACK_TIMEOUT_MS);
+  port1.onmessage = (ev: MessageEvent) => {
+    const d = (ev.data ?? {}) as { seen?: number; closed?: number; err?: string | null; activateSeen?: number; activateClosed?: number };
+    dismissRecorder.ack("yes", {
+      seen: d.seen,
+      closed: d.closed,
+      activateSeen: d.activateSeen,
+      activateClosed: d.activateClosed,
+    });
+    if (d.err) dismissRecorder.error(`worker: ${d.err}`);
+    clearTimeout(timer);
+    done();
+  };
+  port1.start?.();
+  return port2;
 }
 
 /**
@@ -239,8 +320,15 @@ export async function askWorkerToCloseAll(): Promise<boolean> {
  * either one alone has a browser where it comes back empty. Unfiltered by board: this app is one
  * origin, the person is now looking at it, and everything in the tray is stale.
  */
-export async function dismissAllNotifications(): Promise<void> {
-  await Promise.all([askWorkerToCloseAll(), closeBoardNotifications(null, CLOSE_LIMIT)]);
+export async function dismissAllNotifications(reason: SweepReason = "mount"): Promise<void> {
+  dismissRecorder.begin(reason);
+  const [, page, sw] = await Promise.all([
+    askWorkerToCloseAll(),
+    sweepFromPage(null, CLOSE_LIMIT),
+    readSwState(),
+  ]);
+  dismissRecorder.pageResult(page.seen, page.closed);
+  dismissRecorder.swState(sw);
 }
 
 /**

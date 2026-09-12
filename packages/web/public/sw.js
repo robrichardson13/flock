@@ -4,13 +4,20 @@ const CLOSE_LIMIT = 100;
 // Take over as soon as a new version is served: this worker caches nothing, so there is no
 // in-flight state to protect and a stale push handler is the only failure mode worth avoiding.
 self.addEventListener("install", (e) => e.waitUntil(self.skipWaiting()));
+// What the activate sweep saw, so the page can report it (card 70). A notification that belongs
+// to a previous registration shows up here and nowhere else. Two numbers, overwritten each time.
+let activateSeen = -1;
+let activateClosed = -1;
+
 self.addEventListener("activate", (e) => e.waitUntil((async () => {
   await self.clients.claim();
   // Sweep the tray on activate. A new worker inherits the *same registration* as the one it
   // replaces, so notifications the previous worker showed are still ours to close — and after an
   // app update they are the ones most likely to be stale, since the page that would have
   // dismissed them was running the old code. Bounded like every other sweep.
-  await closeAllNotifications(CLOSE_LIMIT);
+  const r = await closeAllNotifications(CLOSE_LIMIT);
+  activateSeen = r.seen;
+  activateClosed = r.closed;
 })()));
 
 // The page asks for this the moment it comes to the front (see `askWorkerToCloseAll` in
@@ -20,11 +27,34 @@ self.addEventListener("message", (event) => {
   const data = event.data;
   if (!data || data.type !== "flock:close-all") return;
   const limit = typeof data.limit === "number" && data.limit > 0 ? Math.min(data.limit, CLOSE_LIMIT) : CLOSE_LIMIT;
-  event.waitUntil(closeAllNotifications(limit));
+  // The page hands us a MessagePort to answer on. Without it, "the worker never got the message"
+  // and "the worker got it and saw an empty tray" are the same silence from the page's side, and
+  // that ambiguity is what card 70 is stuck on. Answering is best-effort: an old page that sent
+  // no port still gets its sweep.
+  const reply = event.ports && event.ports[0];
+  event.waitUntil((async () => {
+    const r = await closeAllNotifications(limit);
+    if (!reply) return;
+    try {
+      reply.postMessage({
+        type: "flock:close-all:done",
+        seen: r.seen,
+        closed: r.closed,
+        err: r.err,
+        activateSeen,
+        activateClosed,
+      });
+    } catch (err) {
+      // A closed port is normal (the page went away mid-sweep) and is not worth failing over.
+      console.warn("[sw] close-all reply failed", err);
+    }
+  })());
 });
 
-/** Closes every notification this registration has shown, bounded. Never throws: it runs from
- *  event handlers where a rejection would be reported as a worker error and nothing else. */
+/** Closes every notification this registration has shown, bounded. Returns `{ seen, closed, err }`
+ *  — `seen` is the whole point on WebKit, where an empty enumeration is the suspected failure and
+ *  a bare count of closures cannot tell it from an empty tray. Never throws: it runs from event
+ *  handlers where a rejection would be reported as a worker error and nothing else. */
 async function closeAllNotifications(limit) {
   try {
     const open = await self.registration.getNotifications();
@@ -34,10 +64,10 @@ async function closeAllNotifications(limit) {
       n.close();
       closed++;
     }
-    return closed;
+    return { seen: open.length, closed, err: null };
   } catch (err) {
     console.warn("[sw] closeAllNotifications failed", err);
-    return 0;
+    return { seen: -1, closed: 0, err: String((err && err.message) || err).slice(0, 120) };
   }
 }
 

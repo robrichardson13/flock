@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { clientIsLooking, IDLE_MS, type LookingInputs } from "@flock/core/presence";
 import { api, type PresenceReportInfo } from "./api.ts";
+import { dismissBeatFields, dismissRecorder } from "./dismissLog.ts";
 
 /** Three heartbeats; matches `PRESENCE_TTL_MS` in `@flock/core`'s `Presence` (§3.4, D6). */
 export const HEARTBEAT_MS = 15_000;
@@ -140,6 +141,9 @@ export function usePresence(actor: string, hash: string): void {
         focused: inputs.focused,
         lastInputAgeMs: Math.max(0, now - inputs.lastInputAt),
         foregroundOnly: inputs.foregroundOnly,
+        // The dismissal read-out rides along (card 70). Presence never reads it; it is here
+        // because a beat is the only channel out of a home-screen app that reaches a terminal.
+        ...dismissBeatFields(dismissRecorder.read()),
       });
     };
 
