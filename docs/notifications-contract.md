@@ -392,6 +392,7 @@ All under `/api/push`, all taking the actor from `actorOf(c)` like every other r
 | `DELETE` | `/api/push/subscriptions` | `{ endpoint }` | `204` (also `204` when it was not registered) |
 | `POST` | `/api/push/test` | — | `200 { "sent": n, "pruned": m }` |
 | `POST` | `/api/presence` | `{ client: string, board: string \| null, looking: boolean }` | `204`; `400 { error, code: "invalid" }` on a bad body; **never** `404` |
+| `GET` | `/api/presence` | — | `200 { now, ttlMs, pushLeaseHeld, clients: [...] }` from a loopback peer; `403 { error: "loopback only" }` otherwise |
 
 `POST /api/presence` (§1.4, §3.7) is mounted whether or not push is enabled: it is tiny, in memory,
 and a device with no subscription of its own still needs to suppress a device that does. Validation:
@@ -416,6 +417,34 @@ drives the batch windows below, so a server-side test can move both in lockstep.
 - Validation: a missing or non-string `endpoint`, `keys.p256dh` or `keys.auth` is
   `FlockError("...", "invalid")` → 400, via the existing `app.onError`.
 - Errors follow the existing conventions: nothing here can 404 or 409.
+
+#### Observability (card 54)
+
+Presence used to be unobservable: when a foregrounded phone got pushed anyway, nothing in the log
+said what the server believed at send time. Two log lines and one route close that, and they stay
+on — they cost a map scan and a `console.error`, and diagnosing this class of bug without them
+means guessing.
+
+- **`[presence] <iso> actor=… kind=… board=…[(unknown)] looking=… mode=… build=… visible=…
+  focused=… input=… fg=… ua=… client=…`** — one line per `POST /api/presence`. `mode`, `build` and
+  the `visible/focused/input/fg` group come from the request's optional `info` block (§3.7), so the
+  line says *why* the client decided what it decided and *which bundle* decided it. `ua` is a short
+  device label (`iPhone/18.7/Safari`), never the raw string; `board=slug(unknown)` marks a slug that
+  did not resolve.
+- **`[push] decision event=… type=… actor=… board=… boardId=… looking=… age=… clients=… subs=…`** —
+  one line per (event, recipient) at decision time, from `logDecisions` in `push.ts`. `looking` is
+  the answer for exactly the `(actor, boardId)` key the pump looked up, `age` the freshest matching
+  beat and `clients` how many live clients matched. Only logged when an event has recipients.
+- **`GET /api/presence`** dumps the map the pump reads: `{ now, ttlMs, pushLeaseHeld, clients: [{
+  client, actor, boardId, board, reportedAt, expiresAt, ageMs, info }] }`. Loopback only, and
+  refused outright when `x-forwarded-for` is present — a dev setup proxies `/api` through vite, so a
+  `127.0.0.1` peer alone does not mean the operator. An unknown peer address fails closed.
+
+The formatters and the gate are pure functions in `packages/server/src/presence-log.ts`, tested in
+`presence-log.test.ts`. `normalizeClientInfo` bounds everything a client can send: `build` ≤ 64
+chars, `lastInputAgeMs` clamped to 24h, `userAgent` ≤ 256 chars, `mode` one of two literals,
+anything else dropped. `Presence` itself is capped at `MAX_PRESENCE_CLIENTS` (500), evicting the
+entry closest to expiry.
 
 ### 2.4 The sender
 
@@ -989,9 +1018,31 @@ themselves.
 **`api.ts`** gains a `keepalive` passthrough on `req()` and:
 
 ```ts
-presence: (body: { client: string; board: string | null; looking: boolean }, opts?: { keepalive?: boolean }) =>
+presence: (body: { client: string; board: string | null; looking: boolean; info?: PresenceReportInfo }, opts?: { keepalive?: boolean }) =>
   req<void>("POST", "/presence", body, undefined, opts),
 ```
+
+**The `info` block (card 54).** Every beat carries a diagnostic block the server logs and stores
+but never acts on:
+
+```ts
+export interface PresenceReportInfo {
+  build: string;                        // buildId() — the vite `define`, or "unknown"
+  mode: "standalone" | "browser";       // displayMode()
+  visible: boolean; focused: boolean; lastInputAgeMs: number; foregroundOnly: boolean;
+}
+```
+
+`buildId()` reads `__FLOCK_BUILD_ID__`, defined in `vite.config.ts` as
+`<short sha>[+dirty]-<base36 config-evaluation time>`. The timestamp is deliberate: two pages off
+the same commit but different dev-server processes differ, so a phone running a bundle from an
+older server is visible in the log rather than inferred. `"unknown"` means the page predates the
+define entirely — a stale bundle.
+
+`displayMode()` is `navigator.standalone === true || matchMedia("(display-mode: standalone)")`.
+It is **diagnostic only**. `foregroundOnlyDevice()` — `(hover: none) and (pointer: coarse)` —
+remains the input to `clientIsLooking`, because a desktop PWA is standalone but has real per-window
+focus. The log carries both so the two can be told apart from the outside.
 
 **`App.tsx`**: `usePresence(actor, hash)` is mounted in `Shell`, right after the `actor` state
 declaration; `main.tsx` is untouched, same as ADR 0017's iOS viewport work.

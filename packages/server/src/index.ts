@@ -13,11 +13,13 @@ import {
   normalizeRuntime,
   DB_DIRNAME,
   Presence,
+  PRESENCE_TTL_MS,
   type Actor,
   type CardStatus,
   type DecisionSelector,
 } from "@flock/core";
 import { defaultSend, loadOrCreateVapidKeys, startPushPump, type PushPump, type PushSend } from "./push.ts";
+import { formatPresenceReport, isLoopbackRequest, normalizeClientInfo } from "./presence-log.ts";
 
 export interface ServerOptions {
   flock: Flock;
@@ -446,7 +448,7 @@ export function createApp({
   // Mounted whether or not push is enabled (§3.3): tiny, in memory, and needed even by a device
   // that never subscribes to push, so it can still suppress one that does.
   app.post("/api/presence", async (c) => {
-    const body = await c.req.json<{ client?: unknown; board?: unknown; looking?: unknown }>().catch(() => ({}) as Record<string, unknown>);
+    const body = await c.req.json<{ client?: unknown; board?: unknown; looking?: unknown; info?: unknown }>().catch(() => ({}) as Record<string, unknown>);
     if (typeof body.client !== "string" || body.client.length === 0 || body.client.length > 64) {
       throw new FlockError("client is required", "invalid");
     }
@@ -466,8 +468,55 @@ export function createApp({
         boardId = null;
       }
     }
-    presence.report({ client: body.client, actor: actorOf(c).name, boardId, looking: body.looking }, clock());
+    const actor = actorOf(c);
+    const info = normalizeClientInfo(body.info, c.req.header("user-agent"));
+    const at = clock();
+    presence.report({ client: body.client, actor: actor.name, boardId, looking: body.looking, info }, at);
+    console.error(
+      formatPresenceReport({
+        at,
+        client: body.client,
+        actor: actor.name,
+        actorKind: actor.kind,
+        board: typeof body.board === "string" && body.board.length > 0 ? body.board : null,
+        resolved: boardId !== null,
+        looking: body.looking,
+        info,
+      }),
+    );
     return c.body(null, 204);
+  });
+
+  // A dump of the presence map as the pump sees it, for diagnosing a suppression that did not
+  // happen. Loopback only, and refused outright when a forwarding header is present: a dev setup
+  // proxies /api through vite, so "the peer is 127.0.0.1" alone does not mean "the operator".
+  app.get("/api/presence", (c) => {
+    const conn = c.env as { requestIP?: (r: Request) => { address: string } | null } | undefined;
+    const address = typeof conn?.requestIP === "function" ? (conn.requestIP(c.req.raw)?.address ?? null) : null;
+    if (!isLoopbackRequest(address, c.req.header("x-forwarded-for"))) {
+      return c.json({ error: "loopback only" }, 403);
+    }
+    const at = clock();
+    const boards = new Map<string, string>();
+    const slugOf = (id: string | null): string | null => {
+      if (id === null) return null;
+      const hit = boards.get(id);
+      if (hit !== undefined) return hit;
+      let slug: string;
+      try {
+        slug = flock.board(id).slug;
+      } catch {
+        slug = "(gone)";
+      }
+      boards.set(id, slug);
+      return slug;
+    };
+    return c.json({
+      now: at,
+      ttlMs: PRESENCE_TTL_MS,
+      pushLeaseHeld: pump ? pump.leading() : false,
+      clients: presence.snapshot(at).map((e) => ({ ...e, board: slugOf(e.boardId) })),
+    });
   });
 
   // ----- push -----
