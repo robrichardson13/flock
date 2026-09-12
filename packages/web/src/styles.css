@@ -2111,10 +2111,19 @@ html[data-topbar] .sheet { max-height: 100%; }
    while the arriving one travelled up into the space it just left, which reads as two
    unrelated sheets rather than one step. A crossfade in place, at the fast duration, and the
    backdrop holds still underneath because both sheets are asking it for the same scrim. */
-.sheet-backdrop.sheet-swap { animation: none; }
-.sheet-backdrop.sheet-swap .sheet { animation: fade-in var(--d-fast) var(--ease-out); }
-.sheet-backdrop.sheet-swap.closing { animation: fade-out var(--d-fast) var(--ease-out) forwards; }
-.sheet-backdrop.sheet-swap.closing .sheet { animation: fade-out var(--d-fast) var(--ease-out) forwards; }
+/* Card 41: the two halves are separate classes, and each is latched for as long as the sheet
+   it dresses is on screen (`sheetSwap.ts`). One class held for the caller's swap *window* was
+   the bug: removing it from a sheet that had already settled changed that element's computed
+   `animation-name`, which restarts an animation, so the panel replayed its base entry — the
+   desktop side panel slid in from the right a second time, the phone's sheet rose from 40px a
+   second time, ~70ms after the crossfade had finished. Same trap as the `animation: none`
+   release documented near the top of this file. `:not(.closing)` keeps the entry latch from
+   claiming the exit, so a swapped-in roster dismissed by its own ✕ still leaves the way it
+   normally would. */
+.sheet-backdrop.sheet-swapped:not(.closing) { animation: none; }
+.sheet-backdrop.sheet-swapped:not(.closing) .sheet { animation: fade-in var(--d-fast) var(--ease-out); }
+.sheet-backdrop.sheet-swap-out.closing { animation: fade-out var(--d-fast) var(--ease-out) forwards; }
+.sheet-backdrop.sheet-swap-out.closing .sheet { animation: fade-out var(--d-fast) var(--ease-out) forwards; }
 .sheet-grip { width: 36px; height: 5px; border-radius: 3px; background: var(--line); margin: var(--s1) auto var(--s3); }
 .sheet-head { display: flex; align-items: flex-start; gap: var(--s2); margin-bottom: var(--s3); }
 .sheet-title { flex: 1; min-width: 0; font-size: var(--t-title); line-height: var(--lh-title); font-weight: var(--w-title); letter-spacing: var(--ls-title); overflow-wrap: anywhere; }
@@ -3794,8 +3803,8 @@ a.evt:active { background: var(--surface-press); }
   .sheet-backdrop.closing .sheet.side-panel { animation: drawer-out var(--d-fast) var(--ease-in) forwards; }
   /* Stepping between the two depths is a substitution inside one frame, not a panel leaving
      and another arriving: the slide stands down and the base block's crossfade stands in. */
-  .sheet-backdrop.sheet-swap .sheet.side-panel { animation: fade-in var(--d-fast) var(--ease-out); }
-  .sheet-backdrop.sheet-swap.closing .sheet.side-panel { animation: fade-out var(--d-fast) var(--ease-out) forwards; }
+  .sheet-backdrop.sheet-swapped:not(.closing) .sheet.side-panel { animation: fade-in var(--d-fast) var(--ease-out); }
+  .sheet-backdrop.sheet-swap-out.closing .sheet.side-panel { animation: fade-out var(--d-fast) var(--ease-out) forwards; }
   /* `.sheet-head` renders title-then-close, which every other sheet wants. The panel wants
      the way out first, so the button is reordered rather than the markup — the phone's
      sheets, and these two on the phone, keep exactly the DOM they had. The back control sits
