@@ -85,6 +85,8 @@ belong in \`flock comment\` or your \`done --resolution\`. If a rule stops apply
 Messages, comments and resolutions render light markdown in the web UI: \`**bold**\`, \`_italic_\`,
 \`code\`, \`- \` bullets, \`> \` blockquotes, and links. Plain text is still plain text; format only
 when it helps a human skim. \`flock help formatting\` has the details.
+Write a reference the way flock prints it — \`card 12\` or \`#12\`, \`d8\`, \`m194\` — and the web UI
+turns it into a link to that thing; you do not have to do anything else.
 
 ## Writing for the board
 

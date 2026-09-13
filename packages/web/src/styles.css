@@ -2071,6 +2071,11 @@ h3 { margin: 0 0 var(--s2); font-size: var(--t-sub); line-height: var(--lh-sub);
 .md pre { background: var(--bg-3); border-radius: var(--r-sm); padding: var(--s2) var(--s3); margin: var(--s2) 0; overflow-x: auto; }
 .md pre code { background: none; padding: 0; font-size: var(--t-foot); line-height: 1.5; }
 .md a, .msg-body a, .needs-q a, .decision a { color: var(--ink-link); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+/* card 109: a written `card 12`, `#12`, `d8` or `m194` becomes a link to that thing on this
+   board. It is a cross-reference, not an outbound link, so it keeps the link colour (no new
+   token, nothing for the contrast gate to weigh) and says "inside the app" with a dotted
+   underline instead. */
+.md a.ref-link, .msg-body a.ref-link, .needs-q a.ref-link, .decision a.ref-link { text-decoration-style: dotted; }
 /* #22/C6/F9: `**bold**` in a message, comment, decision or need's body falls through to the
    browser's own `bold` (700) with nothing here to catch it — only `.event-line b` (Activity)
    was ever set. 700 is not on the weight scale (400/500/600/650/800); `--w-head` is the

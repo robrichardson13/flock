@@ -4,7 +4,7 @@ import { safeHref, tokenizeInline, type InlineToken } from "./inline.ts";
 /** Flatten to something easy to assert on: a list of {t, v|href} with kids recursively flattened. */
 function flat(tokens: InlineToken[]): any[] {
   return tokens.map((t) => {
-    if (t.t === "text" || t.t === "code") return { t: t.t, v: t.v };
+    if (t.t === "text" || t.t === "code" || t.t === "ref") return { t: t.t, v: t.v };
     if (t.t === "link") return { t: t.t, href: t.href, kids: flat(t.kids) };
     return { t: t.t, kids: flat(t.kids) };
   });

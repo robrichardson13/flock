@@ -1,6 +1,6 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment } from "react";
 import { taskItems } from "@flock/core/tasks";
-import { tokenizeInline, type InlineToken } from "./inline.ts";
+import { inline, useRefScope, type RefScope } from "./inlineRender.tsx";
 
 /** One rendered list item: plain bullet, or a GFM task item with its body-wide index. */
 type Item = { text: string; indent: number; task: { index: number; checked: boolean } | null };
@@ -94,20 +94,21 @@ export function splitDocumentBlocks(text: string): DocumentBlock[] {
  */
 export function Markdownish({ text, onToggleTask }: { text: string; onToggleTask?: (index: number, checked: boolean) => void }) {
   const blocks = splitDocumentBlocks(text);
+  const scope = useRefScope();
   return (
     <div className="md">
       {blocks.map((b, i) => {
         if (b.t === "code") return <pre key={i}><code>{b.value}</code></pre>;
         if (b.t === "heading") {
           const Tag = (`h${Math.min(4, b.level + 1)}`) as keyof JSX.IntrinsicElements;
-          return <Tag key={i}>{inline(b.text)}</Tag>;
+          return <Tag key={i}>{inline(b.text, scope)}</Tag>;
         }
         if (b.t === "list") {
           return (
             <ul key={i}>
               {b.items.map((it, j) => (
                 <li key={j} className={it.task ? "md-task" : undefined} style={{ marginLeft: `${indentPx(it)}px` }}>
-                  {it.task ? <TaskItem item={it} onToggle={onToggleTask} /> : inline(it.text)}
+                  {it.task ? <TaskItem item={it} onToggle={onToggleTask} scope={scope} /> : inline(it.text, scope)}
                 </li>
               ))}
             </ul>
@@ -118,7 +119,7 @@ export function Markdownish({ text, onToggleTask }: { text: string; onToggleTask
             {b.lines.map((l, j) => (
               <Fragment key={j}>
                 {j > 0 && <br />}
-                {inline(l)}
+                {inline(l, scope)}
               </Fragment>
             ))}
           </p>
@@ -141,7 +142,7 @@ function indentPx(it: Item): number {
  * clears 24px on a phone; the handler stops the click there rather than letting it
  * reach a card tile or row that navigates on click.
  */
-function TaskItem({ item, onToggle }: { item: Item; onToggle?: (index: number, checked: boolean) => void }) {
+function TaskItem({ item, onToggle, scope }: { item: Item; onToggle?: (index: number, checked: boolean) => void; scope: RefScope | null }) {
   const task = item.task!;
   const live = !!onToggle;
   return (
@@ -160,37 +161,9 @@ function TaskItem({ item, onToggle }: { item: Item; onToggle?: (index: number, c
         onClick={(e) => e.stopPropagation()}
         onChange={(e) => onToggle?.(task.index, e.currentTarget.checked)}
       />
-      <span>{inline(item.text)}</span>
+      <span>{inline(item.text, scope)}</span>
     </label>
   );
-}
-
-function renderTokens(tokens: InlineToken[]): ReactNode[] {
-  return tokens.map((t, i) => {
-    switch (t.t) {
-      case "text":
-        return t.v;
-      case "code":
-        return <code key={i}>{t.v}</code>;
-      case "strong":
-        return <strong key={i}>{renderTokens(t.kids)}</strong>;
-      case "em":
-        return <em key={i}>{renderTokens(t.kids)}</em>;
-      case "del":
-        return <del key={i}>{renderTokens(t.kids)}</del>;
-      case "link":
-        return (
-          <a key={i} href={t.href} target="_blank" rel="noopener noreferrer">
-            {renderTokens(t.kids)}
-          </a>
-        );
-    }
-  });
-}
-
-/** The inline subset — bold, italic, strikethrough, code, links — as React nodes. */
-function inline(s: string): ReactNode {
-  return renderTokens(tokenizeInline(s));
 }
 
 /**
@@ -312,20 +285,21 @@ const CITE = /^(\S+) said:$/;
  */
 export function MessageBody({ text }: { text: string }) {
   const blocks = splitMessageBlocks(text);
+  const scope = useRefScope();
   return (
     <>
       {blocks.map((b, i) => {
         if (b.t === "code") return <pre key={i}><code>{b.value}</code></pre>;
         if (b.t === "heading") {
           const Tag = (`h${Math.min(4, b.level + 1)}`) as keyof JSX.IntrinsicElements;
-          return <Tag key={i}>{inline(b.text)}</Tag>;
+          return <Tag key={i}>{inline(b.text, scope)}</Tag>;
         }
         if (b.t === "list") {
           return (
             <ul key={i}>
               {b.items.map((it, j) => (
                 <li key={j} className={it.task ? "md-task" : undefined}>
-                  {it.task ? <TaskItem item={{ text: it.text, indent: 0, task: it.task }} /> : inline(it.text)}
+                  {it.task ? <TaskItem item={{ text: it.text, indent: 0, task: it.task }} scope={scope} /> : inline(it.text, scope)}
                 </li>
               ))}
             </ul>
@@ -346,13 +320,13 @@ export function MessageBody({ text }: { text: string }) {
               {lines.map((l, j) => (
                 <Fragment key={j}>
                   {j > 0 && <br />}
-                  {inline(l)}
+                  {inline(l, scope)}
                 </Fragment>
               ))}
             </blockquote>
           );
         }
-        return <span key={i}>{inline(b.value)}</span>;
+        return <span key={i}>{inline(b.value, scope)}</span>;
       })}
     </>
   );

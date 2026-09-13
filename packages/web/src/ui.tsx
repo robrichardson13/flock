@@ -573,6 +573,14 @@ export function ActorLinks({ boardRef, children }: { boardRef: string; children:
 }
 
 /**
+ * The board in scope, or null outside one. Faces read it to know where a tap goes; the
+ * message renderer reads the same fact to know which board a written `card 12` means.
+ */
+export function useBoardRef(): string | null {
+  return useContext(ActorLinkCtx);
+}
+
+/**
  * Makes whatever it wraps — an avatar, a name, both — open that actor's view.
  *
  * A span with a button role rather than an anchor, because half these faces sit *inside* a
