@@ -15,10 +15,11 @@
  * the sheet opens on real content and the fetch only adds the history behind it (#43); a
  * skeleton stands in only where the snapshot has nothing to say.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, type ActorCard, type ActorProfile, type ActorTelemetryTotals, type Card, type HarnessSessionTelemetry, type TeamMember } from "./api.ts";
 import { groupActorCards, rolesCaption, sharedRoles, shortAge } from "./people.ts";
-import { ActorTelemetryStrip } from "./Telemetry.tsx";
+import { ActorTelemetryStrip, useLivePoll, useNow } from "./Telemetry.tsx";
+import { hasLiveSession } from "./telemetry-format.ts";
 import { Avatar, EMPTY_TEXT, RuntimeTag, Sheet, SheetBack } from "./ui.tsx";
 
 /** ADR 0026: the two fields `GET /api/boards/:b/actors/:name` adds on top of `ActorProfile`.
@@ -94,26 +95,47 @@ export function ActorSheet({
   const [profile, setProfile] = useState<FullProfile | null>(() => (open ? seedProfile(name, seed) : null));
   const [err, setErr] = useState<string | null>(null);
 
+  // Card 100: pulled out of the mount effect below so the live-poll interval can call the
+  // same fetch without also resetting `profile` back to the seed on every tick the way the
+  // mount effect does — that reset is only right the moment the sheet opens or the actor it
+  // names changes, never on a routine refresh of an already-loaded profile. `currentKey`
+  // stands in for the old effect's `cancelled` flag: a poll in flight when the sheet is
+  // reopened on a different actor must not paint that actor's profile over the new one.
+  const currentKey = useRef(`${boardRef}:${name}`);
   useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setErr(null);
-    setProfile(seedProfile(name, seed));
+    currentKey.current = `${boardRef}:${name}`;
+  }, [boardRef, name]);
+  const fetchProfile = useCallback(() => {
+    const key = `${boardRef}:${name}`;
     api
       .actorProfile(boardRef, name)
       .then((p) => {
-        if (!cancelled) setProfile(p);
+        if (currentKey.current === key) setProfile(p);
       })
       .catch((e: Error) => {
-        if (!cancelled) setErr(e.message);
+        if (currentKey.current === key) setErr(e.message);
       });
-    return () => {
-      cancelled = true;
-    };
+  }, [boardRef, name]);
+
+  useEffect(() => {
+    if (!open) return;
+    setErr(null);
+    setProfile(seedProfile(name, seed));
+    fetchProfile();
     // `seed` is a fresh object every render of the board; the actor and the board are what
     // actually decide whose profile this is.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, boardRef, name]);
+
+  // While the sheet is open on an actor with a session still running or idle, keep its
+  // cost/context/tool/liveness readings moving on their own (card 100) — the same signal and
+  // interval the card page's Run block polls on, just keyed off the session's own liveness
+  // rather than a card status, since one actor's sessions span many cards. `nowMs` drives the
+  // strip's own duration count-up and "last heard" text the same way the card page's clock
+  // does; both go still the moment nothing here is live any more, or the sheet closes.
+  const live = open && hasLiveSession(profile?.telemetry ?? []);
+  const nowMs = useNow(live);
+  useLivePoll(live, fetchProfile);
 
   const groups = groupActorCards(profile?.cards ?? []);
   const kind = profile?.kind ?? "agent";
@@ -144,7 +166,7 @@ export function ActorSheet({
       </div>
 
       {profile?.telemetry && profile.telemetry.length > 0 && profile.totals && (
-        <ActorTelemetryStrip telemetry={profile.telemetry} totals={profile.totals} />
+        <ActorTelemetryStrip telemetry={profile.telemetry} totals={profile.totals} nowMs={nowMs} />
       )}
 
       {err && !profile && <p className="muted">{err}</p>}

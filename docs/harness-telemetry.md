@@ -27,6 +27,13 @@ Under the rows, `also worked #6, #7` when a session touched other cards — a se
 session totals, and flock never splits them across the cards the session worked. That note is what
 keeps "this session cost $4.34" from being read as "this card cost $4.34".
 
+While a session is still `running` or `idle`, the block is live rather than a snapshot: the
+duration ticks like a clock (a local repaint, no network) and cost, context, tool calls and
+liveness refresh on their own every 15 seconds — the same TTL the server's refresh-on-read
+already compares against, so the client never asks for a re-read the server would have declined
+anyway. The moment a session goes `gone` (or, on the card page, the card itself closes), the block
+freezes at its last value and stops asking; nothing polls a card or actor nobody has open.
+
 An actor page gains the same rows, plus a totals strip across distinct sessions once there are two
 or more.
 
@@ -86,6 +93,13 @@ Refreshes happen where somebody is looking, and never any other way: the server 
 when a card or actor page is fetched and the stored reading is more than 15 seconds old,
 single-flight per key. `flock done` and `flock release` each do one best-effort read. Nothing polls
 in the background, and a refresh never emits a flock event.
+
+The web app is one of those "somebodies": while its Run block shows a `running`/`idle` session, it
+re-fetches the card or actor payload every 15 seconds on its own (`useLivePoll`,
+`packages/web/src/Telemetry.tsx`) so the block above stays live without a reload. That client poll
+is what asks; the 15-second TTL above is still what decides whether the ask actually re-reads a
+transcript. Closing the card, closing the actor sheet, or the session going `gone` stops the poll
+immediately — nothing here polls a view nobody has open.
 
 A session is **final** — never read again — once one of three things is true: it has cost, its
 transcript is gone, or it went quiet more than seven days ago and still has neither. Short of that,

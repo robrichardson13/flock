@@ -1,16 +1,27 @@
 /**
  * ADR 0026's web surfaces: the card page's "Run" block (one row per session that worked the
- * card) and the actor page's totals strip. Every number here comes straight off the card/
- * actor payload the caller already fetched — no polling of its own beyond the existing
- * SSE-coalesced refetch, except a light 30s tick so the live duration and "last heard" text
- * keep moving while a card is `doing`. That tick is local to `RunBlock` and is cleared on
- * unmount; it never fires a network request.
+ * card), the actor page's totals strip and the phone actor bottom sheet (the same strip,
+ * `ActorView.tsx`'s `ActorSheet`). Two clocks keep them live while a session still is:
+ *
+ * - `useNow`, local to whichever caller mounts it: repaints already-fetched numbers (the
+ *   count-up duration, "last heard" text) on a timer. It never fires a network request.
+ * - `useLivePoll`, driven by the caller's own reload/refetch: re-fetches the card/actor
+ *   payload on an interval so cost, context, tool calls and liveness — none of which this
+ *   file can derive locally — move on their own too. It rides the same fetch path SSE
+ *   already uses (`CardPage`'s `reload`, `ActorSheet`'s profile fetch), so the server's own
+ *   15s refresh-on-read TTL (`REFRESH_TTL_MS`, `packages/server/src/telemetry.ts`) is the
+ *   only thing that ever actually re-reads a transcript — this just makes sure something
+ *   asks often enough while the block is on screen.
+ *
+ * Both clocks are bounded and cleared on unmount, and both go still once there is no live
+ * session left to justify them — a `done`/`wontfix` card, or every session `gone` — so a
+ * closed card or a quiet actor never spends a timer on numbers that cannot change again.
  *
  * `telemetry-format.ts` carries every pure number-to-string function; this file is only the
  * markup around them. Every reading is optional per ADR 0026 (a session an agent never linked
  * writes nulls), so nothing here assumes a field exists.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CardDuration, CardStatus, HarnessSessionTelemetry } from "./api.ts";
 import {
   alsoWorkedAcross,
@@ -23,6 +34,7 @@ import {
   hasReadings,
   LIVENESS_LABEL,
   liveDurationMs,
+  liveSessionDurationMs,
   modelDiffers,
   resolvedModel,
   topTools,
@@ -39,7 +51,7 @@ const LIVE_TICK_MS = 30_000;
 /** Ticks `Date.now()` every `LIVE_TICK_MS` while `active`, otherwise holds still. A card
  *  that is `done`/`wontfix` needs no clock at all: its duration and last-heard times are
  *  frozen, so re-rendering them on a timer would just burn a tick for the same string. */
-function useNow(active: boolean): number {
+export function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;
@@ -47,6 +59,29 @@ function useNow(active: boolean): number {
     return () => clearInterval(id);
   }, [active]);
   return now;
+}
+
+/** How often a Run block re-fetches its own card/actor payload while a live session is on
+ *  screen — the same figure the server's refresh-on-read TTL uses, so this can never make a
+ *  session look staler for longer than the server itself would already tolerate, and never
+ *  polls fast enough to beat that TTL either. */
+export const LIVE_POLL_MS = 15_000;
+
+/** Re-runs `refetch` every `LIVE_POLL_MS` while `active`, and does nothing at all otherwise —
+ *  no interval is ever created for a card that is not `doing` or an actor sheet with nothing
+ *  running/idle on it. `refetch` is read through a ref so the interval never needs to be torn
+ *  down and rebuilt just because the caller passed a new closure this render; the interval
+ *  itself is still cleared the moment `active` goes false or the component unmounts, so a
+ *  view that scrolls away or a session that ends stops polling immediately, not on the next
+ *  tick. */
+export function useLivePoll(active: boolean, refetch: () => void): void {
+  const refetchRef = useRef(refetch);
+  refetchRef.current = refetch;
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => refetchRef.current(), LIVE_POLL_MS);
+    return () => clearInterval(id);
+  }, [active]);
 }
 
 /** The model chip: the observed model when the reader found one, in a tooltip that says so
@@ -112,7 +147,7 @@ function RunRow({ t, cardDurationMs, nowMs }: { t: HarnessSessionTelemetry; card
       <ModelChip t={t} />
       <span className="run-cost">{formatCostUsd(t.costUsd)}</span>
       <ContextBar used={t.contextUsed} max={t.contextMax} />
-      <span className="run-duration" title={`session: ${formatDurationMs(t.durationMs ?? null)}`}>
+      <span className="run-duration" title={`session: ${formatDurationMs(liveSessionDurationMs(t, nowMs))}`}>
         {formatDurationMs(cardDurationMs)}
       </span>
       <ToolCount t={t} />
@@ -157,18 +192,24 @@ export function RunBlock({ telemetry, duration, status }: { telemetry: HarnessSe
  *  radius/shadow, the card page's `RunBlock` idiom) sat narrower than that inset on the
  *  phone sheet and read as clipped. So this strip carries only `.actor-telemetry`, never
  *  `.run-block`: full-bleed to the sheet's own edges, hairline dividers (the same `--line`
- *  token `.run-row` already draws its inter-row borders with) standing in for the box. */
+ *  token `.run-row` already draws its inter-row borders with) standing in for the box.
+ *
+ *  Card 100: `nowMs` is a prop, not read locally, so the caller (`ActorSheet`) decides
+ *  whether it ticks — via the same `useNow` the card page uses, gated on whether any session
+ *  here is still running/idle (`hasLiveSession`) — while a caller with no clock of its own
+ *  (this file's own tests included) still gets a sane one-shot reading via the default. */
 export function ActorTelemetryStrip({
   telemetry,
   totals,
+  nowMs = Date.now(),
 }: {
   telemetry: HarnessSessionTelemetry[];
   totals: { sessions: number; costUsd: number | null; costExact: boolean; toolCalls: number | null };
+  nowMs?: number;
 }) {
   if (telemetry.length === 0) return null;
-  const nowMs = Date.now();
   const tokens = totalTokens(telemetry);
-  const time = totalDurationMs(telemetry);
+  const time = totalDurationMs(telemetry, nowMs);
   return (
     <div className="actor-telemetry" role="group" aria-label="Run totals">
       {telemetry.length > 1 ? (
@@ -187,7 +228,7 @@ export function ActorTelemetryStrip({
           <ModelChip t={t} />
           <span className="run-cost">{formatCostUsd(t.costUsd)}</span>
           <ContextBar used={t.contextUsed} max={t.contextMax} />
-          <span className="run-duration" title="session duration">{formatDurationMs(t.durationMs ?? null)}</span>
+          <span className="run-duration" title="session duration">{formatDurationMs(liveSessionDurationMs(t, nowMs))}</span>
           <ToolCount t={t} />
           <LivenessDot t={t} nowMs={nowMs} />
           <AlsoWorked cards={t.alsoWorked} label="worked" />

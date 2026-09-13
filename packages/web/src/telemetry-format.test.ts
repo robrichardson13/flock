@@ -8,8 +8,10 @@ import {
   formatCostUsd,
   formatDurationMs,
   formatToolCalls,
+  hasLiveSession,
   hasReadings,
   liveDurationMs,
+  liveSessionDurationMs,
   modelDiffers,
   resolvedModel,
   topTools,
@@ -152,12 +154,41 @@ describe("totalTokens", () => {
   });
 });
 
-describe("totalDurationMs", () => {
-  it("sums each session's own duration", () => {
-    expect(totalDurationMs([session({ durationMs: 1000 }), session({ durationMs: 2000 })])).toBe(3000);
+describe("liveSessionDurationMs", () => {
+  const now = Date.parse("2026-09-12T00:10:00.000Z");
+  it("uses the harness's own duration once the session has one", () => {
+    expect(liveSessionDurationMs(session({ durationMs: 5000, startedAt: "2026-09-12T00:00:00.000Z" }), now)).toBe(5000);
   });
-  it("is null when every session is still live", () => {
-    expect(totalDurationMs([session(), session()])).toBeNull();
+  it("counts up from startedAt while the session is still live", () => {
+    expect(liveSessionDurationMs(session({ startedAt: "2026-09-12T00:00:00.000Z" }), now)).toBe(600_000);
+  });
+  it("is null with neither a reported duration nor a known start", () => {
+    expect(liveSessionDurationMs(session(), now)).toBeNull();
+  });
+});
+
+describe("totalDurationMs", () => {
+  const now = Date.parse("2026-09-12T00:10:00.000Z");
+  it("sums each session's own duration", () => {
+    expect(totalDurationMs([session({ durationMs: 1000 }), session({ durationMs: 2000 })], now)).toBe(3000);
+  });
+  it("counts a live session's elapsed time into the total too", () => {
+    expect(totalDurationMs([session({ durationMs: 1000 }), session({ startedAt: "2026-09-12T00:09:00.000Z" })], now)).toBe(1000 + 60_000);
+  });
+  it("is null when every session is still live with no known start", () => {
+    expect(totalDurationMs([session(), session()], now)).toBeNull();
+  });
+});
+
+describe("hasLiveSession", () => {
+  it("is true when any session is running or idle", () => {
+    expect(hasLiveSession([session({ liveness: "gone" }), session({ liveness: "running" })])).toBe(true);
+    expect(hasLiveSession([session({ liveness: "idle" })])).toBe(true);
+  });
+  it("is false when every session has ended or is unread", () => {
+    expect(hasLiveSession([session({ liveness: "gone" })])).toBe(false);
+    expect(hasLiveSession([session({ liveness: "unknown" }), session()])).toBe(false);
+    expect(hasLiveSession([])).toBe(false);
   });
 });
 
