@@ -70,9 +70,24 @@ claude-code:8ea8caf2-…#agent-6f2c…      (a subagent transcript, when its id 
 ```
 
 Inside Claude Code the key is read from `CLAUDE_CODE_SESSION_ID`, which is exported to every child
-process — so it needs no install and no consent. "Which sessions worked this card" is then a
-group-by over the events table. Nothing links a card to a session except the events the agent
-already wrote.
+process — so it needs no install and no consent. Nothing links a card to a session except the
+events the agent already wrote.
+
+**A card's run is the sessions that *worked* it** (ADR 0027). Working a card means claiming it, so
+a card's workers are the actors that claimed it plus whoever holds it now, and only their events
+link a session to the card. A conductor that files a card, comments on it, asks about it, or
+closes someone else's Land card is not running it and does not appear in its Run block; a card
+nobody has claimed shows no run at all rather than crediting whoever filed it. `also worked` lists
+the other cards a session *claimed*, for the same reason.
+
+**A subagent is its own run.** Claude Code gives a subagent no per-agent environment variable —
+`CLAUDE_CODE_SESSION_ID` is the parent's — but it does write each subagent's transcript to
+`<project>/<session id>/subagents/agent-<agent id>.jsonl`, and it flushes the line carrying a Bash
+command there *before* running the command. So a flock write inside a subagent finds its own agent
+id by looking for its own command, and carries `claude-code:<session id>#<agent id>`. The Run block
+then shows that subagent's model, context and cost rather than the conductor's. Best effort: if
+the id cannot be established the key stays bare and the parent's transcript is read, which is what
+shipped before.
 
 From there, flock derives the transcript path from `(cwd, session id)` by Claude Code's own
 encoding and reads it: bounded by size, line count and a timeout, marking the row `partial` rather
@@ -80,10 +95,11 @@ than throwing. A malformed line is skipped, never thrown from.
 
 Two limits worth knowing:
 
-- **A subagent reports its parent's session.** `CLAUDE_CODE_SESSION_ID` inside a subagent is the
-  parent's id and there is no per-agent variable. N subagents on N cards all report one key, and
-  its numbers describe the whole conducted run. That is a true reading, just a coarse one — which
-  is what `also worked` exists to say out loud.
+- **Events written before ADR 0027 keep the parent's key.** They were recorded without an agent
+  id, and that id cannot be recovered per card, so a card worked before this change still reads
+  the conductor's transcript for its numbers. Re-reading it now does fix *who* it credits: the
+  actor and the declared model come from the worker's own writes, and a card the conductor only
+  filed goes empty. There is no migration for the numbers and there will not be one.
 - **Cost is retroactive.** The harness writes its cost line when the *session* ends, which is not
   when the agent runs `flock done` — it is later, when you close the terminal. A card closed at
   11pm shows `—` for cost until something reads that transcript again, which keeps happening on

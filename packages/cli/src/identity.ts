@@ -1,5 +1,6 @@
 import { userInfo } from "node:os";
 import { detectRuntime, normalizeRuntime, type Actor } from "@flock/core";
+import { refineRunKey } from "@flock/harness/claude-code-self";
 import { bool, str, type Parsed } from "./args.ts";
 
 /**
@@ -26,10 +27,23 @@ export function resolveActor(flags: Parsed["flags"]): Actor {
   const harness = str(flags.harness) ?? process.env.FLOCK_HARNESS ?? detected.harness;
   const model = str(flags.model) ?? process.env.FLOCK_MODEL ?? detected.model;
   const effort = str(flags.effort) ?? process.env.FLOCK_EFFORT ?? detected.effort;
-  const session = str(flags.session) ?? process.env.FLOCK_SESSION ?? detected.session;
+  const explicitSession = str(flags.session) ?? process.env.FLOCK_SESSION;
+  const session = explicitSession ?? refineSession(detected.session);
   const runtime = normalizeRuntime({ harness, model, effort, session });
 
   return { name, kind, ...runtime };
+}
+
+/**
+ * ADR 0027: a detected Claude Code run key names the *parent* session even when the write comes
+ * from a subagent, because the harness exposes no per-agent environment variable. `refineRunKey`
+ * recovers the agent id from the subagent transcript Claude Code has already flushed, turning
+ * `claude-code:<sid>` into `claude-code:<sid>#<agentId>` so telemetry reads the subagent's own
+ * run and not the conductor's. Best effort: an unrecognisable layout leaves the key alone.
+ */
+function refineSession(detected: string | undefined): string | undefined {
+  if (!detected) return undefined;
+  return refineRunKey(detected, process.cwd(), process.argv.slice(2));
 }
 
 /** True when no `--as` or `FLOCK_ACTOR` was given, so the actor name fell back to the OS user. */

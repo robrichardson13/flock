@@ -18,29 +18,62 @@ function readRows(db: Database, keys: string[]): Map<string, HarnessSessionRow> 
 
 type SessionEventGroup = { session: string; actor: string; model: string | null };
 
+/** Actors kept in one card's worker set. A card has one claimant at a time and a handful of
+ * re-claims is normal, so the set is capped rather than left unbounded. */
+const MAX_CARD_WORKERS = 32;
+
 /**
- * The events group-by ADR 0026 §1 describes: one row per distinct session key that wrote on
- * this card, with the actor and declared model from that session's most recent write here.
- * SQLite takes the bare `actor`/`model` columns from the row that produced `MAX(seq)`, the same
- * trick `boardActors` already relies on.
+ * Who actually worked a card (ADR 0027): every actor that ever claimed it, plus whoever holds
+ * it now. Creating a card, commenting on it, asking about it, or closing someone else's Land
+ * card does not make you a worker — a conductor does all four from its own session without
+ * ever running the card.
+ *
+ * An empty set means nobody has worked the card yet, and a card nobody has worked has no run.
+ */
+export function cardWorkers(db: Database, boardId: string, cardNum: number): Set<string> {
+  const rows = db
+    .query(
+      `SELECT actor FROM events
+       WHERE board_id = ? AND card_num = ? AND type = 'card.claimed'
+       GROUP BY actor ORDER BY MAX(seq) DESC LIMIT ?`,
+    )
+    .all(boardId, cardNum, MAX_CARD_WORKERS) as { actor: string }[];
+  const workers = new Set(rows.map((r) => r.actor));
+  const card = db.query(`SELECT assignee FROM cards WHERE board_id = ? AND num = ?`).get(boardId, cardNum) as
+    | { assignee: string | null }
+    | null;
+  if (card?.assignee) workers.add(card.assignee);
+  return workers;
+}
+
+/**
+ * The events group-by ADR 0026 §1 describes, narrowed by ADR 0027: one row per distinct session
+ * key that wrote on this card *as one of its workers*, with the actor and declared model from
+ * that session's most recent such write. SQLite takes the bare `actor`/`model` columns from the
+ * row that produced `MAX(seq)`, the same trick `boardActors` already relies on.
  */
 function sessionGroupsForCard(db: Database, boardId: string, cardNum: number): SessionEventGroup[] {
+  const workers = [...cardWorkers(db, boardId, cardNum)];
+  if (workers.length === 0) return [];
+  const placeholders = workers.map(() => "?").join(",");
   return db
     .query(
       `SELECT session, actor, model, MAX(seq) AS seq
-       FROM events WHERE board_id = ? AND card_num = ? AND session IS NOT NULL
+       FROM events WHERE board_id = ? AND card_num = ? AND session IS NOT NULL AND actor IN (${placeholders})
        GROUP BY session`,
     )
-    .all(boardId, cardNum) as SessionEventGroup[];
+    .all(boardId, cardNum, ...workers) as SessionEventGroup[];
 }
 
-/** Other card numbers this session key wrote on, anywhere on this board — a session is a run,
- * not a per-board notion, but "alsoWorked" is only ever shown next to a card on one board. */
+/** Other card numbers this session key *worked*, anywhere on this board — a session is a run,
+ * not a per-board notion, but "alsoWorked" is only ever shown next to a card on one board.
+ * ADR 0027: claiming is what makes a card yours, so a session that only created or commented on
+ * a card has not also worked it. */
 function alsoWorkedFor(db: Database, boardId: string, session: string, excludeCardNum: number): number[] {
   const rows = db
     .query(
       `SELECT DISTINCT card_num AS num FROM events
-       WHERE board_id = ? AND session = ? AND card_num IS NOT NULL AND card_num != ?
+       WHERE board_id = ? AND session = ? AND type = 'card.claimed' AND card_num IS NOT NULL AND card_num != ?
        ORDER BY num`,
     )
     .all(boardId, session, excludeCardNum) as { num: number }[];
@@ -78,20 +111,22 @@ export function sessionsForCard(db: Database, boardId: string, cardNum: number):
 export function sessionsForActor(db: Database, boardId: string, actor: string): HarnessSessionTelemetry[] {
   const groups = db
     .query(
-      `SELECT session, actor, model, card_num, MAX(seq) AS seq
+      `SELECT session, actor, model, card_num, MAX(seq) AS seq,
+              MAX(CASE WHEN type = 'card.claimed' THEN 1 ELSE 0 END) AS claimed
        FROM events WHERE board_id = ? AND actor = ? AND session IS NOT NULL
        GROUP BY session, card_num`,
     )
-    .all(boardId, actor) as (SessionEventGroup & { card_num: number | null })[];
+    .all(boardId, actor) as (SessionEventGroup & { card_num: number | null; claimed: number })[];
   if (groups.length === 0) return [];
 
   // Collapse per (session, card_num) rows into one per session: keep the freshest declared
-  // model and union alsoWorked from every card_num bucket that session touched.
+  // model and union the cards that session *claimed* (ADR 0027 — creating or commenting on a
+  // card is not working it, so it does not belong in "also worked").
   const bySession = new Map<string, { model: string | null; cards: Set<number> }>();
   for (const g of groups) {
     const entry = bySession.get(g.session) ?? { model: null, cards: new Set<number>() };
     entry.model = g.model ?? entry.model;
-    if (g.card_num !== null) entry.cards.add(g.card_num);
+    if (g.card_num !== null && g.claimed === 1) entry.cards.add(g.card_num);
     bySession.set(g.session, entry);
   }
   const keys = [...bySession.keys()];
