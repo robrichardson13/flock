@@ -98,6 +98,11 @@ No join table, no claims table, no new notion of identity. A card worked across 
 two rows; a session that worked three cards appears on three cards. Both are true statements and
 neither needs new machinery.
 
+> **Narrowed by ADR 0027.** Any event was too generous: a conductor creates, comments on, asks
+> about and closes cards it never works, and every one of those linked its session to the card.
+> The query now also requires `actor IN (<the card's workers>)` — the actors that claimed it,
+> plus its current assignee.
+
 **Add one table, `harness_sessions`, keyed by that run key**, holding everything that is a
 property of the session rather than of the card:
 
@@ -193,6 +198,12 @@ already built.
 Its known weakness, measured: inside a subagent that variable is the **parent's** session id and
 there is no per-agent variable, so N subagents on N cards report one key. The numbers then
 describe the whole conducted run, which is a true and useful reading, just a coarse one.
+
+> **Amended by ADR 0027.** Coarse turned out to mean wrong: on a conducted board the conductor's
+> transcript was what almost every card rendered. There is still no per-agent variable, but
+> Claude Code flushes the `tool_use` line for a Bash command to the subagent's own transcript
+> *before* running it, so a write can find its own `agentId` and carry
+> `claude-code:<sid>#<agentId>`. ADR 0027 also narrows the card→session link below.
 
 **The numbers.** A **reader** resolves the transcript from `(cwd, session id)` by the documented
 encoding, reads it, and upserts a `harness_sessions` row. Because the path is derivable, nothing
@@ -429,11 +440,18 @@ is one file plus one line in the registry, and it cannot reach core even by acci
   `ENDED_SESSION_MAX_AGE_MS` (seven days). There is no install that makes it prompter.
 - **A subagent reports its parent's session.** Its numbers describe the whole conducted run. The
   UI must therefore never present a session total as "what this card cost"; `alsoWorked` exists so
-  it cannot.
+  it cannot. **Superseded by ADR 0027** for every write made after it: a subagent now carries its
+  own `#<agentId>` and reads its own transcript. Events written before it keep the parent's key
+  and this consequence still describes them.
 - **Context max depends on a weekly-expiring, content-hashed cache file.** Glob it, tolerate its
-  absence, and fall back to no maximum (render the number, not the bar) rather than a guessed one.
-  The `[1m]` variant is invisible in the transcript, so a 200K-mode run on a 1M-catalogued model
-  would read as emptier than it is.
+  absence, and fall back to no maximum (render the tokens used, no bar and no percentage) rather
+  than a guessed one. Two corrections since (card 106): the cache holds more than one
+  `published-*.json` — a tiny `published-floor.json` sentinel of a different shape sits beside the
+  real catalogue *with the same mtime*, so "read the newest file" was a coin flip that could lose
+  every window on the machine; every candidate is now tried in order. And the `[1m]` variant is
+  **not** invisible after all: it rides on the model id (`claude-opus-5[1m]`), which is the
+  harness stating the window outright, so it outranks the catalogue. Sonnet, Opus and Fable are
+  catalogued at 1,000,000; Haiku 4.5 at 200,000.
 - **Transcript paths in the database go stale** when `~/.claude` is pruned. A missing file means
   `liveness = unknown` and the last stored numbers stand; it is never an error.
 - **Schema v7 means every worktree on this branch seeds a private database copy** (ADR 0021) until

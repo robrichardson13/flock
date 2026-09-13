@@ -57,6 +57,8 @@ function boardWithScoutCard() {
   const flock = new Flock(":memory:");
   const board = flock.createBoard(ada, { title: "Telemetry" });
   const card = flock.createCard(scout, board.id, { title: "X" });
+  // ADR 0027: a card's run is its workers' sessions, so scout has to actually claim it.
+  flock.claimCard(scout, board.id, card.num);
   return { flock, board, card };
 }
 
@@ -241,6 +243,7 @@ describe("cost lands retroactively: a real fixture transcript with no hook invol
       const board = flock.createBoard(ada, { title: "B" });
       const actor: Actor = { name: "scout", kind: "agent", session: key };
       flock.createCard(actor, board.id, { title: "X" });
+      flock.claimCard(actor, board.id, 1);
       // Seed the row the way this agent's own machine would on `done`/`release` (ADR 0026 §2
       // "the CLI, on done and release"): cwd known, no telemetry read yet. That is what lets
       // the server later resolve a reader against this session with no cwd of its own.
@@ -376,6 +379,7 @@ describe("GET /api/boards/:b/cards/:n telemetry and duration", () => {
     const { flock, app } = appWithReader();
     const board = flock.createBoard(ada, { title: "B" });
     const card = flock.createCard(scout, board.id, { title: "X" });
+    flock.claimCard(scout, board.id, card.num);
 
     const offLoopback = await app.request(`/api/boards/${board.id}/cards/${card.num}`);
     const offBody = (await offLoopback.json()) as ApiBody;

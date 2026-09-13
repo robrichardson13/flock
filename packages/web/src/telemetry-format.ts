@@ -32,10 +32,13 @@ function trimDecimal(n: number): string {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
-/** `182K / 1M`. Either half missing collapses the whole reading to the dash: a used-without-
- *  max or max-without-used number reads as more certain than it is. */
+/** `182K / 1M`, or a bare `182K` when no catalogue on this machine knows the model's window.
+ *  The tokens used are a real reading and are shown either way; what an unknown window costs
+ *  you is the denominator and the percentage, never the number itself. A max with no used
+ *  reading behind it is still the dash — a ceiling alone says nothing about the run. */
 export function formatContext(used: number | undefined, max: number | undefined): string {
-  if (typeof used !== "number" || typeof max !== "number" || max <= 0) return UNKNOWN;
+  if (typeof used !== "number" || !Number.isFinite(used)) return UNKNOWN;
+  if (typeof max !== "number" || max <= 0) return formatCompactNumber(used);
   return `${formatCompactNumber(used)} / ${formatCompactNumber(max)}`;
 }
 

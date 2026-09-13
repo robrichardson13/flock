@@ -56,7 +56,9 @@ export function detectRuntime(env: NodeJS.ProcessEnv = process.env): Runtime {
 
     // ADR 0026: the run key is `<family>:<session id>`, family not version, so it survives a
     // harness upgrade mid-run. Inside a subagent this is still the *parent's* session id — there
-    // is no per-agent env var — which is a known, documented coarseness (ADR 0026 §2).
+    // is no per-agent env var. Core stays pure and env-only, so the `#<agentId>` suffix that
+    // makes a subagent's run its own is added by the CLI from the subagent transcript Claude
+    // Code has already written (`refineRunKey` in `@flock/harness/claude-code-self`, ADR 0027).
     const sessionId = env.CLAUDE_CODE_SESSION_ID?.trim();
     if (sessionId) out.session = `claude-code:${sessionId}`;
   }
