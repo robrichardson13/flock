@@ -18,7 +18,7 @@ claude-opus-5   $4.34   ███████░░░ 148K / 1M (15%)   21m   4
 | --- | --- |
 | model chip | the model observed in the transcript, not the one the agent declared. Where the two disagree, the tooltip says what was declared. |
 | cost | the harness's own dollar figure, never a price table of flock's. |
-| context bar | the last assistant turn's input + cache-read + cache-write tokens, against the model's maximum from the harness's model catalog. |
+| context bar | the last assistant turn's input + cache-read + cache-write tokens, against the model's window. The window comes from the harness's own model catalogue (Sonnet, Opus and Fable are 1M; Haiku 4.5 is 200K), unless the model id carries a variant tag like `claude-opus-5[1m]` — the harness stating the window outright, which wins. A model no catalogue on this machine knows shows the tokens used with **no bar and no percentage**; flock never guesses a denominator. |
 | duration | flock's own clock: `card.claimed` → `card.closed`, from the events table. The session's own wall clock is in the tooltip. |
 | tool count | tool calls in the transcript, with the top three by name on hover. |
 | liveness | `running`, `idle`, `gone` or `unknown`, plus when the session was last heard from. |

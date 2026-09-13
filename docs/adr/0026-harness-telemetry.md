@@ -444,9 +444,14 @@ is one file plus one line in the registry, and it cannot reach core even by acci
   own `#<agentId>` and reads its own transcript. Events written before it keep the parent's key
   and this consequence still describes them.
 - **Context max depends on a weekly-expiring, content-hashed cache file.** Glob it, tolerate its
-  absence, and fall back to no maximum (render the number, not the bar) rather than a guessed one.
-  The `[1m]` variant is invisible in the transcript, so a 200K-mode run on a 1M-catalogued model
-  would read as emptier than it is.
+  absence, and fall back to no maximum (render the tokens used, no bar and no percentage) rather
+  than a guessed one. Two corrections since (card 106): the cache holds more than one
+  `published-*.json` — a tiny `published-floor.json` sentinel of a different shape sits beside the
+  real catalogue *with the same mtime*, so "read the newest file" was a coin flip that could lose
+  every window on the machine; every candidate is now tried in order. And the `[1m]` variant is
+  **not** invisible after all: it rides on the model id (`claude-opus-5[1m]`), which is the
+  harness stating the window outright, so it outranks the catalogue. Sonnet, Opus and Fable are
+  catalogued at 1,000,000; Haiku 4.5 at 200,000.
 - **Transcript paths in the database go stale** when `~/.claude` is pruned. A missing file means
   `liveness = unknown` and the last stored numbers stand; it is never an error.
 - **Schema v7 means every worktree on this branch seeds a private database copy** (ADR 0021) until

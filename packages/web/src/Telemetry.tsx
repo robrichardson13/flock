@@ -95,11 +95,19 @@ function ModelChip({ t }: { t: HarnessSessionTelemetry }) {
 }
 
 /** The context bar: a point-in-time reading (ADR 0026 §3 — a compaction resets it), so the
- *  percentage describes the window now, not the run. Renders the dash, no bar at all, when
- *  either half is unknown. */
+ *  percentage describes the window now, not the run. With no reading at all it is the dash;
+ *  with a reading but no known window it is the bare token count, no bar and no percentage,
+ *  rather than a percentage of a guessed ceiling. */
 function ContextBar({ used, max }: { used: number | undefined; max: number | undefined }) {
   const pct = contextPercent(used, max);
-  if (pct === null) return <span className="run-context muted">{UNKNOWN}</span>;
+  if (pct === null) {
+    if (typeof used !== "number" || !Number.isFinite(used)) return <span className="run-context muted">{UNKNOWN}</span>;
+    return (
+      <span className="run-context" title="Context used now — this model's window is unknown on this machine">
+        <span className="run-context-label">{formatContext(used, max)}</span>
+      </span>
+    );
+  }
   return (
     <span className="run-context" title="Context used now — resets on compaction">
       <span className="run-context-bar"><span className="run-context-fill" style={{ width: `${pct}%` }} /></span>

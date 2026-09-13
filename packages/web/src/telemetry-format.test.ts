@@ -49,10 +49,20 @@ describe("formatContext", () => {
   it("renders used and max together", () => {
     expect(formatContext(182_000, 1_000_000)).toBe("182K / 1M");
   });
-  it("is unknown, not a partial fraction, when either half is missing", () => {
-    expect(formatContext(182_000, undefined)).toBe(UNKNOWN);
+  it("shows the tokens used on their own when the model's window is unknown", () => {
+    // Never a percentage of a guessed ceiling: the used count is a real reading, the
+    // denominator is what is missing.
+    expect(formatContext(182_000, undefined)).toBe("182K");
+    expect(formatContext(46_000, 0)).toBe("46K");
+    expect(contextPercent(182_000, undefined)).toBeNull();
+  });
+  it("is unknown when there is no reading behind it — a ceiling alone says nothing", () => {
     expect(formatContext(undefined, 1_000_000)).toBe(UNKNOWN);
     expect(formatContext(undefined, undefined)).toBe(UNKNOWN);
+  });
+  it("renders the real 1M window Sonnet, Opus and Fable have", () => {
+    expect(formatContext(230_000, 1_000_000)).toBe("230K / 1M");
+    expect(contextPercent(230_000, 1_000_000)).toBe(23);
   });
 });
 
