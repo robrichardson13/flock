@@ -232,17 +232,20 @@ export function CardPageSkeleton({ mobile }: { mobile: boolean }) {
     </>
   );
   // The "Created by X, updated Y" byline: real height and position (CardPage.tsx's
-  // `createdLine`), between the details list and the primary actions on mobile, between the
-  // comment feed and the actions bar on desktop — otherwise the composer below it lands
-  // where the byline's line-box and the surrounding gap would have pushed it, and the swap
-  // to real content shifts the whole compose chin down.
+  // `createdLine`), last on mobile and between the comment feed and the actions bar on
+  // desktop — otherwise the composer below it lands where the byline's line-box and the
+  // surrounding gap would have pushed it, and the swap to real content shifts the whole
+  // compose chin down.
   const createdLine = (
     <div className="muted small">
       <Line w="55%" className="sk-meta" />
     </div>
   );
+  // Card 99: two buttons is the row's maximum and its commonest width (Claim/Release beside
+  // Hold), and `--action-count` is what sizes the grid's columns — without it the placeholder
+  // would draw one full-width column and shift when the real pair arrives.
   const actions = (
-    <div className="primary-actions">
+    <div className="primary-actions" style={{ "--action-count": 2 } as CSSProperties}>
       <span className="btn sk-btn" />
       <span className="btn sk-btn" />
     </div>
@@ -288,9 +291,9 @@ export function CardPageSkeleton({ mobile }: { mobile: boolean }) {
       {mobile ? (
         <div className="screen-body card-body sk" aria-hidden>
           {body}
-          {createdLine}
           {actions}
           {comments}
+          {createdLine}
         </div>
       ) : (
         <>

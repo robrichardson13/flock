@@ -93,42 +93,31 @@ describe("the card detail body never scrolls sideways (card 30)", () => {
 });
 
 /**
- * Follow-up (the human's repro on card 30): a blocked, unassigned card's primary-actions row
- * reads "Claim anyway" (longer than plain "Claim") plus "Hold" plus "Mark done", and those
- * three `white-space: nowrap` buttons did not fit one 390px row. `.card-body`'s `overflow-x:
- * hidden` backstop above stopped that from becoming a scrollbar, but it also clipped "Mark
- * done" clean off — a button a person could no longer see or tap, worse than the scroll it
- * replaced. The fix lets the row wrap instead: `flex-wrap: wrap` on `.primary-actions`, and
- * `flex: 1 1 auto` (not the bare `flex: 1` — shorthand for `1 1 0%` — the row had) on each
- * `.btn`, so a button's hypothetical size going into the wrap decision is its real label width
- * rather than a zero basis that always looks like it fits. Confirmed live: three buttons wrap
- * to "Claim anyway" + "Hold" on one row and "Mark done" alone on the next, all fully visible,
- * zero horizontal overflow, at 390px in both Chromium and WebKit; a held card's "Release hold"
- * + "Mark done" still share one row.
+ * Follow-up (the human's repro on card 30), settled for good by card 99: a blocked, unassigned
+ * card's primary-actions row read "Claim anyway" plus "Hold" plus "Mark done", and those three
+ * `white-space: nowrap` buttons did not fit one 390px row. Card 30 let the row wrap. Card 99
+ * removed the third button instead — `cardActions.ts` caps the row at two verbs and sends the
+ * rest to the "…" menu — so the row is a grid of exactly as many equal columns as it has
+ * buttons, which cannot wrap or clip at any width. The invariant pinned here is that shape: if
+ * a later change puts the row back on auto-sized flow, the overflow comes back with it.
  */
-describe("the card's primary-actions row wraps instead of overflowing (card 30 follow-up)", () => {
+describe("the card's primary-actions row is a fixed grid, so it cannot overflow (card 99)", () => {
   const all = rules(CSS);
 
-  it(".primary-actions wraps its buttons onto a new line rather than overflowing", () => {
+  it(".primary-actions lays its buttons out as equal columns, not a wrapping flex row", () => {
     const r = all.find((x) => x.selector === ".primary-actions");
     expect(r).toBeDefined();
-    expect(declares(r!.body, "flex-wrap", /wrap/)).toBe(true);
+    expect(declares(r!.body, "display", /grid/)).toBe(true);
+    expect(declares(r!.body, "grid-template-columns", /repeat\(var\(--action-count/)).toBe(true);
   });
 
-  it("a primary-actions button's wrap-line size is its own label, not a zero flex-basis", () => {
+  it("a primary-actions button may shrink inside its column rather than widening it", () => {
     const r = all.find((x) => x.selector === ".primary-actions .btn");
     expect(r).toBeDefined();
-    expect(declares(r!.body, "flex", /^\s*1\s+1\s+auto\s*$/)).toBe(true);
+    expect(declares(r!.body, "min-width", /0/)).toBe(true);
   });
 });
 
-/**
- * The renderer side of the same bug class: a fenced code block always becomes a `<pre><code>`
- * pair, which is the only element `.md pre`'s `overflow-x: auto` targets. If a future change to
- * `splitDocumentBlocks` ever let a fenced block's content leak into a plain paragraph instead,
- * that content would lose its scroll container and fall back on the page-wide clip — no longer
- * scrollable at all, just truncated. Pinning the block shape here catches that before it ships.
- */
 describe("a fenced code block always renders as its own block, never inlined into a paragraph", () => {
   it("a 150-char unbroken line inside a fence stays a `code` block", () => {
     const longLine = "x".repeat(150);
