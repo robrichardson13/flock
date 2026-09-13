@@ -144,9 +144,11 @@ carries a run key, read from the harness's own environment, and flock uses that 
 session's transcript on this machine: cost in dollars, context used against the model's maximum,
 tool calls, wall clock, and whether that agent is still alive. A card page grows a **Run** block
 showing one row per session that worked the card, `flock telemetry` is the terminal version, and a
-board where nothing is linked looks exactly as it did before. Numbers only, same machine, never any
-transcript text — and a live session's cost renders as `—`, never as `$0.00`, because the harness
-has not computed it yet. See `docs/harness-telemetry.md`.
+board where nothing is linked looks exactly as it did before. While a session is still running the
+block is live — the duration ticks and the other readings refresh on their own every 15 seconds —
+and it freezes the moment the session ends. Numbers only, same machine, never any transcript text —
+and a live session's cost renders as `—`, never as `$0.00`, because the harness has not computed it
+yet. See `docs/harness-telemetry.md`.
 
 ## Scope and storage
 

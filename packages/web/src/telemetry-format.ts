@@ -126,12 +126,34 @@ export function totalTokens(sessions: HarnessSessionTelemetry[]): number | null 
   return sum;
 }
 
-/** Total wall-clock time across a set of sessions' own `durationMs`, or null when none has
- *  one yet (all live). Distinct from the card page's `liveDurationMs`, which is flock's own
- *  claim-to-close clock rather than the harness's session clock. */
-export function totalDurationMs(sessions: HarnessSessionTelemetry[]): number | null {
-  const known = sessions.map((s) => s.durationMs).filter((n): n is number => typeof n === "number");
+/** A session's own wall clock: the harness's reported `durationMs` once it has one (only ever
+ *  written when the session ends, ADR 0026 §3), or a live count-up from `startedAt` while it
+ *  is still running/idle — the same shape as the card page's `liveDurationMs`, just keyed off
+ *  the session's own start rather than the card's claim. Null when neither is known (a session
+ *  the reader has not resolved a start for yet). */
+export function liveSessionDurationMs(t: HarnessSessionTelemetry, nowMs: number): number | null {
+  if (typeof t.durationMs === "number") return t.durationMs;
+  if (!t.startedAt) return null;
+  const start = Date.parse(t.startedAt);
+  if (!Number.isFinite(start)) return null;
+  return Math.max(0, nowMs - start);
+}
+
+/** Total wall-clock time across a set of sessions, live ones counted up to `nowMs` via
+ *  `liveSessionDurationMs`, or null when none of them has a duration to report at all.
+ *  Distinct from the card page's `liveDurationMs`, which is flock's own claim-to-close clock
+ *  rather than the harness's session clock. */
+export function totalDurationMs(sessions: HarnessSessionTelemetry[], nowMs: number): number | null {
+  const known = sessions.map((s) => liveSessionDurationMs(s, nowMs)).filter((n): n is number => typeof n === "number");
   return known.length === 0 ? null : known.reduce((a, b) => a + b, 0);
+}
+
+/** Whether polling for fresher content is worth doing at all: at least one session the reader
+ *  has positively said is still `running` or `idle`. A session whose liveness the reader could
+ *  not determine (`unknown`, or not read yet) never drives polling on its own — only a reading
+ *  that says "still there" does, which keeps a stale/unlinked entry from polling forever. */
+export function hasLiveSession(sessions: HarnessSessionTelemetry[]): boolean {
+  return sessions.some((s) => s.liveness === "running" || s.liveness === "idle");
 }
 
 /** The top `limit` tools by call count, ties broken by name so the tooltip is stable across

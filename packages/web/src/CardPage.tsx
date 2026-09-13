@@ -12,7 +12,7 @@ import { replyQuote } from "./addToChat.tsx";
 import { draftKey, requestInsert } from "./compose.ts";
 import { buildDetailRows, type DetailRow } from "./details.ts";
 import { buildCardActions, type CardActionKey } from "./cardActions.ts";
-import { RunBlock } from "./Telemetry.tsx";
+import { RunBlock, useLivePoll } from "./Telemetry.tsx";
 import { autoFocusField, useDialogFocus } from "./focus.ts";
 import { readSnapshot, snapKey, writeSnapshot } from "./snapshot.ts";
 import { useTopBarSlot } from "./TopBar.tsx";
@@ -170,6 +170,13 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boardId, card.num, card.updatedAt]);
+  // Card 100: while a session is still working this card, the Run block's cost/context/
+  // tool/liveness readings — none of which a local tick can derive — refetch on their own
+  // rather than waiting for the next SSE-triggered reload or a manual refresh. `doing` is the
+  // same signal the block's own duration clock already keys off (`RunBlock`'s `useNow`), so a
+  // card that has moved on to `done`/`wontfix` stops polling the instant it closes, matching
+  // "freezes at its final value".
+  useLivePoll(card.status === "doing", reload);
 
   // Toggle a reaction on a comment, then reload right away rather than waiting on the next
   // SSE-triggered refetch — the same "own click reads as janky if it waits" reasoning as the
