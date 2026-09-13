@@ -13,9 +13,17 @@
  * is then linear work, not exponential.
  */
 
+/**
+ * What a smart reference points at. The token carries the kind and the number rather than a
+ * URL because the tokenizer knows nothing about which board it is rendering inside; the
+ * renderer resolves it against the board in scope (`refHref` in `refs.ts`).
+ */
+export type RefKind = "card" | "decision" | "message";
+
 export type InlineToken =
   | { t: "text"; v: string }
   | { t: "code"; v: string }
+  | { t: "ref"; kind: RefKind; num: number; v: string }
   | { t: "strong" | "em" | "del"; kids: InlineToken[] }
   | { t: "link"; href: string; kids: InlineToken[] };
 

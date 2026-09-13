@@ -222,6 +222,10 @@ always show the raw text.
   https://example.com          bare links are clickable
   [text](https://example.com)  or name them
 
+References to things on the board become links in the web UI on their own, so just write them
+the way flock prints them: \`card 12\` or \`#12\` for a card, \`d8\` for a decision, \`m194\` for a
+channel message. Inside backticks they stay literal.
+
 Newlines are preserved. Nothing else is interpreted: no tables, no HTML. Links open in a new tab
 and only http, https and mailto are followed; anything else stays plain text.
 
