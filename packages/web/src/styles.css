@@ -2550,17 +2550,25 @@ html[data-topbar] .sheet { max-height: 100%; }
 
 .ask-box { background: var(--attention-bg); border: 1px solid var(--attention-line); border-radius: var(--radius); padding: var(--s3) var(--s4); display: flex; flex-direction: column; gap: var(--s2); }
 .ask-box .input { background: var(--bg-2); }
-/* #30: three buttons — Claim (anyway, on a blocked card, the row's longest label), Hold,
-   Mark done — do not all fit one 390px-wide row with room to spare, and `.btn` is
-   `white-space: nowrap` with no `min-width: 0`, so a flex item here refuses to shrink past its
-   own label's width: the row used to overflow past the edge instead of wrapping. `flex-basis:
-   auto` (not the `0%` a bare `flex: 1` sets) makes each button's hypothetical size its actual
-   label width, which is what the wrap algorithm needs to see in order to break the line
-   correctly instead of confidently fitting three zero-basis items that then blow out on
-   shrink's own floor. `flex-grow: 1` still shares out real slack when everything fits on one
-   line, same as before. */
-.primary-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
-.primary-actions .btn { flex: 1 1 auto; }
+/* Card 99: the row is at most two verbs — `cardActions.ts` sends the rest to the "…" menu —
+   so it is a grid of exactly that many equal columns rather than a flex row that has to be
+   talked out of wrapping. #30 patched an overflow here (three nowrap buttons, one of them
+   `Unassign <agent name>`, did not fit 390px) by letting the line break, which is what made
+   the block read as leftovers; with the third button gone the fix is the shape itself. Equal
+   columns also mean `Release` and `Hold` are the same size — neither reads as the afterthought
+   the ghost-on-the-end one did. `min-width: 0` lets a long label ellipsize inside its column
+   instead of pushing the column wider than its share. */
+.primary-actions { display: grid; grid-template-columns: repeat(var(--action-count, 1), 1fr); gap: var(--s2); }
+.primary-actions .btn { min-width: 0; }
+/* The quiet verb keeps its hairline here. `.btn-ghost` drops the border everywhere else
+   because it sits in a bar of chrome; in this row it fills a column of its own beside a
+   solid button, and without an edge it read as a link floating in white space rather than
+   the other half of a pair. Tinted label, no fill: still visibly the secondary one. */
+.primary-actions .btn-ghost { border-color: var(--line); }
+/* Pulled up tight under the Details group it acts on, so the two read as one block —
+   Assignee and Status say what the card is, the row underneath changes it — rather than as
+   two unrelated things a full --s4 apart. */
+.card-details + .primary-actions { margin-top: calc(var(--s2) - var(--s4)); }
 /* The card's thread is the channel's thread (thread.tsx): the same bubbles, the same
    grouping, the same --edge-x inset — .card-body already carries it — and the same 16px
    between groups the channel uses, so a comment run reads the same on either screen. What
@@ -3637,6 +3645,9 @@ html[data-topbar] .sheet { max-height: 100%; }
   .drawer .list, .drawer .brief { background: var(--bg-3); }
   .drawer .card-body > *:not(.comments):not(.primary-actions) { max-width: 68ch; }
   .drawer .card-body .md, .drawer .card-body > p { font-size: var(--t-sub); line-height: 1.55; color: var(--text); }
+  /* In the drawer the row is not a full-width grid but two auto-width buttons in a 44px
+     header, so it drops back to flow sizing. */
+  .primary-actions { display: flex; gap: var(--s2); }
   .primary-actions .btn { flex: none; }
 
   /* ---------- the panel header (#23) ----------
@@ -3662,6 +3673,9 @@ html[data-topbar] .sheet { max-height: 100%; }
   .panel-head .status-chip { flex: none; }
   .panel-head .primary-actions { flex: none; gap: var(--s2); margin: 0; }
   .panel-head .primary-actions .btn { padding: 0 var(--s3); }
+  /* Back to borderless in the header: there it is one control among chrome, not a column
+     in a two-up row, and a boxed Hold beside the boxed Release crowds a 44px bar. */
+  .panel-head .primary-actions .btn-ghost { border-color: transparent; }
 
   /* The Details group loses its fill and its radius (#16 F3): it was the only raised,
      rounded, chevroned card left on a board that #12 took every other surface off. What a

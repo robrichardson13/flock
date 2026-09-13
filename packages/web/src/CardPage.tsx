@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { api, getActorName, type Card, type CardDuration, type CardStatus, type Comment, type HarnessSessionTelemetry } from "./api.ts";
 import { type ActorRuntimes } from "./BoardView.tsx";
@@ -11,6 +11,7 @@ import { ClampedBody, failPending, hasReaction, LineComposer, mergeThread, Messa
 import { replyQuote } from "./addToChat.tsx";
 import { draftKey, requestInsert } from "./compose.ts";
 import { buildDetailRows, type DetailRow } from "./details.ts";
+import { buildCardActions, type CardActionKey } from "./cardActions.ts";
 import { RunBlock } from "./Telemetry.tsx";
 import { autoFocusField, useDialogFocus } from "./focus.ts";
 import { readSnapshot, snapKey, writeSnapshot } from "./snapshot.ts";
@@ -18,6 +19,17 @@ import { useTopBarSlot } from "./TopBar.tsx";
 import { ActionSheet, AnchoredMenu, Avatar, D_FAST, Icons, prefersReducedMotion, RuntimeTag, Sheet, STATUS_LABEL, StatusIcon, useAnyOverlayOpen, useEdgeSwipeBack, useIsMobile, usePrompt, type SheetAction } from "./ui.tsx";
 
 const STATUSES: CardStatus[] = ["todo", "doing", "awaiting-human", "done", "wontfix"];
+
+/** The glyph each card verb wears, in the row and in the "…" menu alike (card 99). */
+const ACTION_ICON: Record<CardActionKey, (size?: number) => ReactNode> = {
+  claim: Icons.hand,
+  release: Icons.undo,
+  unassign: Icons.person,
+  hold: Icons.pause,
+  unhold: Icons.pause,
+  done: Icons.check,
+  reopen: Icons.undo,
+};
 
 /** What a card caches between visits: the half of the page the board snapshot does not carry. */
 interface CardSnapshot { comments: Comment[]; blocks: number[] }
@@ -314,17 +326,33 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
   };
 
   const closed = card.status === "done" || card.status === "wontfix";
-  const mine = card.assignee === me;
+
+  const holdCard = async () => {
+    const reason = await prompt({ title: "Hold", placeholder: "Why (optional)", submit: "Hold card", hint: "No agent can claim this card until the hold is released.", allowEmpty: true });
+    if (reason !== null) act(() => api.hold(boardId, card.num, reason || undefined));
+  };
+  // One verb, performed. Which verbs there are and how they rank is `cardActions.ts`.
+  const runAction = (key: CardActionKey) => {
+    if (key === "claim") return () => act(() => api.claim(boardId, card.num, card.blocked));
+    if (key === "release" || key === "unassign") return () => act(() => api.release(boardId, card.num));
+    if (key === "unhold") return () => act(() => api.unhold(boardId, card.num));
+    if (key === "hold") return holdCard;
+    if (key === "done") return () => act(() => api.close(boardId, card.num));
+    return () => reopen("todo");
+  };
+  const { row: actionRow, overflow: actionOverflow } = buildCardActions({
+    status: card.status, assignee: card.assignee, held: card.held, blocked: card.blocked, me,
+  });
 
   // Move to, Add label and Add blocker each have a row of their own in Details now, and the
   // row says the current value while it offers the change. What is left here is what has
-  // nowhere else to live.
-  // On the phone the overflow menu is the only way back from a closed card. In the drawer
-  // Reopen is the header's primary action (#23), so it is not also an item here — the two
-  // buttons sat four inches apart saying the same word.
+  // nowhere else to live — plus, since card 99, the card verbs the two-button row could not
+  // take: `Mark done`, whose other two routes are the Status row and the composer's Resolve,
+  // and `Unassign <name>`, whose label is an agent's whole name and was the widest thing in
+  // either layout. Rare, not hidden: one tap, from the same "…" on both screens.
   const menuActions: SheetAction[] = [
     { label: "Edit title and description", icon: Icons.edit(18), onSelect: () => setEditing(true) },
-    ...(closed && mobile ? [{ label: "Reopen", icon: Icons.undo(18), onSelect: () => reopen("todo") }] : []),
+    ...actionOverflow.map((a) => ({ label: a.label, icon: ACTION_ICON[a.key](18), onSelect: runAction(a.key) })),
   ];
   const moveActions: SheetAction[] = STATUSES.map((s) => ({
     label: STATUS_LABEL[s],
@@ -451,21 +479,20 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
     </div>
   );
 
-  const holdCard = async () => {
-    const reason = await prompt({ title: "Hold", placeholder: "Why (optional)", submit: "Hold card", hint: "No agent can claim this card until the hold is released.", allowEmpty: true });
-    if (reason !== null) act(() => api.hold(boardId, card.num, reason || undefined));
-  };
-
+  // At most two verbs, equal width, never wrapping (card 99). `cardActions.ts` decides which
+  // two and what falls through to the "…" menu; this only knows how to perform one and what it
+  // should look like. Card 30's three-buttons-wrap fix goes with the third button.
   const primaryActions = (
-    <div className="primary-actions">
-      {/* Held cards hide Claim rather than disabling it: a human acting as themselves gets
-          no control that would always 409. */}
-      {!closed && !card.assignee && !card.held && <button className="btn" onClick={() => act(() => api.claim(boardId, card.num, card.blocked))}>{Icons.hand(16)} Claim{card.blocked ? " anyway" : ""}</button>}
-      {!closed && card.assignee && <button className="btn" onClick={() => act(() => api.release(boardId, card.num))}>{mine ? "Release" : `Unassign ${card.assignee}`}</button>}
-      {!closed && card.held && <button className="btn" onClick={() => act(() => api.unhold(boardId, card.num))}>{Icons.pause(16)} Release hold</button>}
-      {!closed && !card.held && <button className="btn btn-ghost" onClick={holdCard}>{Icons.pause(16)} Hold</button>}
-      {!closed && <button className="btn btn-ok" onClick={() => act(() => api.close(boardId, card.num))}>{Icons.check(16)} Mark done</button>}
-      {closed && <button className="btn" onClick={() => reopen("todo")}>{Icons.undo(16)} Reopen</button>}
+    <div className="primary-actions" style={{ "--action-count": actionRow.length } as CSSProperties}>
+      {actionRow.map((a) => (
+        <button
+          key={a.key}
+          className={`btn${a.tone === "ghost" ? " btn-ghost" : a.tone === "ok" ? " btn-ok" : ""}`}
+          onClick={runAction(a.key)}
+        >
+          {ACTION_ICON[a.key](16)} {a.label}
+        </button>
+      ))}
     </div>
   );
 
@@ -673,26 +700,29 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
 
       {/* Details sits where it belongs on both: after the body you were reading, before the
           conversation about it. Mobile then goes straight to the thread — the comments are
-          why the card was opened (#6) — and pushes the byline, the primary actions and any
-          error down after it, since they are read far less often than they used to be read
-          past. Desktop keeps its own tail — created-by and the ask box after the thread —
-          and pins the primary actions in their own bar above the composer instead of
-          interrupting the body. */}
+          why the card was opened (#6) — and pushes the byline and any error down after it,
+          since they are read far less often than they used to be read past. Desktop keeps
+          its own tail — created-by and the ask box after the thread — and keeps the actions
+          in the panel header.
+          Card 99: on the phone the actions no longer trail the page. Claim/Release and Hold
+          change what the Assignee and Status rows say, so they sit directly under that list
+          — in view when the card opens, rather than below the whole conversation where the
+          two verbs the human actually uses were the last thing on the screen. */}
       {mobile ? (
         <div className="screen-body card-body" ref={scrollerRef}>
           {titleBlock}
           {detailsList}
+          {primaryActions}
+          {errBlock}
           <RunBlock telemetry={telemetry} duration={duration} status={card.status} />
           {askBox}
           {commentsBlock}
           {/* #29: marks where the thread actually ends, for the jump-to-latest observer
-              below — not the bottom of the page, which still has the byline and actions
-              to go. A card whose whole page fits the screen never scrolls this out of
-              view, so the button never appears. */}
+              below — not the bottom of the page, which still has the byline to go. A card
+              whose whole page fits the screen never scrolls this out of view, so the button
+              never appears. */}
           <div ref={bottomSentinelRef} aria-hidden />
           {createdLine}
-          {primaryActions}
-          {errBlock}
         </div>
       ) : (
         <>
