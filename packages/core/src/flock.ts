@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { ATTACHMENT_MIMES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES, ORPHAN_TTL_MS, normalizeMime, sanitizeAttachmentName, sniffImageMime } from "./attachments.ts";
 import { openDatabase, readStamp, SCHEMA_VERSION, type OpenOptions } from "./db.ts";
+import { agentRow, agentRows, linkDir, linkedDirs, markInboxRead, patchAgent, unlinkCardDirs, upsertAgent, type AgentPatch, type NewAgent } from "./agents.ts";
 import { heldCardNums, INBOX_EVENT_TYPES, isForActor } from "./inbox.ts";
 import { setTaskChecked, taskItems } from "./tasks.ts";
 import type { PushSubscriptionInput, PushSubscriptionRecord } from "./notify.ts";
@@ -16,6 +17,7 @@ import {
   CLOSED_STATUSES,
   FlockError,
   type Actor,
+  type Agent,
   type ActorCard,
   type ActorCardRole,
   type ActorKind,
@@ -511,6 +513,49 @@ export class Flock {
     return { events, through: rows.length === limit ? rows[rows.length - 1]!.seq : Math.max(since, head) };
   }
 
+  // ---------- agents ----------
+
+  /** Record a session `flock spawn` started (ADR 0029 §1). */
+  registerAgent(actor: Actor, boardRef: string, input: NewAgent): Agent {
+    const b = this.board(boardRef);
+    if (input.cardNum !== null) this.card(b.id, input.cardNum);
+    this.touchActor(actor);
+    const agent = upsertAgent(this.db, b.id, input, now());
+    this.emit(actor, b.id, "agent.spawned", input.cardNum, {
+      name: agent.name,
+      harness: agent.harness,
+      model: agent.model,
+      launcher: agent.launcher,
+      ...(agent.openUrl ? { openUrl: agent.openUrl } : {}),
+    });
+    return agent;
+  }
+
+  agent(boardRef: string, name: string): Agent {
+    const b = this.board(boardRef);
+    const agent = agentRow(this.db, b.id, name);
+    if (!agent) throw new FlockError(`No agent "${name}" on board "${b.slug}"`, "not_found");
+    return agent;
+  }
+
+  /** The board's spawned agents, each with how many inbox events it has not read. */
+  agents(boardRef: string): (Agent & { unread: number })[] {
+    const b = this.board(boardRef);
+    return agentRows(this.db, b.id).map((a) => ({ ...a, unread: this.inbox(b.id, a.name, { since: a.inboxSeq }).events.length }));
+  }
+
+  updateAgent(boardRef: string, name: string, patch: AgentPatch): Agent {
+    const b = this.board(boardRef);
+    const agent = patchAgent(this.db, b.id, name, patch, now());
+    if (!agent) throw new FlockError(`No agent "${name}" on board "${b.slug}"`, "not_found");
+    return agent;
+  }
+
+  /** Move an agent's read cursor to `seq`; a no-op for an actor that was never spawned. */
+  markInboxRead(boardRef: string, name: string, seq: number) {
+    markInboxRead(this.db, this.board(boardRef).id, name, seq);
+  }
+
   /** Poll until at least one event arrives after `since`, or the timeout passes. */
   async waitForEvents(opts: { boardId?: string; since: number; timeoutMs?: number; intervalMs?: number }): Promise<Event[]> {
     const deadline = Date.now() + (opts.timeoutMs ?? 30_000);
@@ -609,9 +654,19 @@ export class Flock {
    */
   boardForDir(dir: string, opts: { includeArchived?: boolean } = {}): Board | null {
     const target = normalizeProject(dir);
-    const candidates = this.listBoards(opts).filter((b) => b.project && (target === b.project || target.startsWith(b.project + "/")));
-    candidates.sort((a, b) => b.project!.length - a.project!.length);
-    return candidates[0] ?? null;
+    const boards = new Map(this.listBoards(opts).map((b) => [b.id, b]));
+    const scopes = [
+      ...[...boards.values()].filter((b) => b.project).map((b) => ({ dir: b.project!, boardId: b.id })),
+      ...linkedDirs(this.db).filter((l) => boards.has(l.boardId)),
+    ];
+    const matches = scopes.filter((s) => target === s.dir || target.startsWith(s.dir + "/"));
+    matches.sort((a, b) => b.dir.length - a.dir.length);
+    return matches[0] ? boards.get(matches[0].boardId)! : null;
+  }
+
+  /** Scope another directory (a spawned worktree) to a board until card `cardNum` closes. ADR 0029 §4. */
+  linkDir(boardRef: string, dir: string, cardNum: number | null) {
+    linkDir(this.db, this.board(boardRef).id, normalizeProject(dir), cardNum, now());
   }
 
   /** Look up by id, slug, or unique title prefix. */
@@ -954,6 +1009,7 @@ export class Flock {
       if (closed && c.held) {
         this.emit(actor, c.boardId, "card.unheld", c.num, { title: c.title, reason: c.holdReason, heldSince: c.heldAt, heldBy: c.heldBy });
       }
+      if (closed) unlinkCardDirs(this.db, c.boardId, c.num);
       this.emit(actor, c.boardId, closed ? "card.closed" : "card.moved", c.num, { from: c.status, to: status });
       if (reason) {
         const attachments = commentId ? (this.attachmentsForOwners("comment_id", [commentId]).get(commentId) ?? []) : [];

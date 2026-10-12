@@ -11,7 +11,7 @@ import { FlockError } from "./types.ts";
  * whenever `SCHEMA` or `migrate()` below changes, and only ever add columns/tables/indexes:
  * migrations must stay additive so a newer binary can always read an older database.
  */
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /**
  * Thrown by `openDatabase` when the database's stamped `user_version` is higher than this
@@ -279,6 +279,30 @@ CREATE TABLE IF NOT EXISTS harness_sessions (
   updated_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS harness_sessions_activity ON harness_sessions(last_activity_at);
+CREATE TABLE IF NOT EXISTS board_dirs (
+  dir        TEXT PRIMARY KEY,
+  board_id   TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+  card_num   INTEGER,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agents (
+  board_id    TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL COLLATE NOCASE,
+  card_num    INTEGER,
+  harness     TEXT NOT NULL,
+  model       TEXT,
+  effort      TEXT,
+  session_key TEXT,
+  open_url    TEXT,
+  cwd         TEXT NOT NULL,
+  pid         INTEGER,
+  launcher    TEXT NOT NULL,
+  status      TEXT NOT NULL,
+  inbox_seq   INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  PRIMARY KEY (board_id, name)
+);
 `;
 
 export function openDatabase(path: string, opts: OpenOptions = {}): Database {
