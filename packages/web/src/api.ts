@@ -1,6 +1,6 @@
-import type { ActorCard, ActorCardRole, ActorProfile, Attachment, Board, BoardState, BoardSummary, Card, CardStatus, Comment, Decision, DoingCard, Event, Message, Reaction, TeamMember } from "@flock/core/types";
+import type { ActorCard, ActorCardRole, ActorProfile, Agent, Attachment, Board, BoardState, BoardSummary, Card, CardStatus, Comment, Decision, DoingCard, Event, Message, Reaction, TeamMember } from "@flock/core/types";
 
-export type { ActorCard, ActorCardRole, ActorProfile, Attachment, Board, BoardState, BoardSummary, Card, CardStatus, Comment, Decision, DoingCard, Event, Message, Reaction, TeamMember };
+export type { ActorCard, ActorCardRole, ActorProfile, Agent, Attachment, Board, BoardState, BoardSummary, Card, CardStatus, Comment, Decision, DoingCard, Event, Message, Reaction, TeamMember };
 
 export interface Snapshot {
   board: Board;
@@ -258,7 +258,7 @@ export const api = {
   /** One actor as this board knows them, plus every card they touched here. `telemetry`/
    *  `totals` are ADR 0026's addition: that actor's distinct harness sessions on this board. */
   actorProfile: (b: string, name: string) =>
-    req<ActorProfile & { telemetry: HarnessSessionTelemetry[]; totals: ActorTelemetryTotals }>("GET", `/boards/${b}/actors/${encodeURIComponent(name)}`),
+    req<ActorProfile & { agent: (Agent & { unread: number }) | null; telemetry: HarnessSessionTelemetry[]; totals: ActorTelemetryTotals }>("GET", `/boards/${b}/actors/${encodeURIComponent(name)}`),
   /** `duration`/`telemetry` are ADR 0026's addition, additive to the existing shape. */
   card: (b: string, n: number) =>
     req<{ card: Card; comments: Comment[]; blocks: number[]; duration: CardDuration; telemetry: HarnessSessionTelemetry[] }>("GET", `/boards/${b}/cards/${n}`),

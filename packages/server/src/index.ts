@@ -20,6 +20,7 @@ import {
   type DecisionSelector,
   type NotifySettingsFields,
 } from "@flock/core";
+import { gateOpenUrl, leaseClaimer, startAgentDelivery, type DeliverToAgent } from "./agents.ts";
 import { defaultSend, loadOrCreateVapidKeys, startPushPump, type PushPump, type PushSend } from "./push.ts";
 import { formatPresenceReport, isLoopbackRequest, normalizeClientInfo } from "./presence-log.ts";
 import { createRegistry, type HarnessRegistry } from "@flock/harness/registry";
@@ -57,6 +58,8 @@ export interface ServerOptions {
   /** Test seam: replaces the default harness registry (a real `ClaudeCodeReader`) that backs
    * refresh-on-read (ADR 0026) — a fake reader in tests, never the real `~/.claude`. */
   harnessRegistry?: HarnessRegistry;
+  /** Delivers a spawned worker's unread inbox through its launcher (ADR 0029 §3). Absent: no delivery pump. */
+  deliverToAgent?: DeliverToAgent;
 }
 
 function defaultHuman(): string {
@@ -207,6 +210,7 @@ export function createApp({
   now,
   pushIntervalMs,
   harnessRegistry,
+  deliverToAgent,
 }: ServerOptions) {
   const app = new Hono();
   app.use("/api/*", cors());
@@ -224,6 +228,10 @@ export function createApp({
   let pump: PushPump | null = null;
   if (vapid && send) {
     pump = startPushPump({ flock, keys: vapid, send, presence, now: clock, intervalMs: pushIntervalMs });
+  }
+  if (deliverToAgent) {
+    const leading = pump ? () => pump!.leading() : leaseClaimer(flock);
+    startAgentDelivery({ flock, deliver: deliverToAgent, leading });
   }
 
   const actorOf = (c: { req: { header(n: string): string | undefined } }): Actor => {
@@ -288,7 +296,8 @@ export function createApp({
     const profile = flock.actorProfile(b, name);
     const sessions = await telemetry.refreshActor(b, name);
     const gated = gateTranscripts(sessions, isLoopbackTelemetryContext(c));
-    return c.json({ ...profile, telemetry: gated, totals: actorTelemetryTotals(sessions) });
+    const agent = flock.agents(b).find((a) => a.name.toLowerCase() === name.toLowerCase());
+    return c.json({ ...profile, agent: agent ? gateOpenUrl(agent, isLoopbackTelemetryContext(c)) : null, telemetry: gated, totals: actorTelemetryTotals(sessions) });
   });
   app.get("/api/boards/:b/export", (c) => c.text(exportBoard(flock, c.req.param("b")), 200, { "content-type": "text/markdown; charset=utf-8" }));
 

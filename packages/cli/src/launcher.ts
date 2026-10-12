@@ -3,7 +3,7 @@
  * puts a message in front of one. The built-in launcher is one adapter per harness; a
  * `launcher` executable in config replaces it, speaking the same JSON on stdin/stdout.
  */
-import { FlockError } from "@flock/core";
+import { FlockError, type Agent } from "@flock/core";
 import type { FlockConfig } from "./update.ts";
 
 export const HARNESSES = ["claude-code", "codex", "opencode"] as const;
@@ -80,4 +80,17 @@ export function parseLaunchResult(raw: unknown, fallbackCwd: string): LaunchResu
 /** Which launcher `flock spawn` uses: the configured executable, else the built-in one. */
 export function launcherName(config: FlockConfig): string {
   return config.launcher ?? "builtin";
+}
+
+/**
+ * What the server's delivery pump calls for a push-only worker: its own launcher's `deliver`
+ * when an external launcher started it. The built-in launcher has no deliverers yet.
+ */
+export function agentDeliverer(config: FlockConfig) {
+  return async (agent: Agent, board: string, message: string): Promise<boolean> => {
+    if (!config.launcher || agent.launcher !== config.launcher || !agent.sessionKey) return false;
+    const request: DeliverRequest = { op: "deliver", board, name: agent.name, harness: agent.harness as Harness, sessionKey: agent.sessionKey, message };
+    const reply = await callExternal(config.launcher, request);
+    return typeof reply === "object" && reply !== null && (reply as { delivered?: unknown }).delivered === true;
+  };
 }

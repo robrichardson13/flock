@@ -16,7 +16,7 @@
  * skeleton stands in only where the snapshot has nothing to say.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { api, type ActorCard, type ActorProfile, type ActorTelemetryTotals, type Card, type HarnessSessionTelemetry, type TeamMember } from "./api.ts";
+import { api, type ActorCard, type ActorProfile, type ActorTelemetryTotals, type Agent, type Card, type HarnessSessionTelemetry, type TeamMember } from "./api.ts";
 import { groupActorCards, rolesCaption, sharedRoles, shortAge } from "./people.ts";
 import { ActorTelemetryStrip, useLivePoll, useNow } from "./Telemetry.tsx";
 import { hasLiveSession } from "./telemetry-format.ts";
@@ -26,7 +26,7 @@ import { Avatar, EMPTY_TEXT, RuntimeTag, Sheet, SheetBack } from "./ui.tsx";
  *  Optional here (rather than folded into `ActorProfile` itself) so `seedProfile` below —
  *  which answers from the board snapshot alone, before this route has ever been fetched —
  *  never has to fake a telemetry reading it does not have. */
-type FullProfile = ActorProfile & { telemetry?: HarnessSessionTelemetry[]; totals?: ActorTelemetryTotals };
+type FullProfile = ActorProfile & { agent?: (Agent & { unread: number }) | null; telemetry?: HarnessSessionTelemetry[]; totals?: ActorTelemetryTotals };
 
 /** What the caller can hand over from the board snapshot without another request. */
 export interface ActorSeed {
@@ -164,6 +164,19 @@ export function ActorSheet({
           {profile && profile.events > 0 ? ` · ${profile.events} ${profile.events === 1 ? "write" : "writes"}` : ""}
         </div>
       </div>
+
+      {profile?.agent && (
+        <p className="actor-agent muted small">
+          {`spawned on #${profile.agent.cardNum} · ${profile.agent.status}`}
+          {profile.agent.unread > 0 ? ` · ${profile.agent.unread} unread` : ""}
+          {profile.agent.openUrl && (
+            <>
+              {" · "}
+              <a href={profile.agent.openUrl}>Open session</a>
+            </>
+          )}
+        </p>
+      )}
 
       {profile?.telemetry && profile.telemetry.length > 0 && profile.totals && (
         <ActorTelemetryStrip telemetry={profile.telemetry} totals={profile.totals} nowMs={nowMs} />
