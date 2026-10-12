@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
  * the shape of a DOM object underneath it, it needs no browser and no running app, and it
  * fails in `bun test` rather than in a verification pass that may or may not be run again.
  */
-const SHEETS = ["styles.css", "board-desktop.css", "brand.css", "compose.css", "viewer.css"];
+const SHEETS = ["styles.css", "board-desktop.css", "brand.css", "viewer.css"];
 
 /** Properties whose value is something the user can see left behind. `cursor`, `z-index` and
  *  friends are not: a stuck one paints nothing. */

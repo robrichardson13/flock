@@ -5,7 +5,6 @@ import { installNoScrollFocus } from "./focus.ts";
 import "./styles.css";
 import "./board-desktop.css";
 import "./brand.css";
-import "./compose.css";
 import "./viewer.css";
 // Importing this syncs the theme-color meta to the app's chrome colour, before the first
 // paint.

@@ -1226,6 +1226,8 @@ export const Icons = {
   check: (s?: number) => <I size={s} d="M5 12l5 5 9-10" />,
   undo: (s?: number) => <I size={s} d="M9 14L4 9l5-5M4 9h9a7 7 0 0 1 0 14h-3" />,
   hand: (s?: number) => <I size={s} d="M7 11V6a1.5 1.5 0 0 1 3 0v5M10 10V4a1.5 1.5 0 0 1 3 0v6M13 10V5a1.5 1.5 0 0 1 3 0v8M16 11a1.5 1.5 0 0 1 3 0v4a7 7 0 0 1-14 0v-3a1.5 1.5 0 0 1 3 0" />,
+  expand: (s?: number) => <I size={s} d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />,
+  shrink: (s?: number) => <I size={s} d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />,
   attach: (s?: number) => <I size={s} d="M8 12l6.5-6.5a3 3 0 0 1 4.24 4.24L9.5 19a5 5 0 0 1-7.07-7.07L13 1.5" />,
   /** Blocked, on a list row: a padlock, small enough to sit inside a line of text. */
   lock: (s?: number) => <I size={s} d="M6 11h12v9H6zM9 11V8a3 3 0 0 1 6 0v3" />,

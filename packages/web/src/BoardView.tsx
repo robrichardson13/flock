@@ -43,7 +43,6 @@ import {
   useMovedIds,
   useNewIds,
   usePaneGrowth,
-  useScrollCollapse,
   useScrollRestore,
   useStickToBottom,
   type ItemId,
@@ -1834,19 +1833,10 @@ function Channel({ boardId, snap, onSent }: { boardId: string; snap: Snapshot; o
   });
   const mobile = useIsMobile();
   const hasFinePointer = useHasFinePointer();
-  // The `.pane` ancestor `--composer-h` is already published onto (thread.tsx's
-  // LineComposer) — `useScrollCollapse` writes its own continuous `--composer-collapse`
-  // custom property on the same element, so styles.css can read both off one ancestor.
-  const paneRef = useRef<HTMLDivElement>(null);
   // Desktop only (ADR 0014): "Add to chat" watches the selection inside `ref` (the same
   // scroller `useStickToBottom` already owns) and offers a tip that quotes it into this
   // pane's own composer.
   const addToChat = useAddToChat(ref, !mobile && hasFinePointer);
-  // Phone only (#2, continuous per #4): scrolling up toward older messages continuously
-  // shrinks the chin toward the card detail composer's resting footprint; scrolling back
-  // down, or being pinned to the bottom (`atBottom`, reusing `useStickToBottom`'s own notion
-  // rather than a second one), always grows it back to full size.
-  const scrollCollapse = useScrollCollapse(ref, mobile, paneRef);
   const newIds = useNewIds(messages.map((m) => m.id));
   // No mount entrance here (#5, reworked): this pane is pinned to the bottom, so the
   // messages on screen are the tail of the list — exactly the ones a top-down stagger holds
@@ -1871,16 +1861,9 @@ function Channel({ boardId, snap, onSent }: { boardId: string; snap: Snapshot; o
     }
   };
   return (
-    <div className="pane" ref={paneRef}>
+    <div className="pane">
       <div className="pane-body">
-        <div
-          className="pane-scroll chan-scroll"
-          ref={ref}
-          onScroll={() => {
-            onScroll();
-            scrollCollapse.onScroll();
-          }}
-        >
+        <div className="pane-scroll chan-scroll" ref={ref} onScroll={onScroll}>
           {messages.length === 0 && <div className="muted pad">{EMPTY_TEXT}</div>}
           {groups.map((group) => (
             <ThreadGroup
@@ -1929,8 +1912,7 @@ function Channel({ boardId, snap, onSent }: { boardId: string; snap: Snapshot; o
       />
       <LineComposer
         className="card-composer"
-        compact={mobile && scrollCollapse.collapsed}
-        onFocusChange={scrollCollapse.setFocusOverride}
+        compact={mobile}
         placeholder="Message the team"
         action="Send"
         boardId={boardId}
@@ -2045,22 +2027,9 @@ function archivedNote(d: Decision): string {
 
 function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap: Snapshot; onChange: () => void; newIds: ReadonlySet<string | number> }) {
   const mobile = useIsMobile();
-  // #8: the same scroll-linked collapse the channel uses, on the same hook and the same CSS.
-  // This pane opens at the top, so the shared distance-from-bottom mapping rests it collapsed
-  // and expands it as the reader reaches the newest decisions — no second mode.
-  const paneRef = useRef<HTMLDivElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const scrollCollapse = useScrollCollapse(scrollRef, mobile, paneRef);
   // Top-anchored, same as Cards: restored and remembered directly, no bottom pin to defer to.
   const restored = useMemo(() => readScroll(snap.board.slug, "decisions"), [snap.board.slug]);
   const restoreRef = useScrollRestore<HTMLDivElement>(restored, (y) => rememberScroll(snap.board.slug, "decisions", y));
-  const combinedScrollRef = useCallback(
-    (el: HTMLDivElement | null) => {
-      (scrollRef as { current: HTMLDivElement | null }).current = el;
-      (restoreRef as { current: HTMLDivElement | null }).current = el;
-    },
-    [scrollRef, restoreRef],
-  );
   // `newIds` comes from BoardView's own top-level baseline (arrivals over SSE), and that is
   // now the only thing that animates here: the mount entrance went with Channel's and
   // Activity's (#5, reworked), leaving the pane crossfade to carry the list in.
@@ -2096,8 +2065,8 @@ function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap:
       setArchived((prev) => (prev ? prev.filter((d) => d.num !== num) : prev));
     }).catch(() => {});
   return (
-    <div className="pane" ref={paneRef}>
-      <div className="pane-scroll" ref={combinedScrollRef} onScroll={scrollCollapse.onScroll}>
+    <div className="pane">
+      <div className="pane-scroll" ref={restoreRef}>
         {snap.decisions.length === 0 && <div className="muted pad">{EMPTY_TEXT}</div>}
         {snap.decisions.map((d) => (
           <div key={d.id} className={`decision${enterClass(entrants.has(d.id))}`} style={enterDelay(orders.get(d.id))}>
@@ -2136,8 +2105,7 @@ function Decisions({ boardId, snap, onChange, newIds }: { boardId: string; snap:
       </div>
       <LineComposer
         className="card-composer"
-        compact={mobile && scrollCollapse.collapsed}
-        onFocusChange={scrollCollapse.setFocusOverride}
+        compact={mobile}
         placeholder="Record a decision"
         action="Record"
         address={{ board: boardId, pane: "decisions" }}
