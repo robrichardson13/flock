@@ -83,3 +83,8 @@ path when you made one, and flock links it to the board until the card closes.
 
 Optional, for harnesses that cannot pull their own inbox: put `message` in front of the session.
 Reply `{ "delivered": true }`, or `{ "delivered": false }` to leave it unread for later.
+
+`flock serve` calls it: every five seconds the process holding the push lease (ADR 0023) gathers
+each running worker's unread inbox into one message and delivers it, then moves the worker's
+read cursor past it. Claude Code workers are never delivered to; they pull through a Monitor on
+`flock inbox --follow`, and a delivery as well would say everything twice.

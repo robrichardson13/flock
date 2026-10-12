@@ -525,7 +525,10 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       const staticDir = resolve(import.meta.dir, "../../web/dist");
       const assets = await embeddedAssets();
       const hostname = resolveHost(str(flags.host), process.env);
-      const server = serve({ flock, dbPath: ctx.dbPath, port, hostname, staticDir, assets, installScriptPath, flockHome: flockHome() });
+      const { agentDeliverer } = await import("./launcher.ts");
+      const { readConfig } = await import("./update.ts");
+      const deliverToAgent = agentDeliverer(readConfig());
+      const server = serve({ flock, dbPath: ctx.dbPath, port, hostname, staticDir, assets, installScriptPath, flockHome: flockHome(), deliverToAgent });
       // The first advertisedUrls entry, never the literal bind host: a wildcard bind would
       // otherwise print/--open the unusable `http://0.0.0.0:PORT`. `FLOCK_TAILSCALE_URL` is set by
       // `up --foreground --tailscale` just above, before this same process fell through to
