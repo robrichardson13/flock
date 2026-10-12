@@ -11,9 +11,9 @@ import { DEFAULT_MAX_FILES_GLOBBED } from "./limits.ts";
 
 export const CLAUDE_CODE_FAMILY = "claude-code";
 
-/** `~/.claude` by default; overridable so tests never touch the real home directory. */
+/** `$CLAUDE_CONFIG_DIR`, else `~/.claude`; overridable so tests never touch the real home directory. */
 export function claudeHome(override?: string): string {
-  return override ?? join(homedir(), ".claude");
+  return override ?? (process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));
 }
 
 /** The cwd encoding: every non-alphanumeric character becomes `-`. Verified against 118 real
