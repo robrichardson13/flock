@@ -45,6 +45,21 @@ describe("agents", () => {
     expect(f.agents(slug)[0]!.unread).toBe(0);
   });
 
+  test("a mention sent after the card exists but before its agent registers still arrives", () => {
+    const { f, slug, card } = fresh();
+    f.say(builder, slug, "@scout the parser contract is in card 1");
+    f.registerAgent(conductor, slug, scoutOn(card));
+    expect(f.agents(slug)[0]!.unread).toBe(1);
+  });
+
+  test("a mention from before the agent's card existed is not replayed", () => {
+    const { f, slug } = fresh();
+    f.say(builder, slug, "@scout from an earlier run");
+    const later = f.createCard(rob, slug, { title: "Lexer" });
+    f.registerAgent(conductor, slug, scoutOn(later.num));
+    expect(f.agents(slug)[0]!.unread).toBe(0);
+  });
+
   test("spawning the same name again replaces the session but keeps what it has not read", () => {
     const { f, slug, card } = fresh();
     f.registerAgent(conductor, slug, scoutOn(card));

@@ -45,6 +45,8 @@ export async function supervise(spec: SuperviseSpec) {
     stderr: Bun.file(join(spec.logDir, "session.err")),
   });
   log(`started pid ${child.pid}: ${spec.argv.join(" ")}`);
+  // Without this a `kill <supervisor>` orphans the session and leaves the row "running".
+  process.on("SIGTERM", () => child.kill());
   child.stdin.write(`${JSON.stringify({ type: "user", message: { role: "user", content: spec.prompt } })}\n`);
   await child.stdin.flush();
 

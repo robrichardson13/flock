@@ -5,6 +5,7 @@ import { ATTACHMENT_MIMES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES, OR
 import { openDatabase, readStamp, SCHEMA_VERSION, type OpenOptions } from "./db.ts";
 import { agentRow, agentRows, linkDir, linkedDirs, markInboxRead, patchAgent, unlinkCardDirs, upsertAgent, type AgentPatch, type NewAgent } from "./agents.ts";
 import { heldCardNums, INBOX_EVENT_TYPES, isForActor } from "./inbox.ts";
+import { mentionsActor } from "./mentions.ts";
 import { setTaskChecked, taskItems } from "./tasks.ts";
 import type { PushSubscriptionInput, PushSubscriptionRecord } from "./notify.ts";
 import { assertDeclarableLevel, resolveNotifySettingsFields, clampSettledThreshold, type NotifySettings, type NotifySettingsFields } from "./notify-levels.ts";
@@ -520,7 +521,7 @@ export class Flock {
     const b = this.board(boardRef);
     if (input.cardNum !== null) this.card(b.id, input.cardNum);
     this.touchActor(actor);
-    const agent = upsertAgent(this.db, b.id, input, now(), this.lastSeq(b.id));
+    const agent = upsertAgent(this.db, b.id, input, now(), this.inboxStart(b.id, input.name, input.cardNum));
     this.emit(actor, b.id, "agent.spawned", input.cardNum, {
       name: agent.name,
       harness: agent.harness,
@@ -529,6 +530,27 @@ export class Flock {
       ...(agent.openUrl ? { openUrl: agent.openUrl } : {}),
     });
     return agent;
+  }
+
+  /**
+   * A new agent's inbox opens at spawn, except for teammates' @mentions of it since its card was
+   * created: workers spawn in parallel, so one can be addressed before its own spawn lands.
+   */
+  private inboxStart(boardId: string, name: string, cardNum: number | null): number {
+    const head = this.lastSeq(boardId);
+    if (cardNum === null) return head;
+    const rows = this.db
+      .query(
+        `SELECT * FROM events WHERE board_id = ? AND type IN ('message.posted', 'comment.posted')
+         AND seq > (SELECT seq FROM events WHERE board_id = ? AND card_num = ? AND type = 'card.created' ORDER BY seq LIMIT 1)
+         ORDER BY seq`,
+      )
+      .all(boardId, boardId, cardNum) as EventRow[];
+    const early = rows.find((r) => {
+      const e = this.rowToEvent(r);
+      return e.actor.toLowerCase() !== name.toLowerCase() && typeof e.data.body === "string" && mentionsActor(e.data.body, name);
+    });
+    return early ? early.seq - 1 : head;
   }
 
   findAgent(boardRef: string, name: string): Agent | null {

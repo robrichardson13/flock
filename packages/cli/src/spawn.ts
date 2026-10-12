@@ -71,7 +71,7 @@ export function workerPrompt(board: string, card: Pick<Card, "num" | "title">, n
 2. Watch your inbox for the whole session: arm a persistent Monitor on \`flock inbox ${board} --as ${name} --follow --json\`.
 3. Claim the card (\`flock claim ${board} ${card.num} --as ${name}\`), work it, and close it with \`flock done\`, or \`flock release\` it if you cannot finish.
 
-Once the card is closed or released and your inbox is quiet, stop.`;
+After the card is closed or released, keep the Monitor armed and answer what still reaches you; your session is ended for you once your inbox goes quiet.`;
 }
 
 /** Whether a worker's process is still there. Only meaningful on the machine that spawned it. */
