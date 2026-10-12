@@ -1,6 +1,6 @@
 ---
 name: flock
-version: 1.1.0
+version: 1.1.1
 description: >-
   USER-INVOCABLE ONLY. `/flock [goal]` turns this session into the conductor of a long
   effort: the plan and decisions live on this directory's flock board, every heavy step runs
@@ -113,7 +113,7 @@ instead of replacing it.
 ## Listen to the board
 
 The web UI is the human's side of the conversation. Every human write lands in the board's event
-log. Arm this as a **persistent Monitor** (description "human activity on the flock board")
+log. Arm this as a Monitor (description "human activity on the flock board", `timeout_ms: 1800000`)
 and each one becomes a notification in your session:
 
 ```sh
@@ -134,8 +134,11 @@ while true; do
 done
 ```
 
-Agent writes are filtered out, so the stream is only the human. Arm it once per session; a resumed
-session with no live monitor arms it again before anything else. If a notification looks
+Agent writes are filtered out, so the stream is only the human. A Monitor lives at most 30 minutes,
+whatever `timeout_ms` asks for. Every "Monitor expired" notice for it means re-arm it now, in that
+same turn, then run `flock log` and handle any human event that landed while it was down. The same
+goes for any other Monitor the run depends on. A resumed session with no live monitor arms it
+again before anything else. If a notification looks
 stale or you suspect the monitor died, `flock log` shows the last thirty events for a
 snapshot, then re-arm.
 
