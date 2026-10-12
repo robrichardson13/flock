@@ -87,9 +87,9 @@ describe("shellHeight", () => {
     expect(shellHeight(base)).toBe(793);
   });
 
-  it("still corrects the status bar and the accessory pill under a real keyboard", () => {
-    // The device's shrunk reading with a field focused: 417 - (852 - 793) - 37.
-    expect(shellHeight({ ...base, raw: 417, clientHeight: 852, keyboard: true })).toBe(321);
+  it("is the visual viewport, uncorrected, under a real keyboard", () => {
+    // Subtracting the status bar and accessory pill here left a ~100pt band above the keyboard.
+    expect(shellHeight({ ...base, raw: 417, clientHeight: 852, keyboard: true })).toBe(417);
   });
 
   it("does not take that correction from a short viewport alone — the #10 misfire", () => {

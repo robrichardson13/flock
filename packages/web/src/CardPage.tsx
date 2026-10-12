@@ -105,11 +105,8 @@ export function CardPage({ boardId, boardSlug, card, allCards, actors, onChange,
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
   const composerWrapRef = useRef<HTMLDivElement>(null);
   const [bottomHidden, setBottomHidden] = useState(false);
-  // #29 reopened: starting a comment (the field focused, or already holding a draft) always
-  // put the button over the very composer the human just opened to type into. `LineComposer`
-  // already knows this as its own `expanded` state (compact + focused/non-empty/staged); it
-  // is lifted here via `onExpandedChange` so the button can fold that in without duplicating
-  // the focus/draft/staged tracking a second time.
+  // #29 reopened: the button must not sit over the editor the human just opened to type
+  // into, so `LineComposer` reports its open/closed state up through `onExpandedChange`.
   const [composerExpanded, setComposerExpanded] = useState(false);
   const showJump = bottomHidden && !composerExpanded;
   const [composerH, setComposerH] = useState(0);

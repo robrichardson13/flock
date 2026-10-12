@@ -137,7 +137,8 @@ const isField = (el: Element | null): boolean =>
  * moment they arrive, and a prediction nothing confirms is dropped after ~700ms (a hardware
  * keyboard, where no keyboard ever comes).
  */
-const KB_STORE = "flock.kbh";
+// Bumped past heights recorded while shellHeight still subtracted the status bar and pill.
+const KB_STORE = "flock.kbh2";
 const orientationKey = () => `${window.screen?.width ?? 0}x${window.screen?.height ?? 0}`;
 
 function readKbHeights(): Record<string, number> {
@@ -196,18 +197,8 @@ function useVisualViewportHeight() {
       rest = Math.max(rest, window.innerHeight);
       const zoomed = (vv?.scale ?? 1) > 1.01;
       const raw = vv ? vv.height : window.innerHeight;
-      // #34: in the home-screen app the layout viewport starts under the status bar (page
-      // y=0 is 59pt down the screen), but while a keyboard is up iOS reports the visual
-      // viewport as *screen* height minus keyboard, as if the page began at the top of the
-      // screen. That puts the reported bottom edge 59pt inside the keyboard. The gap is the
-      // screen height minus the resting layout height, and it is taken off only in
-      // standalone, only while the viewport is shrunk, and only when it is plausibly a
-      // status bar (under 100pt), so nothing at rest or in Safari changes.
-      // It also draws the keyboard's accessory pill (arrows and checkmark, 37pt) inside
-      // that viewport, where Safari counts it as keyboard. Taking the pill off too puts a
-      // sheet on top of the pill with its normal chin, which is the Safari look.
-      // #16: `shellHeight` owns both halves of this — the correction under a real keyboard, and
-      // the floor that makes the standalone shell fill the glass when there is none. See vv.ts.
+      // #16: `shellHeight` owns the floor that makes the standalone shell fill the glass when
+      // no keyboard is up; under a keyboard the visual viewport is used as-is. See vv.ts.
       const input = {
         raw,
         innerHeight: window.innerHeight,

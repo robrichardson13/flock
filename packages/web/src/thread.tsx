@@ -33,6 +33,7 @@ import { clearDraft, draftKey, getDraft, saveDraft, shouldSendOnEnter, subscribe
 import { joinDraft } from "./addToChat.tsx";
 import { hasHighlight, highlightDraft } from "./draftHighlight.ts";
 import { useAutoGrow } from "./autogrow.ts";
+import { useComposerExpansion } from "./composerExpansion.ts";
 import { focusNoScroll, shouldBlurOnSend } from "./focus.ts";
 import { ActorTap, Avatar, Icons, Sheet, useHasFinePointer, useIsMobile } from "./ui.tsx";
 
@@ -747,7 +748,6 @@ export function LineComposer({
   onTextChange,
   compact,
   onExpandedChange,
-  onFocusChange,
 }: {
   placeholder: string;
   action: string;
@@ -771,37 +771,20 @@ export function LineComposer({
   className?: string;
   /** Told what is in the field, for callers that gate something on a half-typed message. */
   onTextChange?: (text: string) => void;
-  /** Card page only (#6): idle, this collapses to a single-line field and a send button —
-   *  `above` and the attach control disappear rather than standing over an empty field — and
-   *  restores its full shape the moment the field is focused, on the same field, so nothing
-   *  remounts. It collapses back on blur only while the field is empty and nothing is
-   *  staged, so a draft in progress never vanishes out from under a stray tap elsewhere.
-   *  The channel and decisions composers do not pass this and are unaffected. */
+  /** Phone only: at rest this is a single-line field and a send button — `above` and the
+   *  attach control are not rendered — and tapping in opens it into an editor, on the same
+   *  field, so nothing remounts. It closes again when the keyboard goes, draft and all
+   *  (`useComposerExpansion`). */
   compact?: boolean;
-  /** Card page only (#29 reopened): told whenever `compact`'s expanded/collapsed state
-   *  changes, so a caller can hide something (the jump-to-latest button) while the composer
-   *  is focused or holding a draft, and let it back once the composer collapses. */
+  /** Told whenever `compact`'s open/closed state changes, so the card page can hide its
+   *  jump-to-latest button while the editor is open. */
   onExpandedChange?: (expanded: boolean) => void;
-  /** Channel and Decisions only (#4, narrowed by #6): told whenever *this field's own focus*
-   *  changes — not `compact`/`expanded`, and (since #6) not a blurred draft either.
-   *  `expanded` above is `!compact || focused || text || staged`, which is unconditionally
-   *  true on the very first render of a composer whose `compact` prop starts `false` (exactly
-   *  Channel's case, since its `compact` is itself derived from scroll progress) — a caller
-   *  driving that same scroll progress off `onExpandedChange` would latch an override
-   *  permanently on that first tick and never let go (#4 reopened). Reporting `focused` alone
-   *  avoids that the same way `userExpanded` used to, and additionally lets a *blurred*
-   *  draft fall through to the ordinary scroll-driven collapse instead of being pinned open
-   *  forever (#6): the peek's ceiling is a CSS concern (`.composer-open:not(.composer-focused)`
-   *  in styles.css), keyed off `focused` and `userExpanded`'s `.composer-open`/`.composer-focused`
-   *  classes below, not off anything this callback reports. */
-  onFocusChange?: (focused: boolean) => void;
 }) {
   const key = draftKey(address);
   const [text, setText] = useState(() => getDraft(key).text);
   const [staged, setStaged] = useState<StagedAttachment[]>(() => getDraft(key).staged);
   const [notice, setNotice] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
-  const [focused, setFocused] = useState(false);
   const { ref: areaRef, resize } = useAutoGrow(text);
   // A mouse/trackpad on a wide-enough layout gets Enter-to-send, like other chat composers;
   // a touch device (any width — an iPad in landscape included) keeps Enter as a newline.
@@ -983,26 +966,16 @@ export function LineComposer({
   const readyIds = staged.filter((s) => s.status === "ready" && s.attachment).map((s) => s.attachment!.id);
   const atCap = staged.length >= MAX_ATTACHMENTS_PER_MESSAGE;
   const canSend = (!!text.trim() || readyIds.length > 0) && !uploading && !hasErrored;
-  // A non-compact composer (the channel, decisions) is always "expanded" — this only ever
-  // reads false while `compact` is set, the field is unfocused, and there is nothing in it
-  // or staged worth keeping open for.
-  const expanded = !compact || focused || !!text.trim() || staged.length > 0;
-  // Unlike `expanded`, never true merely because `compact` is false — see `onFocusChange`'s
-  // doc comment for why that distinction matters (#4 reopened). Drives `.composer-open`
-  // below, which is a wider gate than `onFocusChange` reports: a blurred draft is
-  // `userExpanded` but not focused, and #6 needs CSS (not the scroll-collapse hook) to tell
-  // those two apart.
-  const userExpanded = focused || !!text.trim() || staged.length > 0;
+  const expansion = useComposerExpansion(!!compact);
+  const expanded = !compact || expansion.editing;
+
+  // The collapsed field's height says nothing about the editor's: measure again at its padding.
+  useLayoutEffect(resize, [expanded, resize]);
 
   useEffect(() => {
     onExpandedChange?.(expanded);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded]);
-
-  useEffect(() => {
-    onFocusChange?.(focused);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focused]);
 
   const submit = async (e?: FormEvent) => {
     e?.preventDefault();
@@ -1113,6 +1086,7 @@ export function LineComposer({
       <button
         type="button"
         className="icon-btn"
+        data-attach
         aria-label="Attach image"
         disabled={atCap}
         onClick={() => (atCap ? showNotice(`Up to ${MAX_ATTACHMENTS_PER_MESSAGE} images per message.`) : fileInputRef.current?.click())}
@@ -1126,19 +1100,12 @@ export function LineComposer({
   // pill-and-sheet): the shell is sized to the visual viewport, so the field rides the
   // keyboard and the tab bar steps out from under it while a field is focused.
   const compactClass = compact ? (expanded ? " composer-expanded" : " composer-collapsed") : "";
-  // Mirrors `userExpanded` as a class so CSS can tell "at rest" apart from "the user is
-  // typing" even when a blurred draft's collapse fires (neither `compactClass` above — a
-  // draft's `expanded` is always true, so this is always `composer-expanded`, never
-  // `composer-collapsed` — nor `--composer-collapse` distinguishes that case on its own).
-  const openClass = userExpanded ? " composer-open" : "";
-  // #6: split out of `.composer-open` so CSS can tell "focused" (never collapses; no clamp
-  // at all — same as before #6) apart from "blurred with a draft" (the new line-quantized
-  // peek). See styles.css's `@media (max-width: 899px)` mobile clamp.
-  const focusedClass = focused ? " composer-focused" : "";
+  const fullClass = expansion.full ? " composer-full" : "";
   return (
     <form
       ref={footRef}
-      className={`pane-foot${className ? ` ${className}` : ""}${compactClass}${openClass}${focusedClass}`}
+      className={`pane-foot${className ? ` ${className}` : ""}${compactClass}${fullClass}`}
+      onMouseDown={expansion.holdFocus}
       onSubmit={submit}
       onDrop={onDrop}
       onDragOver={onDragOver}
@@ -1176,28 +1143,35 @@ export function LineComposer({
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             onScroll={syncMirror}
-            onFocus={() => setFocused(true)}
-            onBlur={() => {
-              setFocused(false);
-              // #6: pin the internal scroll to the top on blur, so a collapsed multi-line
-              // draft's peek always shows the draft's *first* line (the human's call on #5),
-              // never wherever the caret happened to leave the field scrolled.
-              if (areaRef.current) areaRef.current.scrollTop = 0;
+            onFocus={expansion.onFocus}
+            onBlur={(e) => {
+              expansion.onBlur(e);
+              // The collapsed field is a one-line window onto the draft's *first* line, never
+              // wherever the caret left it scrolled.
+              e.currentTarget.scrollTop = 0;
             }}
             enterKeyHint="enter"
             data-composer
           />
         </div>
+        {compact && expanded && (
+          <button
+            type="button"
+            className="icon-btn composer-expand"
+            aria-label={expansion.full ? "Shrink editor" : "Expand editor"}
+            onClick={expansion.toggleFull}
+          >
+            {expansion.full ? Icons.shrink(18) : Icons.expand(18)}
+          </button>
+        )}
         <button
           type="submit"
           className={`icon-btn icon-btn-primary${sendClass ? ` ${sendClass}` : ""}`}
           disabled={!canSend}
           aria-label={action}
-          // Mousedown (which iOS Safari synthesizes before click on a tap) blurs the
-          // textarea by default; that blur fires two synchronous relayouts (the peek clamp
-          // and the scroll-collapse pin release, see styles.css's mobile `--btn-lift`) that
-          // move this button before the click lands. preventDefault on mousedown suppresses
-          // the focus change without suppressing click, so nothing moves mid-tap.
+          // Mousedown (which iOS Safari synthesizes before click on a tap) blurs the textarea
+          // by default, and the composer collapsing on that blur moves this button before the
+          // click lands. preventDefault keeps focus without suppressing the click.
           onMouseDown={(e) => e.preventDefault()}
         >
           {Icons.send(18)}
