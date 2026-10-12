@@ -113,7 +113,7 @@ instead of replacing it.
 ## Listen to the board
 
 The web UI is the human's side of the conversation. Every human write lands in the board's event
-log. Arm this as a **persistent Monitor** (description "human activity on the flock board")
+log. Arm this as a Monitor (description "human activity on the flock board", `timeout_ms: 1800000`)
 and each one becomes a notification in your session. It also carries your workers' end-of-work
 events (a card closed, released or asked about by anyone but you), so you learn when to review and
 spawn the next card without polling:
@@ -138,9 +138,12 @@ done
 
 Every other agent write is filtered out, so the stream is the human plus your workers finishing.
 A worker's line has an agent's name where the human's would be; the rows below say which is which.
-Arm it once per session; a resumed
-session with no live monitor arms it again before anything else. If a notification looks
-stale or you suspect the monitor died, `flock log` shows the last thirty events for a
+
+A Monitor lives at most 30 minutes, whatever `timeout_ms` asks for. Every "Monitor expired" notice
+for it means re-arm it now, in that same turn, then run `flock log` and handle any human event that
+landed while it was down. The same goes for any other Monitor the run depends on. A resumed session
+with no live monitor arms it again before anything else. If a notification looks stale or you
+suspect the monitor died, `flock log` shows the last thirty events for a
 snapshot, then re-arm.
 
 What each event means and what you do with it, in the same turn it arrives:
