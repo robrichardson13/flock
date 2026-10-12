@@ -227,7 +227,8 @@ Model, decided per delegation by the nature of the task. These four are what flo
 - **opus** for judgment that changes the plan: design, diagnosis, adversarial verification, dense code
   read for semantics, and work where being wrong is expensive to discover later.
 - **haiku** for search and shape: locate, enumerate, classify, extract, run-and-report a few tool calls
-  deep, and any fan-out you would otherwise fire five of. Not for a large corpus (200K context).
+  deep, and any fan-out you would otherwise fire five of. 1M context; its
+  input price steps up past 100K tokens.
 - **fable** rarely, and never silently. It earns a delegation only when the work runs unattended for a
   long stretch, spans the whole codebase in one pass, or is the single hard call the rest of the run
   depends on. If the task would finish in one sitting on opus, it is not a fable task.
