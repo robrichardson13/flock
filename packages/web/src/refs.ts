@@ -16,6 +16,7 @@
  * Everything here is pure — no React, no DOM, no board knowledge beyond a slug passed in —
  * so the grammar can be tested directly.
  */
+import { MENTION_ALL, MENTION_RE } from "@flock/core/mentions";
 import type { InlineToken, RefKind } from "./inline.ts";
 
 export interface FoundRef {
@@ -76,16 +77,35 @@ export function refHref(boardSlug: string, kind: RefKind, num: number): string {
   return `#/b/${slug}/channel`;
 }
 
-/** Split one text token into text and ref tokens, sharing a budget with its siblings. */
+/** An `@name` written to an agent (ADR 0029), in the grammar core's inbox routes on. */
+interface FoundMention {
+  start: number;
+  end: number;
+  name: string;
+}
+
+function findMentions(text: string): FoundMention[] {
+  return [...text.matchAll(MENTION_RE)].map((m) => ({ start: m.index, end: m.index + m[0].length, name: m[1]! }));
+}
+
+/** The actor page a mention links to; `@all` names nobody, so it has none. */
+export function mentionHref(boardSlug: string, name: string): string | null {
+  if (name.toLowerCase() === MENTION_ALL) return null;
+  return `#/b/${encodeURIComponent(boardSlug)}/a/${encodeURIComponent(name)}`;
+}
+
+/** Split one text token into text, ref and mention tokens, sharing a budget with its siblings. */
 function splitText(v: string, budget: { left: number }): InlineToken[] {
-  const refs = findRefs(v);
-  if (!refs.length || budget.left <= 0) return [{ t: "text", v }];
+  const found = [...findRefs(v), ...findMentions(v)].sort((x, y) => x.start - y.start);
+  if (!found.length || budget.left <= 0) return [{ t: "text", v }];
   const out: InlineToken[] = [];
   let at = 0;
-  for (const r of refs) {
+  for (const r of found) {
     if (budget.left <= 0) break;
+    if (r.start < at) continue;
     if (r.start > at) out.push({ t: "text", v: v.slice(at, r.start) });
-    out.push({ t: "ref", kind: r.kind, num: r.num, v: v.slice(r.start, r.end) });
+    const text = v.slice(r.start, r.end);
+    out.push("name" in r ? { t: "mention", name: r.name, v: text } : { t: "ref", kind: r.kind, num: r.num, v: text });
     budget.left--;
     at = r.end;
   }

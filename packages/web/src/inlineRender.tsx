@@ -9,7 +9,7 @@
 import { type ReactNode } from "react";
 import type { InlineToken } from "./inline.ts";
 import { tokenizeInline } from "./inline.ts";
-import { linkifyRefs, MAX_REFS, refHref } from "./refs.ts";
+import { linkifyRefs, MAX_REFS, mentionHref, refHref } from "./refs.ts";
 import { useBoardRef } from "./ui.tsx";
 
 /**
@@ -41,6 +41,10 @@ function renderTokens(tokens: InlineToken[], scope: RefScope | null): ReactNode[
         // An in-app hash route, so no `target`/`rel`: this navigates the board the reader is
         // already on rather than opening a second copy of the app in a new tab.
         return <a key={i} className="ref-link" href={refHref(scope!.slug, t.kind, t.num)}>{t.v}</a>;
+      case "mention": {
+        const href = mentionHref(scope!.slug, t.name);
+        return href ? <a key={i} className="ref-link" href={href}>{t.v}</a> : <strong key={i}>{t.v}</strong>;
+      }
       case "strong":
         return <strong key={i}>{renderTokens(t.kids, scope)}</strong>;
       case "em":

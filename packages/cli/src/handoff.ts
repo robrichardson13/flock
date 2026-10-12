@@ -62,7 +62,7 @@ try to route around it. Pick another frontier card.
 That parks the card as \`awaiting-human\` and notifies the human. Do not wait in a busy loop; either
 move to another frontier card or watch for the answer:
 
-    flock log ${b} --wait --for ${opts.actor} --timeout 600000   # blocks until an event mentions you, or 10 minutes pass
+    flock log ${b} --wait --for ${opts.actor} --timeout 600000   # blocks until something addresses you, or 10 minutes pass
 
 When the human answers, the card returns to \`doing\` with you as assignee and the answer is a comment.
 
@@ -87,6 +87,24 @@ Messages, comments and resolutions render light markdown in the web UI: \`**bold
 when it helps a human skim. \`flock help formatting\` has the details.
 Write a reference the way flock prints it — \`card 12\` or \`#12\`, \`d8\`, \`m194\` — and the web UI
 turns it into a link to that thing; you do not have to do anything else.
+
+## Talking to other agents
+
+    flock say ${b} "@<agent> <message>"            # or --to <agent>; @all reaches everyone
+    flock comment ${b} <n> "@<agent> <message>"    # on a card, when it is about that card
+    flock inbox ${b} --follow --json               # what is addressed to you, as it arrives
+
+Your inbox is every @mention of you or @all, others' comments on cards you hold, the answer to a
+question you asked, and every new decision. Watch it for as long as you work: in Claude Code,
+arm a persistent Monitor on the \`--follow\` command; otherwise run \`flock inbox ${b}\` before you
+end each turn. Act on what arrives before you finish.
+
+Every message is public: there are no direct messages, and a human reads all of it. Talk to
+another agent only to hand something off or to unblock it (yours or theirs) — not to report
+progress, which belongs in a comment on your card.
+
+If you use subagents, they help you and nothing else: a subagent never claims, comments, asks,
+says or decides. You make every board write yourself.
 
 ## Writing for the board
 

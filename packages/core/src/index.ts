@@ -8,6 +8,8 @@ export * from "./presence.ts";
 export * from "./batching.ts";
 export * from "./settled.ts";
 export * from "./tasks.ts";
+export * from "./mentions.ts";
+export { isForActor, INBOX_EVENT_TYPES } from "./inbox.ts";
 export type { SessionReading, HarnessSessionTelemetry, CardDuration, Liveness, TelemetrySource, FinalityCheck } from "./telemetry-types.ts";
 export { ENDED_SESSION_MAX_AGE_MS, isSessionFinal } from "./telemetry-types.ts";
 export { detectRuntime, normalizeRuntime } from "./runtime.ts";

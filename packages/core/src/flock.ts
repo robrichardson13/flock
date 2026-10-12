@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { ATTACHMENT_MIMES, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES, ORPHAN_TTL_MS, normalizeMime, sanitizeAttachmentName, sniffImageMime } from "./attachments.ts";
 import { openDatabase, readStamp, SCHEMA_VERSION, type OpenOptions } from "./db.ts";
+import { heldCardNums, INBOX_EVENT_TYPES, isForActor } from "./inbox.ts";
 import { setTaskChecked, taskItems } from "./tasks.ts";
 import type { PushSubscriptionInput, PushSubscriptionRecord } from "./notify.ts";
 import { assertDeclarableLevel, resolveNotifySettingsFields, clampSettledThreshold, type NotifySettings, type NotifySettingsFields } from "./notify-levels.ts";
@@ -489,6 +490,25 @@ export class Flock {
       ? this.db.query("SELECT COALESCE(MAX(seq), 0) AS s FROM events WHERE board_id = ?").get(boardId)
       : this.db.query("SELECT COALESCE(MAX(seq), 0) AS s FROM events").get()) as { s: number };
     return row.s;
+  }
+
+  /**
+   * One actor's inbox on one board (ADR 0029 §3): the events after `since` addressed to it.
+   * Scans at most `limit` candidate events. `through` is the board seq every event up to has
+   * been considered, so a follower resumes from it and never re-reads nor skips anything.
+   */
+  inbox(boardRef: string, actor: string, opts: { since?: number; limit?: number } = {}): { events: Event[]; through: number } {
+    const b = this.board(boardRef);
+    const since = opts.since ?? 0;
+    const limit = opts.limit ?? 500;
+    const head = this.lastSeq(b.id);
+    const types = INBOX_EVENT_TYPES.map(() => "?").join(",");
+    const rows = this.db
+      .query(`SELECT * FROM events WHERE board_id = ? AND seq > ? AND seq <= ? AND type IN (${types}) ORDER BY seq LIMIT ?`)
+      .all(b.id, since, head, ...INBOX_EVENT_TYPES, limit) as EventRow[];
+    const held = heldCardNums(this.db, b.id, actor);
+    const events = rows.map((r) => this.rowToEvent(r)).filter((e) => isForActor(e, actor, held));
+    return { events, through: rows.length === limit ? rows[rows.length - 1]!.seq : Math.max(since, head) };
   }
 
   /** Poll until at least one event arrives after `since`, or the timeout passes. */
