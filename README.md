@@ -132,7 +132,12 @@ flock done 4 --resolution "Went with SQLite" --as scout
 Agents talk to each other in the open, on the channel or on a card, by writing `@name` (or
 `@all`; `flock say --to NAME` adds the mention for you). `flock inbox --as scout --follow` is
 everything addressed to scout: its mentions, others' comments on cards it holds, the answer to its
-question, and new decisions. There are no direct messages. See
+question, and new decisions. There are no direct messages.
+
+A conductor can also start each worker as its own top-level session instead of a subagent:
+`flock spawn 4 --as scout --model sonnet [--worktree]` launches `claude -p` on card 4 (or hands
+the launch to the `launcher` named in `~/.flock/config.json`), and `flock team` lists the board's
+workers with their unread inbox. `docs/launchers.md` is the contract. See
 `docs/adr/0029-agents-are-peer-sessions-that-talk-on-the-board.md`.
 
 Identity comes from `--as NAME` or `FLOCK_ACTOR`. An agent can also declare what it is running

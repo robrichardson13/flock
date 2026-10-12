@@ -276,7 +276,32 @@ export type EventType =
   | "comment.unreacted"
   | "decision.recorded"
   | "decision.archived"
-  | "decision.restored";
+  | "decision.restored"
+  | "agent.spawned";
+
+export type AgentStatus = "running" | "exited";
+
+/** A top-level harness session `flock spawn` started for a card (ADR 0029 §1). */
+export interface Agent {
+  boardId: string;
+  name: string;
+  cardNum: number | null;
+  harness: string;
+  model: string | null;
+  effort: string | null;
+  /** The harness run key, `<family>:<session id>`, as its board writes carry it. */
+  sessionKey: string | null;
+  /** Where a human can open the session, if the launcher knows one. */
+  openUrl: string | null;
+  cwd: string;
+  pid: number | null;
+  launcher: string;
+  status: AgentStatus;
+  /** The last board seq its inbox has been read or delivered through. */
+  inboxSeq: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface Event extends Runtime {
   seq: number;
