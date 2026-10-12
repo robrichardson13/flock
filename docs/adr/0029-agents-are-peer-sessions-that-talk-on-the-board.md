@@ -1,6 +1,6 @@
 # ADR 0029: Agents are peer sessions that talk on the board
 
-**Status:** proposed, 2026-10-12
+**Status:** accepted, 2026-10-12
 
 **Amends:** ADR 0004 (the conductor delegates to subagents), ADR 0002 (one directory per board),
 ADR 0027 (a card's run is found by heuristic for subagents).
@@ -56,7 +56,7 @@ config, because a command template cannot express session-key minting or deliver
 | Harness | Launch | Deliver |
 | --- | --- | --- |
 | Claude Code | `claude -p --input-format stream-json` with a pre-minted `--session-id`, logs and pidfile under `FLOCK_HOME` | none: the worker pulls (§3) |
-| codex | `codex exec` | `codex queue --thread <id> --message …` |
+| codex | `codex exec --json` (thread id from `thread.started`) | `codex exec resume <thread> "<message>"` once the `exec` has exited |
 | opencode | `opencode run --session <id>` against `opencode serve` | the session API |
 
 The harness is inferred from the model (`gpt-*` is codex, `opencode:<provider>/<model>` is
@@ -108,11 +108,20 @@ now a message to it waits in its inbox (§3).
 human writes to also surface each spawned card's end-of-work events (closed, released, asked), so
 the conductor learns when to spawn the next card without polling.
 
-## Open questions, to be settled by spike before §3's delivery ships
+## Spike results (2026-10-12, Claude Code 2.x, codex-cli 0.159.0)
 
-- Does an idle `claude -p --input-format stream-json` session wake on a Monitor notification? If
-  not, a Claude Code worker polls its inbox between turns instead.
-- Does `codex queue --thread` reach a thread a running `codex exec` owns?
+- **An idle headless Claude Code session wakes on a Monitor event.** A `claude -p --input-format
+  stream-json` session (stdin a FIFO held open) armed a Monitor, ended its turn with a `result`,
+  and when the watched command printed 45 seconds later it started a second turn by itself and
+  ran the requested command. Pull delivery for Claude Code works as designed. A Monitor carries
+  a timeout, so the worker arms it persistent (or re-arms it at expiry).
+- **`codex queue` does not reach a `codex exec` thread.** It accepts the message and exits 0,
+  but the running `exec` finished its turn and exited without seeing it, and a later
+  `codex exec resume` did not drain it either; queue only reaches threads owned by the shared
+  app-server. **`codex exec resume <thread> "<message>"` does deliver:** it runs a new turn on
+  the same thread. So the codex adapter's `deliver` resumes the thread once its `exec` process
+  has exited, and leaves the message unread while it is still running; the worker checks
+  `flock inbox` before it ends a turn, which covers that gap.
 
 ## Consequences
 
