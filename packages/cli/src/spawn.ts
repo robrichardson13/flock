@@ -22,6 +22,7 @@ export async function spawnWorker(flock: Flock, boardRef: string, cardRef: strin
   const card = flock.card(board.id, cardRef);
   const config = readConfig();
   const harness = harnessFor(opts.model, opts.harness);
+  const launcher = launcherName(config);
   const request: LaunchRequest = {
     op: "launch",
     board: board.slug,
@@ -32,7 +33,7 @@ export async function spawnWorker(flock: Flock, boardRef: string, cardRef: strin
     effort: opts.effort ?? null,
     cwd: board.project,
     worktree: opts.worktree,
-    prompt: workerPrompt(board.slug, card, opts.name),
+    prompt: workerPrompt(board.slug, card, opts.name, { pushed: isPushed(launcher, harness) }),
     env: {
       FLOCK_ACTOR: opts.name,
       FLOCK_ACTOR_KIND: "agent",
@@ -40,7 +41,6 @@ export async function spawnWorker(flock: Flock, boardRef: string, cardRef: strin
       ...(opts.effort ? { FLOCK_EFFORT: opts.effort } : {}),
     },
   };
-  const launcher = launcherName(config);
   const result: LaunchResult = config.launcher
     ? parseLaunchResult(await callExternal(config.launcher, request), request.cwd)
     : await launchBuiltin(request, { dbPath: opts.dbPath, harness: config.harnesses?.[harness] ?? {}, boardId: board.id });
@@ -60,18 +60,27 @@ export async function spawnWorker(flock: Flock, boardRef: string, cardRef: strin
   });
 }
 
+/** A built-in Claude Code worker's supervisor writes its inbox into the session (`deliverInbox`). */
+export function isPushed(launcher: string, harness: string): boolean {
+  return launcher === "builtin" && harness === "claude-code";
+}
+
 /**
  * What a worker is told first. Every command names the board and `--as`, because a launcher
  * that cannot pass env, or a worker that `cd`s, must still land its writes in the right place.
  */
-export function workerPrompt(board: string, card: Pick<Card, "num" | "title">, name: string): string {
+export function workerPrompt(board: string, card: Pick<Card, "num" | "title">, name: string, opts: { pushed: boolean }): string {
+  const listen = opts.pushed
+    ? "2. Messages addressed to you on the board arrive in this session on their own, as a turn starting `New on flock board`. Do not arm a Monitor on your inbox."
+    : `2. Watch your inbox for the whole session: arm a Monitor (\`timeout_ms: 1800000\`) on \`flock inbox ${board} --as ${name} --follow --json\`. A Monitor lives at most 30 minutes; every time it expires, re-arm it in that same turn.`;
+  const after = opts.pushed ? "answer what still reaches you" : "keep the Monitor re-armed and answer what still reaches you";
   return `You are ${name}, a flock worker on board ${board}. Your job is card #${card.num}: ${card.title}
 
 1. Run \`flock handoff ${board} --as ${name}\` and follow it. Pass \`--as ${name}\` on every flock command.
-2. Watch your inbox for the whole session: arm a persistent Monitor on \`flock inbox ${board} --as ${name} --follow --json\`.
+${listen}
 3. Claim the card (\`flock claim ${board} ${card.num} --as ${name}\`), work it, and close it with \`flock done\`, or \`flock release\` it if you cannot finish.
 
-After the card is closed or released, keep the Monitor armed and answer what still reaches you; your session is ended for you once your inbox goes quiet.`;
+After the card is closed or released, ${after}; your session is ended for you once your inbox goes quiet.`;
 }
 
 /** Whether a worker's process is still there. Only meaningful on the machine that spawned it. */

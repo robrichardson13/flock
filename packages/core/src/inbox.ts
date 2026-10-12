@@ -36,3 +36,26 @@ export function heldCardNums(db: Database, boardId: string, actor: string): Set<
   const rows = db.query("SELECT num FROM cards WHERE board_id = ? AND assignee = ? COLLATE NOCASE").all(boardId, actor) as { num: number }[];
   return new Set(rows.map((r) => r.num));
 }
+
+/** One message for a batch of inbox events, telling the worker how to answer. */
+export function inboxMessage(boardSlug: string, name: string, events: Event[]): string {
+  const lines = events.map((e) => `- ${describe(e)}`);
+  return [`New on flock board ${boardSlug} for ${name}:`, ...lines, "", `Answer on the board as ${name} (\`flock say\` / \`flock comment\` with \`--as ${name}\`).`].join("\n");
+}
+
+function describe(e: Event): string {
+  const d = e.data as Record<string, unknown>;
+  const text = (v: unknown) => String(v ?? "");
+  switch (e.type) {
+    case "message.posted":
+      return `${e.actor} in the channel (m${d.num}): ${text(d.body)}`;
+    case "comment.posted":
+      return `${e.actor} on #${e.cardNum} (${text(d.ref)}): ${text(d.body)}`;
+    case "card.answered":
+      return `${e.actor} answered your question on #${e.cardNum}: ${text(d.answer)}`;
+    case "decision.recorded":
+      return `${e.actor} decided (d${d.num}): ${text(d.gist)}`;
+    default:
+      return `${e.actor} ${e.type}${e.cardNum ? ` #${e.cardNum}` : ""}`;
+  }
+}

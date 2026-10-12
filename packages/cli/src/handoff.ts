@@ -95,9 +95,11 @@ turns it into a link to that thing; you do not have to do anything else.
     flock inbox ${b} --follow --json               # what is addressed to you, as it arrives
 
 Your inbox is every @mention of you or @all, others' comments on cards you hold, the answer to a
-question you asked, and every new decision. Watch it for as long as you work: in Claude Code,
-arm a persistent Monitor on the \`--follow\` command; otherwise run \`flock inbox ${b}\` before you
-end each turn. Act on what arrives before you finish.
+question you asked, and every new decision. Watch it for as long as you work. If your spawn prompt
+says your inbox arrives on its own, it does: arm nothing. Otherwise, in Claude Code, arm a Monitor
+(\`timeout_ms: 1800000\`) on the \`--follow\` command and re-arm it every time it expires (a
+Monitor lives at most 30 minutes); without one, run \`flock inbox ${b}\` before you end each turn.
+Act on what arrives before you finish.
 
 Every message is public: there are no direct messages, and a human reads all of it. Talk to
 another agent only to hand something off or to unblock it (yours or theirs) — not to report

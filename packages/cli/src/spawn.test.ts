@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeArgs } from "./builtin-launcher.ts";
 import { harnessFor, parseLaunchResult } from "./launcher.ts";
-import { isOffDuty, QUIET_MS, shouldRetire } from "./supervise.ts";
+import { Flock, type Actor } from "@flock/core";
+import { deliverInbox, isOffDuty, QUIET_MS, shouldRetire } from "./supervise.ts";
+import { isPushed, workerPrompt } from "./spawn.ts";
 
 const CLI = new URL("./main.ts", import.meta.url).pathname;
 
@@ -76,4 +78,41 @@ test("spawn hands the request to an external launcher, records the agent, and li
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("deliverInbox", () => {
+  test("writes unread inbox into the session as one user turn, then nothing until more arrives", () => {
+    const f = new Flock(":memory:");
+    const rob: Actor = { name: "rob", kind: "human" };
+    const board = f.createBoard(rob, { title: "Team", project: "/repos/app" });
+    const card = f.createCard(rob, board.slug, { title: "Parser" });
+    f.registerAgent({ name: "conductor", kind: "agent" }, board.slug, {
+      name: "scout", cardNum: card.num, harness: "claude-code", model: "opus", effort: null,
+      sessionKey: "claude-code:1", openUrl: null, cwd: "/repos/app", pid: 1, launcher: "builtin",
+    });
+    f.say(rob, board.slug, "@scout use the new tokens");
+    f.say(rob, board.slug, "unrelated chatter");
+    const lines: string[] = [];
+    const spec = { boardId: board.id, name: "scout" };
+
+    expect(deliverInbox(f, spec, (l) => lines.push(l))).toBe(1);
+    expect(deliverInbox(f, spec, (l) => lines.push(l))).toBe(0);
+    expect(lines).toHaveLength(1);
+    const turn = JSON.parse(lines[0]!);
+    expect(turn.type).toBe("user");
+    expect(turn.message.content).toContain("@scout use the new tokens");
+    expect(turn.message.content).not.toContain("unrelated chatter");
+    expect(f.agents(board.slug)[0]!.unread).toBe(0);
+  });
+});
+
+describe("workerPrompt", () => {
+  test("only a built-in Claude Code worker is pushed its inbox; everyone else re-arms a Monitor", () => {
+    expect(isPushed("builtin", "claude-code")).toBe(true);
+    expect(isPushed("flock-nib-launch", "claude-code")).toBe(false);
+    expect(isPushed("builtin", "codex")).toBe(false);
+    const card = { num: 4, title: "Parser" };
+    expect(workerPrompt("b", card, "scout", { pushed: true })).toContain("Do not arm a Monitor");
+    expect(workerPrompt("b", card, "scout", { pushed: false })).toContain("every time it expires, re-arm it");
+  });
 });

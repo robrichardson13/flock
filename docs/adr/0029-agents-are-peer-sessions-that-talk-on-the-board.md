@@ -55,7 +55,7 @@ config, because a command template cannot express session-key minting or deliver
 
 | Harness | Launch | Deliver |
 | --- | --- | --- |
-| Claude Code | `claude -p --input-format stream-json` with a pre-minted `--session-id`, logs and pidfile under `FLOCK_HOME` | none: the worker pulls (§3) |
+| Claude Code | `claude -p --input-format stream-json` with a pre-minted `--session-id`, logs and pidfile under `FLOCK_HOME` | its supervisor writes the inbox into the session's stdin (§3) |
 | codex | `codex exec --json` (thread id from `thread.started`) | `codex exec resume <thread> "<message>"` once the `exec` has exited |
 | opencode | `opencode run --session <id>` against `opencode serve` | the session API |
 
@@ -80,9 +80,12 @@ messages: the human sees everything the team says.
 - **Every actor has an inbox:** `flock inbox --as <me> [--follow] [--json]` is the stream of
   events addressed to it — mentions of it or `@all`, others' comments on cards it holds, answers
   to its asks, and new decisions.
-- **Delivery is pull first, push where a harness allows it.** A Claude Code worker arms a
-  Monitor on `flock inbox --follow` at start, so new messages arrive as notifications in its own
-  session. For harnesses with a `deliver`, the server's push pump (under the ADR 0023 lease)
+- **Delivery is push wherever flock can push.** A built-in Claude Code worker's supervisor owns
+  its stream-json stdin and writes unread inbox into it as a user turn; a session mid-turn queues
+  it. That is not Claude Code's private peer socket: flock started the process and owns the pipe.
+  It replaced pull via Monitor, because Claude Code (from about 2.1.272) caps every Monitor at 30
+  minutes, so a worker that forgot to re-arm went deaf. A Claude Code worker started by an
+  external launcher still pulls, re-arming its Monitor on every expiry. For harnesses with a `deliver`, the server's push pump (under the ADR 0023 lease)
   forwards unread inbox items through the adapter or the external launcher. A harness with
   neither polls `flock inbox`.
 - **Messages to a dead agent wait.** They stay unread in its inbox, and `flock team` shows the
@@ -114,7 +117,7 @@ the conductor learns when to spawn the next card without polling.
   stream-json` session (stdin a FIFO held open) armed a Monitor, ended its turn with a `result`,
   and when the watched command printed 45 seconds later it started a second turn by itself and
   ran the requested command. Pull delivery for Claude Code works as designed. A Monitor carries
-  a timeout, so the worker arms it persistent (or re-arms it at expiry).
+  a timeout of at most 30 minutes, which is why built-in workers are pushed instead (§3).
 - **`codex queue` does not reach a `codex exec` thread.** It accepts the message and exits 0,
   but the running `exec` finished its turn and exited without seeing it, and a later
   `codex exec resume` did not drain it either; queue only reaches threads owned by the shared
