@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  claudeHome,
   contextMaxForModel,
   encodeCwd,
   findModelCatalogFiles,
@@ -12,6 +13,20 @@ import {
 } from "./claude-code-paths.ts";
 
 const FIXTURE_HOME = new URL("../fixtures/claude-code", import.meta.url).pathname;
+
+describe("claudeHome", () => {
+  test("follows CLAUDE_CONFIG_DIR, and an explicit override beats it", () => {
+    const saved = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = "/tmp/alt-claude";
+    try {
+      expect(claudeHome()).toBe("/tmp/alt-claude");
+      expect(claudeHome("/fixtures")).toBe("/fixtures");
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = saved;
+    }
+  });
+});
 
 describe("encodeCwd", () => {
   test("replaces every non-alphanumeric character with a dash", () => {
