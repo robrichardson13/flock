@@ -73,3 +73,12 @@ describe("linked directories", () => {
     expect(f.boardForDir("/repos/wt/other")?.slug).toBe(slug);
   });
 });
+
+describe("a new agent's inbox", () => {
+  test("starts at spawn: what the board said before is in its handoff, not its unread", () => {
+    const { f, slug, card } = fresh();
+    f.decide(rob, slug, "no new dependencies");
+    f.registerAgent(conductor, slug, scoutOn(card));
+    expect(f.agents(slug)[0]!.unread).toBe(0);
+  });
+});

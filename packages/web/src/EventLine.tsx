@@ -71,6 +71,8 @@ export function eventPhrase(e: Event, cardTitle?: string): { verb: string; showC
       return { verb: "archived decision", showCard: !!e.cardNum, cardSuffix: "", payload: String(d.gist ?? "") };
     case "decision.restored":
       return { verb: "restored decision", showCard: !!e.cardNum, cardSuffix: "", payload: String(d.gist ?? "") };
+    case "agent.spawned":
+      return { verb: "started work on", showCard: true, cardSuffix: "", payload: `${d.harness} ${d.model ?? ""}`.trim() };
     default:
       return { verb: e.type, showCard: !!e.cardNum, cardSuffix: "", payload: "" };
   }

@@ -370,7 +370,7 @@ export function resolvePlan(opts: Partial<DaemonOptions> = {}): DaemonPlan {
   // itself happen in `up`, so `status`/`down`/`url`/`logs` (which also call resolvePlan) never probe
   // tailscale and stay fast and offline-safe.
   const tailscale = resolveTailscale(preserveRunningTailscale(opts.tailscale, process.env, existingRunfile), process.env);
-  const plan = planDaemon({ mode, serveCmd: serveCmd(), bun: bunPath(), cwd, db, checkout: effectiveCheckout, opts: effectiveOpts, env: process.env, tailscale });
+  const plan = planDaemon({ mode, serveCmd: cliCommand(), bun: bunPath(), cwd, db, checkout: effectiveCheckout, opts: effectiveOpts, env: process.env, tailscale });
   if (portFallbackNote) plan.portFallbackNote = portFallbackNote;
   if (schemaFallback.note) plan.schemaFallbackNote = schemaFallback.note;
   return plan;
@@ -456,8 +456,8 @@ function bunPath(): string {
   return isStandalone() ? "bun" : process.execPath;
 }
 
-/** How to invoke this same CLI's `serve`: the binary itself, or bun plus the CLI entry point. */
-function serveCmd(): string[] {
+/** How to invoke this same CLI (for `serve`, or a spawned worker's supervisor): the binary itself, or bun plus the CLI entry point. */
+export function cliCommand(): string[] {
   return isStandalone() ? [process.execPath] : [process.execPath, join(REPO_ROOT, "packages", "cli", "src", "main.ts")];
 }
 

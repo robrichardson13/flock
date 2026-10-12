@@ -36,18 +36,19 @@ function rowToAgent(r: AgentRow): Agent {
 }
 
 /**
- * Record a spawned agent. Spawning a name again on the same board replaces its row — a fresh
- * session for the same worker — but keeps its inbox cursor, so what it has not read stays unread.
+ * Record a spawned agent, its inbox starting at `inboxSeq` (what the board already said is in
+ * its handoff). Spawning a name again on the same board replaces its row — a fresh session for
+ * the same worker — but keeps its inbox cursor, so what it has not read stays unread.
  */
-export function upsertAgent(db: Database, boardId: string, input: NewAgent, at: string): Agent {
+export function upsertAgent(db: Database, boardId: string, input: NewAgent, at: string, inboxSeq: number): Agent {
   db.query(
-    `INSERT INTO agents(board_id, name, card_num, harness, model, effort, session_key, open_url, cwd, pid, launcher, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
+    `INSERT INTO agents(board_id, name, card_num, harness, model, effort, session_key, open_url, cwd, pid, launcher, status, inbox_seq, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)
      ON CONFLICT(board_id, name) DO UPDATE SET
        card_num = excluded.card_num, harness = excluded.harness, model = excluded.model, effort = excluded.effort,
        session_key = excluded.session_key, open_url = excluded.open_url, cwd = excluded.cwd, pid = excluded.pid,
        launcher = excluded.launcher, status = 'running', updated_at = excluded.updated_at`,
-  ).run(boardId, input.name, input.cardNum, input.harness, input.model, input.effort, input.sessionKey, input.openUrl, input.cwd, input.pid, input.launcher, at, at);
+  ).run(boardId, input.name, input.cardNum, input.harness, input.model, input.effort, input.sessionKey, input.openUrl, input.cwd, input.pid, input.launcher, inboxSeq, at, at);
   return agentRow(db, boardId, input.name)!;
 }
 

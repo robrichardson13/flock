@@ -520,7 +520,7 @@ export class Flock {
     const b = this.board(boardRef);
     if (input.cardNum !== null) this.card(b.id, input.cardNum);
     this.touchActor(actor);
-    const agent = upsertAgent(this.db, b.id, input, now());
+    const agent = upsertAgent(this.db, b.id, input, now(), this.lastSeq(b.id));
     this.emit(actor, b.id, "agent.spawned", input.cardNum, {
       name: agent.name,
       harness: agent.harness,
@@ -529,6 +529,10 @@ export class Flock {
       ...(agent.openUrl ? { openUrl: agent.openUrl } : {}),
     });
     return agent;
+  }
+
+  findAgent(boardRef: string, name: string): Agent | null {
+    return agentRow(this.db, this.board(boardRef).id, name);
   }
 
   agent(boardRef: string, name: string): Agent {

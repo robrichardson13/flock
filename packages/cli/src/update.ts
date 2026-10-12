@@ -185,10 +185,22 @@ export function stampIsStale(stamp: UpdateStamp | undefined, now = Date.now(), m
  * browser-facing port with a `tailscale serve` HTTPS mount, below `FLOCK_TAILSCALE` and above the
  * `false` default — see `resolveTailscale` in `tailscale.ts`. See `docs/config.md`.
  */
+/** Per-harness settings for the built-in launcher (ADR 0029 §2). */
+export interface HarnessConfig {
+  bin?: string;
+  /** Claude Code only: replaces the default `bypassPermissions`. */
+  permissionMode?: string;
+  /** Claude Code only: passed as `--allowedTools`. */
+  allowedTools?: string[];
+}
+
 export interface FlockConfig {
   autoupdate?: boolean;
   host?: string;
   tailscale?: boolean;
+  /** An external launcher executable that replaces the built-in one for `flock spawn`. */
+  launcher?: string;
+  harnesses?: Record<string, HarnessConfig>;
 }
 
 export function readConfig(file = configPath()): FlockConfig {
@@ -200,10 +212,26 @@ export function readConfig(file = configPath()): FlockConfig {
     if (typeof o.autoupdate === "boolean") config.autoupdate = o.autoupdate;
     if (typeof o.host === "string" && o.host) config.host = o.host;
     if (typeof o.tailscale === "boolean") config.tailscale = o.tailscale;
+    if (typeof o.launcher === "string" && o.launcher) config.launcher = o.launcher;
+    if (o.harnesses && typeof o.harnesses === "object" && !Array.isArray(o.harnesses)) config.harnesses = parseHarnesses(o.harnesses as Record<string, unknown>);
     return config;
   } catch {
     return {};
   }
+}
+
+function parseHarnesses(raw: Record<string, unknown>): Record<string, HarnessConfig> {
+  const out: Record<string, HarnessConfig> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const v = value as Record<string, unknown>;
+    const harness: HarnessConfig = {};
+    if (typeof v.bin === "string" && v.bin) harness.bin = v.bin;
+    if (typeof v.permissionMode === "string" && v.permissionMode) harness.permissionMode = v.permissionMode;
+    if (Array.isArray(v.allowedTools)) harness.allowedTools = v.allowedTools.filter((t): t is string => typeof t === "string");
+    out[name] = harness;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------- the dev launcher

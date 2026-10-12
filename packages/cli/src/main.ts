@@ -154,6 +154,12 @@ TEAM
                     [--dry-run] [--yes]           A selector matching >10 needs --yes
   decision restore [BOARD] [D...] [--card N] [--by ACTOR] [--before YYYY-MM-DD] [--dry-run] [--yes]
   help formatting                     The markdown subset the web UI renders
+  spawn [BOARD] N --as NAME --model M [--effort E] [--harness H] [--worktree]
+                                      Start a top-level worker session on card N, through the
+                                      built-in launcher (claude -p) or "launcher" in config.json.
+                                      --harness: claude-code|codex|opencode, else inferred from M.
+                                      --worktree: run it in a fresh git worktree scoped to this board
+  team [BOARD]                        Spawned agents: card, harness, model, status, unread inbox
   inbox [BOARD] [--since SEQ] [--follow] [--timeout MS]
                                       What is addressed to --as/FLOCK_ACTOR: @mentions and @all,
                                       others' comments on cards you hold, answers to your asks,
@@ -309,6 +315,7 @@ function fmtEvent(e: Event): string {
     e.type === "decision.recorded" ? `: ${d.gist}` :
     e.type === "decision.archived" ? `: archived d${d.num}` :
     e.type === "decision.restored" ? `: restored d${d.num}` :
+    e.type === "agent.spawned" ? `: ${d.harness} ${d.model ?? ""}` :
     e.type === "card.blocked" || e.type === "card.unblocked" ? ` by #${d.by}` :
     e.type === "card.held" ? `${d.reason ? `: ${d.reason}` : ""}` :
     e.type === "message.reacted" ? ` ${d.emoji} ${d.ref} (${d.messageAuthor}: "${d.gist}")` :
@@ -373,6 +380,10 @@ async function main(argv: string[]) {
   let rest = positional.slice(1);
   // Before the `--version` check below, because `version` is a boolean flag: `flock upgrade
   // --version v2026.09.07.1` parses the tag as a positional, and `--version=<tag>` as a string.
+  if (cmd === "_supervise") {
+    const { supervise } = await import("./supervise.ts");
+    return supervise(JSON.parse(rest[0]!));
+  }
   if (cmd === "upgrade" || cmd === "self-update") {
     const { updateCommand } = await import("./update.ts");
     await updateCommand({
@@ -1032,6 +1043,29 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       });
     }
 
+    case "spawn": {
+      const { board, rest } = pickBoard(); a = rest;
+      const cardRef = need(0, "card number");
+      const model = str(flags.model);
+      if (!str(flags.as)) throw new FlockError("Missing --as NAME: the spawned agent's name.", "invalid");
+      if (!model) throw new FlockError("Missing --model: the spawned agent's model.", "invalid");
+      const { spawnWorker } = await import("./spawn.ts");
+      const agent = await spawnWorker(flock, board, cardRef, {
+        name: actor.name,
+        model,
+        effort: str(flags.effort),
+        harness: str(flags.harness),
+        worktree: bool(flags.worktree),
+        dbPath: ctx.dbPath,
+      });
+      return out(ctx, agent, () => console.log(`spawned ${agent.name} on #${agent.cardNum} (${agent.harness} ${agent.model}) in ${agent.cwd}${agent.openUrl ? `\n  open: ${agent.openUrl}` : ""}`));
+    }
+    case "team": {
+      const { board } = pickBoard();
+      const { printTeam } = await import("./spawn.ts");
+      const team = flock.agents(board);
+      return out(ctx, team, () => printTeam(team));
+    }
     case "inbox": {
       const { board } = pickBoard();
       const { runInbox } = await import("./inbox.ts");
