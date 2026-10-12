@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { tokenizeInline, type InlineToken } from "./inline.ts";
-import { findRefs, linkifyRefs, MAX_REFS, refHref } from "./refs.ts";
+import { findRefs, linkifyRefs, MAX_REFS, mentionHref, refHref } from "./refs.ts";
 
 const found = (s: string) => findRefs(s).map((r) => `${r.kind}:${r.num}:${s.slice(r.start, r.end)}`);
 
@@ -56,6 +56,7 @@ const shape = (tokens: InlineToken[]): string =>
       if (t.t === "code") return `code(${t.v})`;
       if (t.t === "ref") return `ref(${t.kind}:${t.num}:${t.v})`;
       if (t.t === "link") return `link(${t.href}:${shape(t.kids)})`;
+      if (t.t === "mention") return `at(${t.name})`;
       return `${t.t}(${shape(t.kids)})`;
     })
     .join("");
@@ -81,4 +82,16 @@ test("the linkify budget is shared across calls", () => {
   const budget = { left: 2 };
   expect(shape(linkifyRefs(tokenizeInline("#1 #2 #3"), budget))).toBe("ref(card:1:#1)t( )ref(card:2:#2)t( #3)");
   expect(shape(linkifyRefs(tokenizeInline("#4"), budget))).toBe("t(#4)");
+});
+
+test("an @mention becomes a mention token beside refs, but not inside an email or code", () => {
+  expect(lit("@scout see #4, cc @all")).toBe("at(scout)t( see )ref(card:4:#4)t(, cc )at(all)");
+  expect(lit("rob@example.com")).toBe("t(rob@example.com)");
+  expect(lit("`@scout`")).toBe("code(@scout)");
+  expect(lit("@d8 is a name")).toBe("at(d8)t( is a name)");
+});
+
+test("a mention links to the actor page; @all links nowhere", () => {
+  expect(mentionHref("flock-2", "Scout")).toBe("#/b/flock-2/a/Scout");
+  expect(mentionHref("flock-2", "all")).toBeNull();
 });

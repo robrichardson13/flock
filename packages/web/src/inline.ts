@@ -24,6 +24,7 @@ export type InlineToken =
   | { t: "text"; v: string }
   | { t: "code"; v: string }
   | { t: "ref"; kind: RefKind; num: number; v: string }
+  | { t: "mention"; name: string; v: string }
   | { t: "strong" | "em" | "del"; kids: InlineToken[] }
   | { t: "link"; href: string; kids: InlineToken[] };
 

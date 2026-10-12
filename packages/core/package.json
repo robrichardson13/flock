@@ -8,6 +8,7 @@
     "./types": "./src/types.ts",
     "./presence": "./src/presence.ts",
     "./tasks": "./src/tasks.ts",
-    "./attachments": "./src/attachments.ts"
+    "./attachments": "./src/attachments.ts",
+    "./mentions": "./src/mentions.ts"
   }
 }

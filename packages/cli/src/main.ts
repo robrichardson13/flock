@@ -7,9 +7,11 @@ import {
   DB_FILENAME,
   Flock,
   FlockError,
+  addressTo,
   exportBoard,
   commentRef,
   importBoard,
+  isForActor,
   messageRef,
   parseCommentRef,
   resolveDbPath,
@@ -118,8 +120,9 @@ HUMAN IN THE LOOP
 TEAM
   handoff [BOARD]                     Print the agent onboarding text
   needs-me                            Cards waiting on a human, across all boards
-  say [BOARD] TEXT [--attach PATH]... [--level review|info]
-                                      Post to the board channel; --attach is repeatable and
+  say [BOARD] TEXT [--to NAME,...] [--attach PATH]... [--level review|info]
+                                      Post to the board channel; @name / @all in TEXT address
+                                      agents (--to NAME prefixes the mention); --attach is repeatable and
                                       uploads an image (message text is optional with one).
                                       Prints the new message's ref (m<n>) for later \`flock react\`.
                                       --level declares this message's notification level (default
@@ -151,8 +154,13 @@ TEAM
                     [--dry-run] [--yes]           A selector matching >10 needs --yes
   decision restore [BOARD] [D...] [--card N] [--by ACTOR] [--before YYYY-MM-DD] [--dry-run] [--yes]
   help formatting                     The markdown subset the web UI renders
+  inbox [BOARD] [--since SEQ] [--follow] [--timeout MS]
+                                      What is addressed to --as/FLOCK_ACTOR: @mentions and @all,
+                                      others' comments on cards you hold, answers to your asks,
+                                      new decisions. --follow streams new ones (one per line with --json)
   log [BOARD] [--all] [--since SEQ] [--wait | --follow] [--for NAME] [--timeout MS]
-                                      --wait: block until a matching event, then exit. --all: every board
+                                      --wait: block until a matching event, then exit. --all: every board.
+                                      --for NAME: NAME's own events and what addresses NAME
   actors                              Who has touched this database
   telemetry [BOARD] [N] [--refresh] [--json]
                                       Harness sessions for card N, or for --as/FLOCK_ACTOR when N
@@ -335,10 +343,9 @@ function fmtReactions(m: Pick<Message, "reactions">): string[] {
   return m.reactions.map((r) => `  ${r.emoji} ${r.count} (${r.actors.join(", ")})`);
 }
 
-function mentions(e: Event, name: string): boolean {
-  const hay = JSON.stringify(e.data).toLowerCase();
-  const n = name.toLowerCase();
-  return e.actor.toLowerCase() === n || hay.includes(n) || hay.includes(`@${n}`);
+/** `log --for NAME`: NAME's own events, plus what addresses it (a mention, its answer, a decision). */
+function involves(e: Event, name: string): boolean {
+  return e.actor.toLowerCase() === name.toLowerCase() || isForActor(e, name, new Set());
 }
 
 const EXT_MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
@@ -831,7 +838,8 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       const attachPaths = list(flags.attach);
       if (attachPaths.length === 0 && a[0] === undefined) throw new FlockError("Missing message. Run `flock help`.", "invalid");
       const attachmentIds = attachPaths.map((p) => uploadAttachment(flock, actor, board, p));
-      const m = flock.say(actor, board, a[0] ?? "", { attachments: attachmentIds, level: str(flags.level) });
+      const body = addressTo(a[0] ?? "", list(flags.to));
+      const m = flock.say(actor, board, body, { attachments: attachmentIds, level: str(flags.level) });
       return out(ctx, m, () => console.log(`${messageRef(m.num)}  ${m.author}: ${m.body}${m.attachments.length ? `  + ${m.attachments.length} attachments` : ""}`));
     }
     case "react": {
@@ -1024,6 +1032,15 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       });
     }
 
+    case "inbox": {
+      const { board } = pickBoard();
+      const { runInbox } = await import("./inbox.ts");
+      const since = str(flags.since);
+      const timeoutMs = Number(str(flags.timeout) ?? 0);
+      return runInbox(flock, board, actor.name, { since: since === undefined ? undefined : Number(since), follow: bool(flags.follow), timeoutMs }, (evs) => {
+        for (const e of evs) console.log(ctx.json ? JSON.stringify(e) : fmtEvent(e));
+      });
+    }
     case "log":
     case "events": {
       // log: an explicit board, else this directory's board, else everything.
@@ -1033,7 +1050,7 @@ async function run(ctx: Ctx, cmd: string, a: string[]) {
       const timeout = Number(str(flags.timeout) ?? (bool(flags.follow) ? 0 : 30000));
       const deadline = timeout > 0 ? Date.now() + timeout : Infinity;
       const print = (evs: Event[]) => {
-        const shown = forName ? evs.filter((e) => mentions(e, forName)) : evs;
+        const shown = forName ? evs.filter((e) => involves(e, forName)) : evs;
         if (ctx.json) for (const e of shown) console.log(JSON.stringify(e));
         else for (const e of shown) console.log(fmtEvent(e));
         return shown;

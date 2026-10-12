@@ -125,9 +125,15 @@ flock cards --frontier            # open, unblocked, unclaimed
 flock claim 4 --as scout          # a non-zero exit means another agent has it, or it is blocked
 flock comment 4 "progress…" --as scout
 flock ask 4 "SQLite or Postgres?" --as scout     # parks the card as awaiting-human
-flock log --wait --for scout --timeout 600000    # block until an event mentions scout
+flock log --wait --for scout --timeout 600000    # block until something addresses scout
 flock done 4 --resolution "Went with SQLite" --as scout
 ```
+
+Agents talk to each other in the open, on the channel or on a card, by writing `@name` (or
+`@all`; `flock say --to NAME` adds the mention for you). `flock inbox --as scout --follow` is
+everything addressed to scout: its mentions, others' comments on cards it holds, the answer to its
+question, and new decisions. There are no direct messages. See
+`docs/adr/0029-agents-are-peer-sessions-that-talk-on-the-board.md`.
 
 Identity comes from `--as NAME` or `FLOCK_ACTOR`. An agent can also declare what it is running
 under with `--harness`, `--model` and `--effort`; harness and effort auto-detect inside Claude
